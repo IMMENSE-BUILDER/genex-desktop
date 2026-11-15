@@ -517,6 +517,7 @@ export default {
   "Build updated": "ビルドを更新しました",
   "Build with Genex": "Genexでつくる",
   "Build with the Cursor plan you already have.": "すでに契約しているCursorのプランでつくります。",
+  "Build with the Google AI plan you already have.": "すでに契約しているGoogle AIのプランでつくります。",
   "Build with the Grok account you already have.": "すでに持っているGrokアカウントでつくります。",
   "Changes Harness made to its own instructions. Undo any of them.":
     "Harnessが自分の指示に加えた変更です。どれでも元に戻せます。",
@@ -572,7 +573,7 @@ export default {
   "Visual Studio's C++ tools are ready": "Visual StudioのC++ツールの準備ができました",
   "When off, Harness doesn’t change its own instructions. Changes it already made stay until you undo them.":
     "オフにすると、Harnessは自分の指示を変えません。すでに加えた変更は、元に戻すまで残ります。",
-  "Workers pitch in": "ワーカーが手伝う",
+  "Get your game": "ゲームが完成",
   Building: "制作中",
   "Building the game": "ゲームをビルド中",
   "Building the starting point": "土台をつくっています",
@@ -881,6 +882,7 @@ export default {
   "Configure optional connection": "オプションの接続を設定",
   Connect: "接続",
   "Connect AI model": "AIモデルを接続",
+  "Connect Antigravity": "Antigravityを接続",
   "Connect ChatGPT": "ChatGPTを接続",
   "Connect Claude Code": "Claude Codeを接続",
   "Connect Genex": "Genexを接続",
@@ -2785,7 +2787,7 @@ export default {
   "Plan ready": "プラン完成",
   "Plan ready for review": "プランの確認待ち",
   "Plan usage isn’t available right now.": "プランの使用状況は今は確認できません。",
-  "Your agent leads": "エージェントが主導",
+  "Share your idea": "アイデアを伝える",
   Planning: "計画中",
   "Planning the build": "ビルドを計画中",
   "Planning the next step": "次のステップを計画中",
@@ -3117,7 +3119,7 @@ export default {
   "Reviewers compare instructions; they don’t rebuild your games. An applied change isn’t proof of better results.":
     "レビュアーが比べるのは指示で、ゲームをつくり直すわけではありません。変更を適用しても、結果がよくなった証明にはなりません。",
   "Reviewers model": "レビュアーのモデル",
-  "A second opinion": "セカンドオピニオン",
+  "Approve the game design": "ゲームのデザインを承認",
   "Reviewers · try {number}": "レビュアー · {number}回目",
   "Reviewers: {model}": "レビュアー：{model}",
   Reviewing: "レビュー中",
@@ -3338,6 +3340,7 @@ export default {
   "Set {setting}": "{setting}を設定",
   "Setting Roblox Studio up for Genex.": "Roblox StudioをGenex用にセットアップしています。",
   "Setting the route": "ルートを設定しています",
+  "Setting up Antigravity…": "Antigravityをセットアップ中…",
   "Setting up Claude Code…": "Claude Codeをセットアップ中…",
   "Setting up Codex…": "Codexをセットアップ中…",
   "Setting up Genex": "Genexをセットアップ中",
@@ -4735,7 +4738,7 @@ export default {
   "an earlier build is ready to play · resume from chat": "前のビルドをプレイできます · チャットから再開",
   "an empty folder": "空のフォルダー",
   "an input": "入力",
-  "when the lead asks for one": "メインエージェントが求めたときに",
+  "change anything you want": "好きなように変えられる",
   "app update left every harness file as it was": "アプリのアップデートでHarnessファイルは変更されませんでした",
   "app update refreshed {count, plural, one {# harness file} other {# harness files}}":
     "アプリのアップデートで{count, plural, other {Harnessファイル#個}}を更新しました",
@@ -4825,7 +4828,7 @@ export default {
   "effort\u0004xHigh": "超高",
   eighth: "8回目",
   ended: "終了",
-  "on parts at the same time": "いくつもの部分を同時に",
+  "the AI builds it for you": "AIが作ってくれる",
   "every step landed": "すべてのステップが反映されました",
   "exit {code}": "終了コード{code}",
   "export games": "ゲームを書き出す",
@@ -5088,7 +5091,7 @@ export default {
   "the game had not finished loading when it was looked at": "確認したとき、ゲームの読み込みが終わっていませんでした",
   "the game inside it stays exactly where it is": "中のゲームはそのままの場所に残ります",
   "the game's app": "ゲームのアプリ",
-  "and plans when it helps": "必要なら計画も立てる",
+  "the AI plans the game": "AIがゲームを計画",
   "the kept {file} still has its own {names}, but {callers} now use {target}":
     "保持された{file}には独自の{names}が残っていますが、{callers}は現在{target}を使っています",
   "the lead ended it before it was finished, so nobody reviewed it and the work it had done is kept":
@@ -6414,6 +6417,7 @@ export default {
   "Antigravity didn't answer. Check the installation, then try again.":
     "Antigravityから応答がありません。インストールを確認して、もう一度試してください。",
   "Antigravity isn't installed on this computer.": "このコンピューターにAntigravityがインストールされていません。",
+  "Antigravity ready": "Antigravity準備完了",
   "Antigravity sign-in": "Antigravityへのサインイン",
   "Antigravity {version}": "Antigravity {version}",
   "Antigravity's model list could not be read.": "Antigravityのモデル一覧を読み取れませんでした。",
@@ -6452,6 +6456,17 @@ export default {
   "{title} was removed from Design": "{title} は「デザイン」から削除されました",
   "Opens in Design": "「デザイン」で開きます",
   "Question {step} of {of}": "質問{step}/{of}",
+  "Can call tools": "ツール呼び出し可能",
+  Configure: "設定",
+  "Context size": "コンテキストサイズ",
+  "Context size must be between 1,024 and 10,000,000 tokens.":
+    "コンテキストサイズは1,024から10,000,000トークンの間である必要があります。",
+  "Custom context length and vision for this model on your local server. Saved to models.json.":
+    "ローカルサーバー上のこのモデルのカスタムコンテキスト長と画像認識。models.json に保存されます。",
+  "Failed to save settings.": "設定の保存に失敗しました。",
+  "Reported by server": "サーバーから報告",
+  "Reset to default": "デフォルトに戻す",
+  "Sees images": "画像認識",
   "Step {n} of {total} · {name}": "ステップ {n}/{total} · {name}",
   "Version {version} is in your game": "バージョン {version} がゲームに入りました",
 } satisfies LocaleCatalog;

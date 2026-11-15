@@ -569,6 +569,7 @@ export default {
   "Build updated": "Build atualizado",
   "Build with Genex": "Criar com o Genex",
   "Build with the Cursor plan you already have.": "Crie com o plano do Cursor que você já tem.",
+  "Build with the Google AI plan you already have.": "Crie com o plano do Google AI que você já tem.",
   "Build with the Grok account you already have.": "Crie com a conta do Grok que você já tem.",
   "Changes Harness made to its own instructions. Undo any of them.":
     "Mudanças que o Harness fez nas próprias instruções. Você pode desfazer qualquer uma.",
@@ -624,7 +625,7 @@ export default {
   "Visual Studio's C++ tools are ready": "As ferramentas de C++ do Visual Studio estão prontas",
   "When off, Harness doesn’t change its own instructions. Changes it already made stay until you undo them.":
     "Quando desligado, o Harness não muda as próprias instruções. As mudanças que ele já fez ficam até você desfazer.",
-  "Workers pitch in": "Os ajudantes entram junto",
+  "Get your game": "Receba seu jogo",
   Building: "Criando",
   "Building the game": "Criando o jogo",
   "Building the starting point": "Criando o ponto de partida",
@@ -936,6 +937,7 @@ export default {
   "Configure optional connection": "Configurar conexão opcional",
   Connect: "Conectar",
   "Connect AI model": "Conectar modelo de IA",
+  "Connect Antigravity": "Conectar Antigravity",
   "Connect ChatGPT": "Conectar ChatGPT",
   "Connect Claude Code": "Conectar Claude Code",
   "Connect Genex": "Conectar Genex",
@@ -2829,7 +2831,7 @@ export default {
   "Plan ready": "Plano pronto",
   "Plan ready for review": "Plano pronto para revisar",
   "Plan usage isn’t available right now.": "O uso do plano não está disponível agora.",
-  "Your agent leads": "Seu agente lidera",
+  "Share your idea": "Conte sua ideia",
   Planning: "Planejando",
   "Planning the build": "Planejando o build",
   "Planning the next step": "Planejando o próximo passo",
@@ -3162,7 +3164,7 @@ export default {
   "Reviewers compare instructions; they don’t rebuild your games. An applied change isn’t proof of better results.":
     "Os revisores comparam instruções; eles não recriam seus jogos. Uma mudança aplicada não prova que os resultados melhoraram.",
   "Reviewers model": "Modelo dos revisores",
-  "A second opinion": "Uma segunda opinião",
+  "Approve the game design": "Aprove o design do jogo",
   "Reviewers · try {number}": "Revisores · tentativa {number}",
   "Reviewers: {model}": "Revisores: {model}",
   Reviewing: "Revisando",
@@ -3389,6 +3391,7 @@ export default {
   "Set {setting}": "Definir {setting}",
   "Setting Roblox Studio up for Genex.": "Configurando o Roblox Studio para o Genex.",
   "Setting the route": "Definindo a rota",
+  "Setting up Antigravity…": "Instalando o Antigravity…",
   "Setting up Claude Code…": "Instalando o Claude Code…",
   "Setting up Codex…": "Instalando o Codex…",
   "Setting up Genex": "Configurando o Genex",
@@ -4773,7 +4776,7 @@ export default {
   "an earlier build is ready to play · resume from chat": "um build anterior está pronto para jogar · retome pelo chat",
   "an empty folder": "uma pasta vazia",
   "an input": "um controle",
-  "when the lead asks for one": "quando o agente principal pede",
+  "change anything you want": "mude o que quiser",
   "app update left every harness file as it was":
     "a atualização do app deixou todos os arquivos do Harness como estavam",
   "app update refreshed {count, plural, one {# harness file} other {# harness files}}":
@@ -4864,7 +4867,7 @@ export default {
   "effort\u0004xHigh": "Muito alto",
   eighth: "oitava",
   ended: "encerrado",
-  "on parts at the same time": "em várias partes ao mesmo tempo",
+  "the AI builds it for you": "a IA cria para você",
   "every step landed": "todos os passos chegaram ao jogo",
   "exit {code}": "saída {code}",
   "export games": "exportar jogos",
@@ -5131,7 +5134,7 @@ export default {
     "o jogo ainda não tinha terminado de carregar quando foi verificado",
   "the game inside it stays exactly where it is": "o jogo dentro dela fica exatamente onde está",
   "the game's app": "o app do jogo",
-  "and plans when it helps": "e planeja quando ajuda",
+  "the AI plans the game": "a IA planeja o jogo",
   "the kept {file} still has its own {names}, but {callers} now use {target}":
     "o {file} mantido ainda tem seus próprios {names}, mas {callers} agora usam {target}",
   "the lead ended it before it was finished, so nobody reviewed it and the work it had done is kept":
@@ -6486,6 +6489,7 @@ export default {
   "Antigravity didn't answer. Check the installation, then try again.":
     "O Antigravity não respondeu. Confira a instalação e tente de novo.",
   "Antigravity isn't installed on this computer.": "O Antigravity não está instalado neste computador.",
+  "Antigravity ready": "Antigravity pronto",
   "Antigravity sign-in": "Login do Antigravity",
   "Antigravity {version}": "Antigravity {version}",
   "Antigravity's model list could not be read.": "Não foi possível ler a lista de modelos do Antigravity.",
@@ -6523,6 +6527,17 @@ export default {
   "{title} was removed from Design": "{title} foi removida de Design",
   "Opens in Design": "Abre em Design",
   "Question {step} of {of}": "Pergunta {step} de {of}",
+  "Can call tools": "Pode chamar ferramentas",
+  Configure: "Configurar",
+  "Context size": "Tamanho do contexto",
+  "Context size must be between 1,024 and 10,000,000 tokens.":
+    "O tamanho do contexto deve estar entre 1.024 e 10.000.000 tokens.",
+  "Custom context length and vision for this model on your local server. Saved to models.json.":
+    "Tamanho de contexto e visão personalizados para este modelo no seu servidor local. Salvo em models.json.",
+  "Failed to save settings.": "Falha ao salvar as configurações.",
+  "Reported by server": "Informado pelo servidor",
+  "Reset to default": "Restaurar padrão",
+  "Sees images": "Vê imagens",
   "Step {n} of {total} · {name}": "Passo {n} de {total} · {name}",
   "Version {version} is in your game": "A versão {version} já está no seu jogo",
 } satisfies LocaleCatalog;

@@ -511,6 +511,7 @@ export default {
   "Build updated": "빌드가 업데이트됐어요",
   "Build with Genex": "Genex로 만들기",
   "Build with the Cursor plan you already have.": "이미 있는 Cursor 요금제로 만들어요.",
+  "Build with the Google AI plan you already have.": "이미 있는 Google AI 요금제로 만들어요.",
   "Build with the Grok account you already have.": "이미 있는 Grok 계정으로 만들어요.",
   "Changes Harness made to its own instructions. Undo any of them.":
     "Harness가 자기 지침에 한 변경이에요. 어떤 것이든 되돌릴 수 있어요.",
@@ -566,7 +567,7 @@ export default {
   "Visual Studio's C++ tools are ready": "Visual Studio C++ 도구가 준비됐어요",
   "When off, Harness doesn’t change its own instructions. Changes it already made stay until you undo them.":
     "끄면 Harness가 자기 지침을 바꾸지 않아요. 이미 한 변경은 되돌리기 전까지 남아요.",
-  "Workers pitch in": "작업자가 거들어요",
+  "Get your game": "게임을 받아요",
   Building: "만드는 중",
   "Building the game": "게임 빌드 중",
   "Building the starting point": "시작점을 만드는 중",
@@ -865,6 +866,7 @@ export default {
   "Configure optional connection": "선택 연결 설정",
   Connect: "연결",
   "Connect AI model": "AI 모델 연결",
+  "Connect Antigravity": "Antigravity 연결",
   "Connect ChatGPT": "ChatGPT 연결",
   "Connect Claude Code": "Claude Code 연결",
   "Connect Genex": "Genex 연결",
@@ -2714,7 +2716,7 @@ export default {
   "Plan ready": "계획 준비됨",
   "Plan ready for review": "검토할 계획이 준비됐어요",
   "Plan usage isn’t available right now.": "지금은 요금제 사용량을 확인할 수 없어요.",
-  "Your agent leads": "에이전트가 이끌어요",
+  "Share your idea": "아이디어를 말해요",
   Planning: "계획 중",
   "Planning the build": "빌드 계획 중",
   "Planning the next step": "다음 단계를 계획하는 중",
@@ -3042,7 +3044,7 @@ export default {
   "Reviewers compare instructions; they don’t rebuild your games. An applied change isn’t proof of better results.":
     "리뷰어는 지침을 비교할 뿐 게임을 다시 만들지 않아요. 변경을 적용했다고 결과가 더 좋아졌다는 증거는 아니에요.",
   "Reviewers model": "리뷰어 모델",
-  "A second opinion": "다른 시선",
+  "Approve the game design": "게임 디자인을 승인해요",
   "Reviewers · try {number}": "리뷰어 · 시도 {number}",
   "Reviewers: {model}": "리뷰어: {model}",
   Reviewing: "리뷰 중",
@@ -3261,6 +3263,7 @@ export default {
   "Set {setting}": "{setting} 설정",
   "Setting Roblox Studio up for Genex.": "Genex에 맞게 Roblox Studio를 설정하고 있어요.",
   "Setting the route": "경로를 설정하는 중",
+  "Setting up Antigravity…": "Antigravity 설치 중…",
   "Setting up Claude Code…": "Claude Code 설치 중…",
   "Setting up Codex…": "Codex 설치 중…",
   "Setting up Genex": "Genex 설정 중",
@@ -4616,7 +4619,7 @@ export default {
   "an earlier build is ready to play · resume from chat": "이전 빌드를 플레이할 수 있어요 · 채팅에서 이어 가기",
   "an empty folder": "빈 폴더",
   "an input": "입력",
-  "when the lead asks for one": "메인 에이전트가 요청할 때",
+  "change anything you want": "원하는 건 뭐든 바꿔요",
   "app update left every harness file as it was": "앱 업데이트에서 Harness 파일은 그대로 유지됐어요",
   "app update refreshed {count, plural, one {# harness file} other {# harness files}}":
     "앱 업데이트로 {count, plural, other {Harness 파일 #개}}를 갱신했어요",
@@ -4706,7 +4709,7 @@ export default {
   "effort\u0004xHigh": "매우 높음",
   eighth: "여덟 번째",
   ended: "종료됨",
-  "on parts at the same time": "여러 부분을 동시에",
+  "the AI builds it for you": "AI가 대신 만들어요",
   "every step landed": "모든 단계가 반영됐어요",
   "exit {code}": "종료 코드 {code}",
   "export games": "게임 내보내기",
@@ -4966,7 +4969,7 @@ export default {
   "the game had not finished loading when it was looked at": "확인할 때 게임이 아직 다 로드되지 않았어요",
   "the game inside it stays exactly where it is": "안에 있는 게임은 지금 위치 그대로 있어요",
   "the game's app": "게임 앱",
-  "and plans when it helps": "필요하면 계획도 세워요",
+  "the AI plans the game": "AI가 게임을 계획해요",
   "the kept {file} still has its own {names}, but {callers} now use {target}":
     "유지된 {file} 파일에는 자체 {names} 코드가 남아 있지만, 이제 {callers}에서는 {target} 파일을 써요",
   "the lead ended it before it was finished, so nobody reviewed it and the work it had done is kept":
@@ -6265,6 +6268,7 @@ export default {
   "Antigravity didn't answer. Check the installation, then try again.":
     "Antigravity가 응답하지 않았어요. 설치를 확인한 뒤 다시 시도해 주세요.",
   "Antigravity isn't installed on this computer.": "이 컴퓨터에 Antigravity가 설치되어 있지 않아요.",
+  "Antigravity ready": "Antigravity 준비됨",
   "Antigravity sign-in": "Antigravity 로그인",
   "Antigravity {version}": "Antigravity {version}",
   "Antigravity's model list could not be read.": "Antigravity의 모델 목록을 읽을 수 없어요.",
@@ -6298,6 +6302,17 @@ export default {
   "{title} was removed from Design": "{title} 페이지가 디자인에서 삭제됐어요",
   "Opens in Design": "디자인에서 열려요",
   "Question {step} of {of}": "질문 {step}/{of}",
+  "Can call tools": "도구 호출 가능",
+  Configure: "구성",
+  "Context size": "컨텍스트 크기",
+  "Context size must be between 1,024 and 10,000,000 tokens.":
+    "컨텍스트 크기는 1,024에서 10,000,000 토큰 사이여야 합니다.",
+  "Custom context length and vision for this model on your local server. Saved to models.json.":
+    "로컬 서버의 이 모델에 대한 사용자 정의 컨텍스트 길이 및 비전. models.json에 저장됩니다.",
+  "Failed to save settings.": "설정을 저장하지 못했습니다.",
+  "Reported by server": "서버에서 보고됨",
+  "Reset to default": "기본값으로 재설정",
+  "Sees images": "이미지 인식",
   "Step {n} of {total} · {name}": "{total}단계 중 {n}단계 · {name}",
   "Version {version} is in your game": "버전 {version}이 게임에 들어갔어요",
 } satisfies LocaleCatalog;

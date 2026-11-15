@@ -538,6 +538,7 @@ export default {
   "Build updated": "Сборка обновлена",
   "Build with Genex": "Собирать с Genex",
   "Build with the Cursor plan you already have.": "Собирай на тарифе Cursor, который у тебя уже есть.",
+  "Build with the Google AI plan you already have.": "Собирай на тарифе Google AI, который у тебя уже есть.",
   "Build with the Grok account you already have.": "Собирай на аккаунте Grok, который у тебя уже есть.",
   "Changes Harness made to its own instructions. Undo any of them.":
     "Изменения, которые Harness внёс в свои инструкции. Любое можно отменить.",
@@ -593,7 +594,7 @@ export default {
   "Visual Studio's C++ tools are ready": "Инструменты C++ из Visual Studio готовы",
   "When off, Harness doesn’t change its own instructions. Changes it already made stay until you undo them.":
     "Когда выключено, Harness не меняет свои инструкции. Уже сделанные изменения остаются, пока ты их не отменишь.",
-  "Workers pitch in": "Помощники подключаются",
+  "Get your game": "Получи игру",
   Building: "Собирает",
   "Building the game": "Собираем игру",
   "Building the starting point": "Собирает основу",
@@ -900,6 +901,7 @@ export default {
   "Configure optional connection": "Настроить необязательное подключение",
   Connect: "Подключить",
   "Connect AI model": "Подключить ИИ-модель",
+  "Connect Antigravity": "Подключить Antigravity",
   "Connect ChatGPT": "Подключить ChatGPT",
   "Connect Claude Code": "Подключить Claude Code",
   "Connect Genex": "Подключить Genex",
@@ -2770,7 +2772,7 @@ export default {
   "Plan ready": "План готов",
   "Plan ready for review": "План готов к проверке",
   "Plan usage isn’t available right now.": "Лимиты тарифа сейчас недоступны.",
-  "Your agent leads": "Ведёт твой агент",
+  "Share your idea": "Расскажи идею",
   Planning: "Планирует",
   "Planning the build": "Планирует сборку",
   "Planning the next step": "Планирует следующий шаг",
@@ -3101,7 +3103,7 @@ export default {
   "Reviewers compare instructions; they don’t rebuild your games. An applied change isn’t proof of better results.":
     "Проверяющие сравнивают инструкции, а не пересобирают твои игры. Применённое изменение ещё не доказывает, что результаты стали лучше.",
   "Reviewers model": "Модель проверяющих",
-  "A second opinion": "Второе мнение",
+  "Approve the game design": "Одобри дизайн игры",
   "Reviewers · try {number}": "Проверяющие · попытка {number}",
   "Reviewers: {model}": "Проверяющие: {model}",
   Reviewing: "Проверяет",
@@ -3323,6 +3325,7 @@ export default {
   "Set {setting}": "Указать {setting}",
   "Setting Roblox Studio up for Genex.": "Roblox Studio настраивается для Genex.",
   "Setting the route": "Задаёт маршрут",
+  "Setting up Antigravity…": "Устанавливаем Antigravity…",
   "Setting up Claude Code…": "Устанавливаем Claude Code…",
   "Setting up Codex…": "Устанавливаем Codex…",
   "Setting up Genex": "Настраиваем Genex",
@@ -4697,7 +4700,7 @@ export default {
   "an earlier build is ready to play · resume from chat": "можно играть в прежнюю сборку · продолжи из чата",
   "an empty folder": "пустая папка",
   "an input": "элемент управления",
-  "when the lead asks for one": "когда главный агент попросит",
+  "change anything you want": "поменяй что захочешь",
   "app update left every harness file as it was": "обновление приложения не тронуло файлы Harness",
   "app update refreshed {count, plural, one {# harness file} other {# harness files}}":
     "обновление приложения освежило {count, plural, one {# файл Harness} few {# файла Harness} many {# файлов Harness} other {# файла Harness}}",
@@ -4789,7 +4792,7 @@ export default {
   "effort\u0004xHigh": "Очень высокое",
   eighth: "восьмую",
   ended: "завершено",
-  "on parts at the same time": "над частями одновременно",
+  "the AI builds it for you": "ИИ соберёт её за тебя",
   "every step landed": "все шаги попали в игру",
   "exit {code}": "код {code}",
   "export games": "экспортировать игры",
@@ -5053,7 +5056,7 @@ export default {
   "the game had not finished loading when it was looked at": "игра ещё не загрузилась, когда её проверяли",
   "the game inside it stays exactly where it is": "игра внутри остаётся на своём месте",
   "the game's app": "приложение игры",
-  "and plans when it helps": "и планирует, когда это помогает",
+  "the AI plans the game": "ИИ спланирует игру",
   "the kept {file} still has its own {names}, but {callers} now use {target}":
     "в сохранённом файле {file} остались свои {names}, но вызовы из {callers} теперь идут в {target}",
   "the lead ended it before it was finished, so nobody reviewed it and the work it had done is kept":
@@ -6445,6 +6448,7 @@ export default {
   "Antigravity didn't answer. Check the installation, then try again.":
     "Antigravity не ответил. Проверь установку и попробуй ещё раз.",
   "Antigravity isn't installed on this computer.": "Antigravity не установлен на этом компьютере.",
+  "Antigravity ready": "Antigravity готов",
   "Antigravity sign-in": "Вход в Antigravity",
   "Antigravity {version}": "Antigravity {version}",
   "Antigravity's model list could not be read.": "Не удалось прочитать список моделей Antigravity.",
@@ -6486,6 +6490,17 @@ export default {
   "{title} was removed from Design": "{title}: страница удалена из «Дизайна»",
   "Opens in Design": "Откроется в «Дизайне»",
   "Question {step} of {of}": "Вопрос {step} из {of}",
+  "Can call tools": "Может вызывать инструменты",
+  Configure: "Настроить",
+  "Context size": "Размер контекста",
+  "Context size must be between 1,024 and 10,000,000 tokens.":
+    "Размер контекста должен составлять от 1 024 до 10 000 000 токенов.",
+  "Custom context length and vision for this model on your local server. Saved to models.json.":
+    "Пользовательский размер контекста и распознавание изображений для этой модели на локальном сервере. Сохранено в models.json.",
+  "Failed to save settings.": "Не удалось сохранить настройки.",
+  "Reported by server": "Сообщено сервером",
+  "Reset to default": "Сбросить по умолчанию",
+  "Sees images": "Распознает изображения",
   "Step {n} of {total} · {name}": "Шаг {n} из {total} · {name}",
   "Version {version} is in your game": "Версия {version} уже в игре",
 } satisfies LocaleCatalog;
