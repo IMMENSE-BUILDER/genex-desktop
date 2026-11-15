@@ -860,6 +860,7 @@ describe("both sign-in paths go through the controllers", () => {
           return { id: "t1", title: launch.title, kind: launch.kind, phase: "running" };
         },
         stop: async () => {},
+        list: () => [],
       },
       openExternal: async () => {},
       subscription: () => null,
@@ -897,6 +898,7 @@ describe("both sign-in paths go through the controllers", () => {
           throw new Error("no terminal without a CLI");
         },
         stop: async () => {},
+        list: () => [],
       },
       openExternal: async () => {},
       subscription: () => null,
