@@ -18,6 +18,7 @@ import { ProcessSandbox } from "../../src/substrate/spawn.ts";
 import { EngineError, type DelegateEvent } from "../../src/substrate/engines/types.ts";
 import { PermissionMode } from "../../src/shared/permissions.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { gitFile } from "../helpers/git.ts";
 import { readFile } from "node:fs/promises";
 
 const FIXTURES = path.join(import.meta.dirname, "..", "fixtures", "transcripts");
@@ -49,6 +50,17 @@ async function engineWith(stream: (invocation: PiInvocation) => AsyncIterable<Re
 
 async function* replay(list: Array<Record<string, unknown>>): AsyncGenerator<Record<string, unknown>> {
   for (const event of list) yield event;
+}
+
+const COMMITTER = {
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.com",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.com",
+};
+
+async function git(dir: string, ...args: string[]): Promise<void> {
+  await gitFile(["-C", dir, ...args], { env: { ...process.env, ...COMMITTER } });
 }
 
 async function game(): Promise<string> {
@@ -331,6 +343,26 @@ describe("Pi's sandbox", () => {
     assert.ok(!writes(path.join(home, ".pi", "AGENTS.md")), "nor the instructions its sign-in reads");
     assert.ok(!box.policy.denyRead.includes(piHome), "the CLI reads its own sign-ins");
     assert.ok(!box.policy.denyWrite.includes(piHome), "a deny on the whole store would cut those two write grants");
+  });
+  it("a building session in a linked worktree writes its Git metadata; a read-only session does not", async () => {
+    const repo = await realpath(await tmpDir("pi-repo-"));
+    await writeFile(path.join(repo, "main.js"), "export const x = 1;\n");
+    await git(repo, "init", "-q");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-q", "-m", "first");
+    const worker = path.join(await realpath(await tmpDir("pi-worker-")), "copy");
+    await git(repo, "worktree", "add", "-q", "--detach", worker);
+    const gitDir = await realpath(path.join(repo, ".git", "worktrees", "copy"));
+    const commonDir = await realpath(path.join(repo, ".git"));
+    const stream = await events("pi-stream.jsonl");
+    const { engine, seen } = await engineWith(() => replay(stream));
+    await engine.delegate({ cwd: worker, prompt: "build", onEvent: () => {} });
+    await engine.delegate({ cwd: worker, prompt: "look", readOnly: true, onEvent: () => {} });
+    const [builder, reader] = seen;
+    for (const dir of [gitDir, commonDir]) {
+      assert.ok(builder?.sandbox.writableRoots.includes(dir), `the build commits through ${dir}, outside its folder`);
+      assert.ok(!reader?.sandbox.writableRoots.includes(dir), `a read-only session writes no Git metadata (${dir})`);
+    }
   });
 });
 

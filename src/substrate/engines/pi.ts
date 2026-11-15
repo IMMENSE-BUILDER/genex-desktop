@@ -18,6 +18,7 @@ import { releaseStaleLocks } from "./ownership-locks.ts";
 import { StudioBridge, answerBridgeCall, bridgeTools } from "./studio-bridge.ts";
 import { writeDelegateStills } from "./codex.ts";
 import { JUDGE_RULES, offLimitsNote, planModeNote, readOnlyNote } from "./codex-prompts.ts";
+import { gitMetadataDirs } from "./session-commands.ts";
 import { parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
 import { parsePiLine, translatePiEvent, type Translated } from "./pi-events.ts";
 import {
@@ -426,7 +427,9 @@ export class PiEngine implements Engine {
       sandbox: piSandbox({
         runDir: ctx.runDir,
         gameDir: ctx.cwd,
-        gitDirs: [],
+        // A building session commits: a Loop worker's folder is a linked worktree whose Git
+        // metadata lives outside it.
+        gitDirs: ctx.readOnly ? [] : await gitMetadataDirs(ctx.cwd),
         scratchDir: path.join(this.#scratchRoot, "tmp"),
         secretPaths: [...this.#protectedPaths, ...(request.denyReads ?? [])],
         ...(this.#toolPath ? { toolPath: this.#toolPath } : {}),
