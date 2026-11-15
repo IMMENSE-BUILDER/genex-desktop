@@ -314,7 +314,8 @@ try {
     "desktop",
     "room/project/thread observed from real DOM and CSS resolved",
     async () => {
-      await op(b, "click", { selector: 'nav [data-thread="studio"]' });
+      // ⌘2 opens Harness: its sidebar row is hidden for now (#654).
+      await op(b, "key", { surface: "desktop", key: "2", code: "Digit2", modifiers: ["Meta"] });
       await until(async () => (await snapshot(b)).state.room === "studio", "Studio workspace");
       await op(b, "key", { surface: "desktop", key: "1", code: "Digit1", modifiers: ["Meta"] });
       await until(async () => (await snapshot(b)).state.room === "build", "Build keyboard shortcut");
@@ -350,9 +351,9 @@ try {
     },
   );
   await check(
-    "background Unicode, newline, Send and durable coordinator response",
+    "background Unicode, newline, Send and durable response from the chat's own session",
     "desktop",
-    "Unicode/newline input reaches coordinator without new commission",
+    "Unicode/newline input reaches the chat's own session without new commission",
     async () => {
       await op(a, "type", { selector: '[aria-label="Prompt"]', text: "Привет 🌿", replace: true });
       await op(a, "key", { surface: "desktop", key: "Enter", code: "Enter", modifiers: ["Shift"] });
@@ -361,7 +362,7 @@ try {
       await op(a, "click", { selector: 'button[aria-label="Send"]' });
       await until(
         async () => (await snapshot(a)).text.includes("Fixture response. No new build was started."),
-        "coordinator response",
+        "the chat's own session's response",
       );
       const events = (await op(a, "logs", { surface: "core", limit: 200 })).entries;
       assert.equal(events.filter((e) => e.data.type === "custom" && e.data.event_type === "run_started").length, 2);
@@ -373,26 +374,29 @@ try {
   await check(
     "build history pointer navigation and graph details",
     "desktop",
-    "earlier run and actual saved health/capture visible",
+    "earlier run and a step's actual saved capture visible",
     async () => {
       await openBuildFromChat(a, "fixture-build-1");
       await until(async () => {
         const s = await snapshot(a);
         return s.stage.selectedRun === "fixture-build-1" && s.text.includes("River and bridge");
       }, "earlier history graph");
-      // The selected run changes before its complete host summary has arrived. Wait for the
-      // actual pointer target to become visible; chat text alone can belong to the earlier render.
-      await reach(a, "click", { selector: '[data-graph-node="start"]' });
-      await until(
-        async () => (await snapshot(a)).text.includes("Fixture base: camera views were identical"),
-        "base health",
-      );
+      // The run stopped with its only step's work outside the build: that row waits under the
+      // left-out row, which a press opens. The selected run changes before its complete host
+      // summary has arrived, so wait for each pointer target to become visible.
+      const step = '[data-graph-node="step:river:1"]';
+      const listed = async () =>
+        (await op(a, "snapshot", { surface: "desktop", scope: "[data-builds-list]" })).controls.some(
+          (c) => c.node === "step:river:1",
+        );
+      if (!(await listed())) await reach(a, "click", { selector: '[data-builds-left-out][aria-expanded="false"]' });
+      await reach(a, "click", { selector: step });
       await until(
         async () =>
-          (await op(a, "snapshot", { surface: "desktop", scope: '[data-testid="build-capture"]' })).images.some(
+          (await op(a, "snapshot", { surface: "desktop", scope: '[data-graph-panel="step:river:1"]' })).images.some(
             (i) => i.loaded,
           ),
-        "saved base capture loaded",
+        "the step's saved capture loaded in its card",
       );
       await screenshot(a, "desktop", "build-history");
       await assert.rejects(op(a, "capture", { surface: "game", name: "unavailable-game" }), /missing-prerequisite/);
@@ -400,7 +404,7 @@ try {
     },
   );
   await check(
-    "real Stop pointer-down aborts controlled pending coordinator",
+    "real Stop pointer-down aborts the controlled pending session",
     "desktop",
     "engine AbortSignal rejection and durable turn end",
     async () => {
@@ -441,20 +445,23 @@ try {
     },
   );
   await check(
-    "game state input and separate compositor capture",
+    "game input and separate compositor capture",
     "game",
-    "fixture state/input changes and two distinct actual images",
+    "a click redraws the fixture game, seen from outside, and two distinct actual images",
     async () => {
-      const before = await op(b, "game.state");
-      assert.equal(before.fixture, 1);
+      // The fixture's page tells Genex nothing (no window.__studio): its click counter shows only
+      // in what it draws, so the click is proven by the game's own pixels changing.
+      const gamePixels = async (name) =>
+        hash(fs.readFileSync((await op(b, "capture", { surface: "game", name })).file));
+      const before = await gamePixels("game-before-input");
+      assert.equal(await gamePixels("game-before-input-again"), before, "a still game captures the same pixels");
       await op(b, "game.input", { actions: [{ type: "click", x: 0.2, y: 0.2 }] });
-      const after = await op(b, "game.state");
-      assert.ok(after.clicks > before.clicks);
+      await until(async () => (await gamePixels("game-after-input")) !== before, "the click redraws the game");
       const game = await screenshot(b, "game", "game-surface"),
         desktop = await screenshot(b, "desktop", "desktop-separate");
       assert.notEqual(hash(fs.readFileSync(game.file)), hash(fs.readFileSync(desktop.file)));
       assert.equal((await op(b, "status")).window.focused, false);
-      return { before, after };
+      return { redrawnByInput: true };
     },
   );
   await check(
@@ -597,7 +604,10 @@ try {
       const evolved = fs.readFileSync(runtimeFile, "utf8");
       fs.appendFileSync(sourceFile, "\n<!-- AG-933 shipped seed change -->\n");
       assert.equal((await op(a, "status")).stale, true);
-      await assert.rejects(op(a, "click", { selector: 'nav [data-thread="studio"]' }), /stale-build/);
+      await assert.rejects(
+        op(a, "key", { surface: "desktop", key: "2", code: "Digit2", modifiers: ["Meta"] }),
+        /stale-build/,
+      );
       const old = a.identity.buildId;
       await stop(a);
       a = await start(checkoutA, "fixture", "run-controls", true);

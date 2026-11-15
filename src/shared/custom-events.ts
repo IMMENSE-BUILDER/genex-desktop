@@ -10,6 +10,7 @@
  * harness, which the in-app agent may edit, and old logs keep old shapes. Read them through
  * `customEvent` / `customPayload`, never `payload as`.
  */
+import type { GenexReviewFixPayload, GenexReviewPayload } from "./genex-review.ts";
 import type { ChatActivityPhase } from "./chat-activity.ts";
 import type { ChatRewind, CheckpointSkippedPayload, RewindUndonePayload } from "./chat-rewind.ts";
 import type { PlanReviewRecord } from "./composer.ts";
@@ -25,7 +26,7 @@ import type { Usage } from "./event-log.ts";
 import type { LoopProfile } from "./project-facts.ts";
 import type { BuildObservation, HealthFinding, ReadyResult, ReadyVia } from "./preview-contract.ts";
 import type { EngineLinkedPayload, EngineLinkUndonePayload, EngineStepsPayload } from "./game-engine.ts";
-import type { RunSpec } from "./protocol.ts";
+import type { DesignShownPayload } from "./design-board.ts";
 import type { PluginSuggestedPayload } from "./project-tools.ts";
 import type { AppLookAccessPayload, JobEndedPayload, JobStartedPayload } from "./jobs.ts";
 import type { AgentWentAheadPayload } from "./plugin-hooks.ts";
@@ -48,6 +49,8 @@ export const CustomEvent = {
   /** What each @ tag of a message gave the agent; written by the host after the message is sent. */
   MentionTagged: "mention_tagged",
   BlenderAsset: "blender_asset",
+  /** A page of the game's design board its agent showed from a chat (`show_design`): its card there; written by the host only. */
+  DesignShown: "design_shown",
   ConnectorTool: "connector_tool",
   /** A connector call on its way out, paired with its `connector_tool` by `callId`; written by the host only. */
   ConnectorToolStarted: "connector_tool_started",
@@ -76,6 +79,10 @@ export const CustomEvent = {
   ChatJudgeResult: "chat_judge_result",
   /** The game's agent made or changed a store item, on genex.games or as a local draft: its Listing draft card (shared/item-draft.ts); written by the host only. */
   ItemDrafted: "item_drafted",
+  /** Genex's review of a game's apps or its takedown changed, as the host read it (shared/genex-review.ts); written by the host only. */
+  GenexReview: "genex_review",
+  /** Fix with agent pressed on a game's review: what the agent was sent, and whether Studio publishes after (shared/genex-review.ts); written by the host only. */
+  GenexReviewFix: "genex_review_fix",
   // the unattended run and its lead
   AutopilotBase: "autopilot_base",
   AutopilotBaseStarted: "autopilot_base_started",
@@ -86,7 +93,6 @@ export const CustomEvent = {
   AutopilotResumed: "autopilot_resumed",
   AutopilotStarted: "autopilot_started",
   BuildLanded: "build_landed",
-  DirectorContinued: "director_continued",
   DirectorProgress: "director_progress",
   DirectorShow: "director_show",
   DirectorVerdict: "director_verdict",
@@ -98,7 +104,6 @@ export const CustomEvent = {
   RunAutoResumed: "run_auto_resumed",
   RunControl: "run_control",
   RunFinished: "run_finished",
-  RunFollowupRequested: "run_followup_requested",
   RunInteractionEvidence: "run_interaction_evidence",
   RunIteration: "run_iteration",
   RunLearning: "run_learning",
@@ -145,7 +150,6 @@ export const CustomEvent = {
   ContextUsage: "context_usage",
   ContractorHandoff: "contractor_handoff",
   ContractorSession: "contractor_session",
-  ConversationCapabilitiesApplied: "conversation_capabilities_applied",
   ConversationRewindUndone: "conversation_rewind_undone",
   ConversationRewound: "conversation_rewound",
   CoordinatorMessageDelivered: "coordinator_message_delivered",
@@ -234,13 +238,42 @@ export interface RunScope {
   iteration?: number;
 }
 
-/** The part of a run's budgets its start records carry for the app to read back (`recordedRunLoop`). */
-export type RecordedRunBudgets = Partial<Pick<RunSpec["budgets"], "wallClockMs" | "untilSatisfied">>;
+/**
+ * The time a run's start records named before runs had no clock, read back from old records (the eval
+ * lane's report, the sharing facts): no run writes them now.
+ */
+export interface RecordedRunBudgets {
+  wallClockMs?: number;
+  untilSatisfied?: boolean;
+}
 
 export interface InterviewChoice {
   id: string;
   label: string;
   description?: string;
+}
+
+/** The most questions one short run of an agent's questions holds: the top of a question's `of`. */
+export const MAX_QUESTION_STEPS = 4;
+
+/** Which question of a short run of them one is: the `step`-th `of` so many. */
+export interface QuestionStep {
+  step: number;
+  of: number;
+}
+
+/**
+ * The place a question's record names in its run of questions: whole numbers with
+ * 1 ≤ step ≤ of ≤ `MAX_QUESTION_STEPS`. Null for a record that names none (a single question, an
+ * older record) or a senseless one (an edited harness's). The seed's `ask_user` writes by the same
+ * rule (`loop/interview-question.ts`, held equal by seed-contracts).
+ */
+export function questionStepOf(asked: { step?: unknown; of?: unknown }): QuestionStep | null {
+  const { step, of } = asked;
+  if (typeof step !== "number" || typeof of !== "number") return null;
+  if (!Number.isInteger(step) || !Number.isInteger(of)) return null;
+  const inRun = step >= 1 && step <= of && of <= MAX_QUESTION_STEPS;
+  return inRun ? { step, of } : null;
 }
 
 /** A check scoreboard as a round records it. */
@@ -257,6 +290,13 @@ export interface RoundVerdict {
   because?: string | null;
 }
 
+/**
+ * The part a Loop's lead records itself under: its own row (`director_worker` `workerId`) and its
+ * save points (`facet_iteration` `facetId`). The seed's `OPEN_LEAD_PART`, held to it by
+ * `seed-contracts.test.ts`. Persisted: never rename the value.
+ */
+export const LEAD_PART = "lead";
+
 export interface FacetIterationPayload extends RunScope {
   winner?: string;
   satisfied?: boolean;
@@ -268,6 +308,10 @@ export interface FacetIterationPayload extends RunScope {
   move?: { what?: string; delivered?: boolean | null; scale?: string | null } | null;
   /** Saved stills, as paths or `{ path }` records depending on the version that wrote them. */
   shots?: unknown;
+  /** A save point's label, in the lead's words (the lead's part only). */
+  label?: string;
+  /** Genex took the save point between the lead's turns (an autosave), not the lead. */
+  auto?: boolean;
 }
 
 /**
@@ -358,8 +402,8 @@ export interface RunFinishedPayload extends RunScope {
   /** Older closes marked a pause with this flag instead of `executionStatus`. */
   paused?: boolean;
   /**
-   * A new Loop a plugin's step held back before its first turn (not Genex's own hold, not a resume):
-   * the chat's agent is told why, to fix it and start the Loop again (`core/held-start.ts`).
+   * A new Loop a plugin's step held back before its first turn (not Genex's own hold, not a resume).
+   * Written only by seeds from before every start became its lead's; nothing reads it now.
    */
   startHeld?: boolean;
   integrationHead?: string;
@@ -405,7 +449,10 @@ export const RunStartRefusal = {
   RunOwnsThread: "run_owns_thread",
   /** The folder is an engine's export: compiled, with nothing a run could edit. */
   EngineExport: "engine_export",
-  /** Genex's `web.ready` gate: the web page lacks files it needs to load. */
+  /**
+   * Genex's `web.ready` gate: the web page lacked files it needs to load. Written only by seeds from
+   * before its finding became a line the Loop's lead reads at its start: old records carry it.
+   */
   WebNotReady: "web_not_ready",
 } as const;
 export type RunStartRefusal = (typeof RunStartRefusal)[keyof typeof RunStartRefusal];
@@ -503,12 +550,11 @@ export interface PlanReviewPayload extends RunScope {
   game?: { kind?: string | null } | null;
 }
 
-/** The chat's contractor session: what its next turn resumes, and the model it was opened on. */
+/** The chat's contractor session: what its next turn resumes, on which engine and game. */
 export interface ContractorSessionPayload {
   project?: string;
   engine?: string;
   sessionId?: string;
-  model?: string | null;
 }
 
 /** What a delegated build reported of itself, as a chat record keeps it (`DelegateResult`). */
@@ -745,14 +791,18 @@ export interface CustomEventMap {
     picture?: string;
     worker?: string;
   };
-  /** `recap`: one line the agent wrote on what it found or did, shown above the question. */
-  interview_question: { question?: string; recap?: string; choices?: InterviewChoice[] };
+  /**
+   * `recap`: one line the agent wrote on what it found or did, shown above the question. `step` and
+   * `of`: which question of a short run of them this is, read with `questionStepOf`.
+   */
+  interview_question: { question?: string; recap?: string; choices?: InterviewChoice[]; step?: number; of?: number };
   /** A provider signed out mid-turn (harness `turn-loop.ts`); `message` is the provider's own error. */
   needs_signin: { engine?: string; message?: string };
   plan_review: PlanReviewRecord;
   preview_ready: PreviewReadyPayload;
   plugin_consent: PluginConsentEvent;
   plugin_suggested: Partial<PluginSuggestedPayload>;
+  design_shown: Partial<DesignShownPayload>;
   plugin_tool: PluginToolFinishedPayload & { facetTitle?: string };
   plugin_tool_started: PluginToolStartedPayload & { facetTitle?: string };
   tool_permission: ToolPermissionEvent;
@@ -762,6 +812,8 @@ export interface CustomEventMap {
   agent_went_ahead: Partial<AgentWentAheadPayload>;
   chat_judge_result: Partial<ChatJudgeResultPayload>;
   item_drafted: Partial<ListingDraft> | Partial<LocalListingDraft>;
+  genex_review: Partial<GenexReviewPayload>;
+  genex_review_fix: Partial<GenexReviewFixPayload>;
   worker_started: WorkerStartedPayload;
   worker_finished: WorkerFinishedPayload;
   observer_capture: Partial<ObserverCapturePayload>;
@@ -771,7 +823,15 @@ export interface CustomEventMap {
   run_control: RunScope & { action?: string };
   run_finished: RunFinishedPayload;
   run_iteration: RunScope & { winner?: string; biggest_gap?: string; verdict?: RoundVerdict | null };
-  run_registered: RunScope & { budgets?: RecordedRunBudgets; resumed?: boolean };
+  /** The run as it was dispatched; `title` is the build's name (shared/build-title.ts), absent on older runs. */
+  run_registered: RunScope & {
+    budgets?: RecordedRunBudgets;
+    resumed?: boolean;
+    goal?: string;
+    title?: string;
+    /** The lead's plan as short steps (seed loop/plan-steps.ts); each save point ticks the next. */
+    steps?: string[];
+  };
   run_start_blocked: RunStartBlockedPayload;
   run_started: RunScope & {
     budgets?: RecordedRunBudgets;
@@ -826,9 +886,6 @@ export interface CustomEventMap {
   tool_registry_applied: {
     revision?: number;
     engine?: string;
-    session?: string;
-    plugins?: string[];
-    skills?: string[];
   };
   skillopt_accepted: { skill?: string; title?: string };
   skillopt_pass: { staged?: number; accepted?: number };

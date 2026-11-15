@@ -141,16 +141,6 @@ try {
     await until(async () => (await snap()).state.room === "studio", "learning opens Studio");
     await click(`nav [data-thread="${learning.thread_id}"]`);
     await capture("outcome-and-learning");
-    // After a finished build Mode is the chat's own Loop again: no new-build choice, the time limit to pick.
-    await click('[aria-label="Mode"]');
-    const options = await op("snapshot", { surface: "desktop", scope: '[aria-label="Mode options"]', limit: 40 });
-    assert.doesNotMatch(options.text, /new build/i);
-    assert.ok(!options.controls.some((c) => /new build/i.test(c.text ?? "")));
-    const limit = await op("snapshot", { surface: "desktop", scope: '[aria-label="Loop time limit"]', limit: 20 });
-    assert.ok(limit.controls.some((c) => c.text === "Custom"));
-    await capture("mode-after-finished-build");
-    await key("Escape");
-    assert.match((await snap()).controls.find((c) => c.label === "Mode")?.text ?? "", /Loop$/);
   });
   await check(
     "unavailable plans offer model recovery, preserve the request and retry on the chosen provider",
@@ -188,16 +178,19 @@ try {
         return !s.text.includes("Loading conversation") && s.controls.some((c) => c.text === "Builds");
       }, "director conversation loaded");
       await pressStageView(click, "builds");
-      await key("0", "Digit0");
+      // Flipped: Builds is a list with no "You asked" card; the run's build heads it, with its capture.
       await until(async () => {
         const s = await snap();
-        return (
-          s.text.includes("You asked") && s.text.includes("Your build") && s.images.filter((i) => i.loaded).length >= 2
-        );
+        return s.text.includes("Your build") && s.images.some((i) => i.loaded);
       }, "saved run captures");
-      await click('[data-graph-node="start"]');
-      // Flipped: the start card no longer names the build length (AG-968); a finished build shows none.
-      await until(async () => (await snap()).text.includes("Started from"), "the start card");
+      await click('[data-graph-node="final"]');
+      await until(
+        async () =>
+          (await op("snapshot", { surface: "desktop", scope: '[data-graph-panel="final"]' })).images.some(
+            (i) => i.loaded,
+          ),
+        "the build's card with its capture",
+      );
       const s = await snap();
       assert.doesNotMatch(
         s.text,
@@ -216,8 +209,6 @@ try {
     const handoff = events(thread).find((e) => e.data.event_type === "contractor_handoff").data.payload;
     assert.equal(handoff.engine, "codex");
     assert.equal(handoff.model, "fixture-v1");
-    // Flipped (step 1): the handoff names the Loop chat's launch tool instead of `interview: true`.
-    assert.match(String(handoff.launch), /^start_(autopilot|unattended_run)$/);
     report.modelInheritance = { engine: handoff.engine, model: handoff.model };
     await capture("question");
   });
@@ -261,10 +252,6 @@ try {
     await answered();
     const log = events(thread);
     assert.ok(!log.some((e) => e.data.event_type === "run_started"));
-    assert.match(
-      String(log.filter((e) => e.data.event_type === "contractor_handoff").at(-1).data.payload.launch),
-      /^start_(autopilot|unattended_run)$/,
-    );
     assert.match((await snap()).text, /Actually, a coast at night/);
     await capture("custom-answer");
   });

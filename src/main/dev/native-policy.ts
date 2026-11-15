@@ -8,6 +8,8 @@ import type { StudioInvokeChannel } from "../../shared/ipc-channels.ts";
  */
 const NATIVE_CHANNELS = [
   "studio:terminal.open",
+  // Play for a game being made starts the app its folder holds, in the game sandbox: never in a fixture.
+  "studio:game.play-build",
   // A command a chat reply offered runs in the user's own shell, like the project terminal.
   "studio:terminal.run",
   "studio:plugins.install",
@@ -21,8 +23,16 @@ const NATIVE_CHANNELS = [
   // Publish from Studio's dialog uploads the game to Genex with the user's real account.
   "studio:plugins.genex-publish",
   "studio:plugins.genex-publish-apps",
+  "studio:plugins.genex-cloud-build",
+  // A review card's Fix with agent and Request human review reach Genex with the user's real account
+  // and send the game's chat a message; a fixture answers unsupported.
+  "studio:plugins.genex-fix-review",
+  "studio:plugins.genex-request-review",
   "studio:subscription.signin",
   "studio:subscription.forget-studio-login",
+  // Building with Genex opens genex.games's build page in the person's browser, where it signs the
+  // app in to their real account and they pick Pro or a credit pack.
+  "studio:genex-account.build",
   // A subscription's accounts: listing asks each account's CLI for its email; choosing one changes
   // the account every run signs in with.
   "studio:subscription.accounts",
@@ -37,12 +47,18 @@ const NATIVE_CHANNELS = [
   // the CLI forget the account it keeps.
   "studio:cursor.signin",
   "studio:cursor.signout",
+  // Antigravity's sign-in runs its CLI in a terminal and signs in to the person's Google account.
+  "studio:antigravity.signin",
   // Opens the sign-in page a terminal printed in the person's browser.
   "studio:terminal.open-link",
   // Saving checks the key with OpenRouter and writes it to the OS secret store; forgetting it
   // deletes it there. A fixture profile has no key and no network.
   "studio:openrouter.key.save",
   "studio:openrouter.key.clear",
+  // Saving checks the TypeSafe key with TypeSafe and writes it to the OS secret store; forgetting
+  // it deletes it there. A fixture profile has no key and no network.
+  "studio:typesafe.key.save",
+  "studio:typesafe.key.clear",
   // The browser sign-in opens OpenRouter in the person's browser, listens on a loopback port and
   // redeems the code with OpenRouter; opening its page again is the browser too.
   "studio:openrouter.signin",
@@ -74,6 +90,8 @@ const NATIVE_CHANNELS = [
   "studio:models.lookup",
   // Delete removes model files from this Mac, or asks the person's own Ollama to delete one.
   "studio:models.remove",
+  // Raise context writes a model copy into the person's own Ollama.
+  "studio:models.raise-context",
   // Install fetches the vendor's installer and runs it as the person: a download and a real install.
   "studio:cli-install.start",
   "studio:models.refresh",
@@ -209,14 +227,23 @@ const FIXTURE_SAFE = [
   "studio:backdrop.make",
   "studio:game.update",
   "studio:game.remove",
-  "studio:game.references",
   "studio:game.asset.preview",
   "studio:game.asset.present",
   "studio:game.asset.rigs",
+  // A card's kept thumbnail: read from and written to the profile's own data, never the game.
+  "studio:game.asset.thumbnail",
+  "studio:game.asset.thumbnail.keep",
   "studio:game.assets",
+  // The Design tab reads the pages a game's docs/design/ holds; fixtures read their own game's.
+  "studio:design.board",
+  "studio:design.drop",
+  "studio:design.marks",
+  "studio:design.marks.save",
   "studio:game.asset.still",
   "studio:engines",
   "studio:engines.recheck",
+  // Reads whether a TypeSafe key is saved in the profile's own store; it never reaches TypeSafe.
+  "studio:typesafe.key.status",
   "studio:hardware",
   "studio:model-install.status",
   "studio:cli-install.status",
@@ -248,7 +275,6 @@ const FIXTURE_SAFE = [
   "studio:run.feedback",
   "studio:run.summary",
   "studio:run.review",
-  "studio:run.start",
   "studio:run.stop",
   "studio:run.finish",
   "studio:review.play",
@@ -293,6 +319,12 @@ const FIXTURE_SAFE = [
   "studio:plugins.genex-publish-review",
   // Publish's platform rows: what the game folder holds, read only.
   "studio:plugins.genex-publish-platforms",
+  // A game's review as the Genex plugin keeps it: a fixture profile never has Genex read again
+  // (`genexReviewReads`), so it answers the record its fixture laid down.
+  "studio:plugins.genex-review-status",
+  // The sidebar's lines under the games on Genex: what Studio keeps (the plugin's kept review, the
+  // chat's fix records, the publish record), never a read of Genex.
+  "studio:plugins.genex-review-lines",
   "studio:plugins.index",
   "studio:plugins.watch",
   // A local plugin's grants live in the profile's install record; no dialog, no socket.

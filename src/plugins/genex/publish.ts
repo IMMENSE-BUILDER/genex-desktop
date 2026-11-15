@@ -57,6 +57,20 @@ export const MESSAGE = {
   RevisionMismatch: "Hosted staging revision does not match this upload yet",
   NotInGallery: () => t("This game is not in the gallery yet"),
   NothingOnline: () => t("Nothing is online for this game yet"),
+  /** A link with no letter or digit in it. */
+  LinkEmpty: () => t("Give the link a letter or a number."),
+  /** Genex gives the link to another game already (or keeps it for one). */
+  LinkTaken: () => t("Another game already has this link. Try another one."),
+  /** The game used every link change Genex allows it. */
+  LinkLimit: () => t("This game has used all its link changes."),
+  /** Genex keeps this word for itself. */
+  LinkReserved: () => t("Genex keeps this link for itself. Try another one."),
+  /** A publish of the game holds it on Genex: the link can move once that ends. */
+  LinkBusy: () => t("Genex is still publishing this game. Change the link once it's done."),
+  /** Genex didn't answer in time: the link may have moved, and the next look at the game shows it. */
+  LinkSlow: () => t("Genex didn't answer in time. Check the game's link again in a minute."),
+  /** A name with no letter or digit left once cleaned: nothing to list the game under. */
+  NoName: () => t("Give the game a name with a letter or a number in it."),
   UnrecognizedLink: () => t("Unrecognized Genex page link"),
   InvalidProject: "Invalid project",
   NeedsGit: () =>
@@ -68,9 +82,48 @@ export const MESSAGE = {
   DraftFailedTest:
     "The new build did not pass its test on the draft page, so it was not made public. Players still get the previous version.",
   NoApps: "This game has no Mac, Windows or Linux app ready to publish.",
+  /** An online game's Mac app whose sandbox keeps it off the network: nothing was sent. */
+  MacAppOfflineRefusal: (app: string) =>
+    t(
+      "The Mac app {app} can't reach the internet: it is sandboxed without network access, so no player could connect. Package it again in Genex, then publish. Nothing was sent.",
+      { app },
+    ),
+  /** An online game's Mac app whose signature couldn't be read: it goes, with this said. */
+  MacAppUnreadWarning: (app: string) =>
+    t(
+      "Genex couldn't read whether the Mac app {app} may use the network. If players can't connect, package it again in Genex and publish.",
+      { app },
+    ),
   /** {@link MESSAGE.NoApps} as Publish's refusal. */
   NoAppsRefusal: () => t("This game has no Mac, Windows or Linux app ready to publish."),
+  /** The Publish card switched off something that is no app: only a Mac, Windows or Linux app can be taken off. */
+  NoAppPlatformRefusal: () => t("Only a Mac, Windows or Linux app can be taken off Genex this way."),
   ListingRefused: "Genex did not list the game in the gallery.",
+  /** A build on Genex asked for a game with no page there, which the app would go on. */
+  NotOnGenexRefusal: () => t("Publish the game first, then Genex can build it"),
+  /** A build on Genex asked through a CLI without `genex native build`. */
+  CloudBuildsUnavailableRefusal: () => t("This version of Genex can’t build apps on Genex yet"),
+  /** A build on Genex asked of a game on an Unreal its build computers don't have; `builds` names the ones they do. */
+  CloudEngineRefusal: (version: string, builds: string) =>
+    t("This game uses Unreal {version}. Genex builds Unreal {builds} games for now, so it can’t build this one yet.", {
+      version,
+      builds,
+    }),
+  /** {@link PUBLISH_MESSAGE.CloudEngineRefusal} for a project that names no version Genex knows. */
+  CloudNoEngineRefusal: (builds: string) =>
+    t(
+      "Genex builds Unreal {builds} games for now, and this project names no version of it. Open it in Unreal, save it, then build again.",
+      { builds },
+    ),
+  /** A build on Genex asked without the game's folder to stage its project from. */
+  NoGameFolderRefusal: () => t("Open the game to build its app on Genex"),
+  /** A taken-down game keeps its web version on Genex for the appeal. */
+  TakenDownRefusal: () => t("This game was taken down, so Genex keeps its web version for now."),
+  /** Genex stopped partway through taking the web version off; the same press finishes it. */
+  RemovalIncomplete: () => t("Genex couldn’t finish removing the web version. Press Remove again."),
+  /** Genex keeps a web version that is all the game's players have. */
+  OnlyWebRefusal: () =>
+    t("Genex keeps this web version: the game has no app on Genex yet, so players would have nothing to play."),
 } as const;
 
 /** Genex's own record of a hosted game, read by slug. `missing`: there is no hosted project. */
@@ -147,6 +200,9 @@ export function publishPhaseFor(meta: HostedMeta | null | undefined): GenexPubli
 export const checksDraftPage = (job: GenexPublishJob): boolean =>
   job.kind === GenexPublishKind.Draft || job.deployment !== undefined;
 
+/** The CLI's word that a web build may replace a page that shows only the game's apps. */
+const REPLACE_NATIVE_PAGE_FLAG = "--replace-native-page";
+
 /** The CLI command for each upload phase. Listing ships nothing: the promoted build is already live. */
 const CLI_ARGS_FOR_PHASE: Partial<Record<GenexPublishPhase, string[]>> = {
   [GenexPublishPhase.Uploading]: ["preview", "--no-build"],
@@ -154,12 +210,21 @@ const CLI_ARGS_FOR_PHASE: Partial<Record<GenexPublishPhase, string[]>> = {
   [GenexPublishPhase.Listing]: ["publish", "--no-push"],
 };
 
+/** The phases that can make a build the public one, so Genex asks whether it may replace a page of apps. */
+const GOES_PUBLIC: ReadonlySet<GenexPublishPhase> = new Set([GenexPublishPhase.Promoting, GenexPublishPhase.Listing]);
+
 /**
  * The CLI arguments that carry out an upload phase. Listing names the game. Its cover is a real
  * frame of the game with no name in it (`cover.ts`), so a new name never asks for a new picture.
+ * `replaceNativePage` (the person agreed this web build replaces a page that shows only the
+ * game's apps) goes with each phase that can make it public.
  */
-export function publishArgs(phase: GenexPublishPhase, listing: { title?: string } = {}): string[] {
+export function publishArgs(
+  phase: GenexPublishPhase,
+  listing: { title?: string; replaceNativePage?: boolean } = {},
+): string[] {
   const args = [...(CLI_ARGS_FOR_PHASE[phase] ?? [])];
+  if (listing.replaceNativePage && GOES_PUBLIC.has(phase)) args.push(REPLACE_NATIVE_PAGE_FLAG);
   if (phase !== GenexPublishPhase.Listing || !listing.title) return args;
   return [...args, "--title", listing.title];
 }

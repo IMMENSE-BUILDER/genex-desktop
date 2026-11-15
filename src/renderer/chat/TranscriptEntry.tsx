@@ -1,7 +1,7 @@
 /**
  * One entry of the transcript, drawn by its kind (`chat-entries.ts` decides what the entries are).
  */
-import { type JSX, memo, useCallback, useMemo } from "react";
+import { type JSX, lazy, memo, Suspense, useCallback, useMemo } from "react";
 import { t } from "../../shared/i18n.ts";
 import { track } from "../analytics/client.ts";
 import { AnalyticsEvent } from "../analytics/events.ts";
@@ -23,12 +23,14 @@ import { ChatDisclosure } from "./ChatDisclosure.tsx";
 import { CommandRun } from "./CommandRun.tsx";
 import { GenexCoverCard } from "./GenexCoverCard.tsx";
 import { ListingDraftCard } from "./ListingDraftCard.tsx";
+import { GenexReviewCard } from "./GenexReviewCard.tsx";
 import { ChatQuestion } from "./ChatQuestion.tsx";
 import { EngineLinkLine } from "./EngineLinkLine.tsx";
 import { RewindLine } from "./RewindLine.tsx";
 import { JobLine } from "./JobLine.tsx";
-import { WorkerLine } from "./WorkerLine.tsx";
+import { ToldLine, WorkerLine } from "./WorkerLine.tsx";
 import { AppAccessLine } from "./AppAccessLine.tsx";
+import { RaiseContextLine } from "./RaiseContextLine.tsx";
 import { WentAheadLine } from "./WentAheadLine.tsx";
 import { JudgeLine } from "./JudgeLine.tsx";
 import { PermissionOutcome } from "./PermissionRequest.tsx";
@@ -38,6 +40,9 @@ import { UserMessage } from "./UserMessage.tsx";
 import { MentionResults } from "./MentionResults.tsx";
 import type { MentionOutcome } from "../../shared/prompt-mention.ts";
 import { WorkLog } from "./WorkLog.tsx";
+
+/** The design board's block: loaded with the first one a chat shows, so a chat with none never carries it. */
+const DesignPageCard = lazy(() => import("./DesignPageCard.tsx").then((card) => ({ default: card.DesignPageCard })));
 
 /** A paused run while nothing else runs: its own card offers Resume. */
 const resumable = (runId: string | null | undefined, context: TranscriptContext): runId is string =>
@@ -79,6 +84,8 @@ export interface TranscriptContext {
   onRewind?: (entryId: string) => void;
   /** Where a command a reply offers runs: this chat's game. Absent in Studio, whose replies offer none. */
   commands?: { threadId: string; project: string };
+  /** Switch the chat to a model (its `engine::model` key), as a pick in the composer does. */
+  onUseModel?: (key: string) => void;
 }
 
 export const TranscriptEntry = memo(function TranscriptEntry({
@@ -175,7 +182,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   }
 });
 
-/** A card the host put in the conversation: the Genex cover, a plugin to turn on, a store item's Listing draft. */
+/** A card the host put in the conversation: the Genex cover, a plugin to turn on, a store item's Listing draft, a design page. */
 function CardEntry({ entry, context }: { entry: ConversationEntry; context: TranscriptContext }): JSX.Element | null {
   switch (entry.kind) {
     case EntryKind.GenexCover:
@@ -184,6 +191,14 @@ function CardEntry({ entry, context }: { entry: ConversationEntry; context: Tran
       return <PluginSuggestionCard entry={entry} onNotice={context.onNotice} onTurnedOn={context.onPluginTurnedOn} />;
     case EntryKind.ListingDraft:
       return <ListingDraftCard draft={entry.draft} />;
+    case EntryKind.GenexReview:
+      return <GenexReviewCard entry={entry} project={context.project} />;
+    case EntryKind.DesignPage:
+      return (
+        <Suspense fallback={<div className="build-card-place" />}>
+          <DesignPageCard entry={entry} />
+        </Suspense>
+      );
     default:
       return null;
   }
@@ -319,7 +334,8 @@ function ConsentOutcome({ entry }: { entry: Extract<Entry, { kind: typeof EntryK
 
 /**
  * The action entries that are one quiet line: an engine link, a rewind that put files back, a job,
- * a worker, a missing permission, an agent that went ahead of the person, a judge's play.
+ * a worker, what a worker was told, a missing permission, an agent that went ahead of the person, a judge's play,
+ * a model whose context is too small.
  */
 function quietLine(
   entry: Extract<Entry, { kind: typeof EntryKind.Action }>,
@@ -331,8 +347,11 @@ function quietLine(
     return <RewindLine entry={entry} threadId={context.threadId} onNotice={context.onNotice} />;
   if (entry.action === EntryAction.Job) return <JobLine entry={entry} onNotice={context.onNotice} />;
   if (entry.action === EntryAction.Worker) return <WorkerLine entry={entry} />;
+  if (entry.action === EntryAction.Told) return <ToldLine entry={entry} />;
   if (entry.action === EntryAction.AppAccess) return <AppAccessLine entry={entry} onNotice={context.onNotice} />;
   if (entry.action === EntryAction.WentAhead) return <WentAheadLine entry={entry} />;
+  if (entry.action === EntryAction.RaiseContext)
+    return <RaiseContextLine entry={entry} onUseModel={context.onUseModel} onNotice={context.onNotice} />;
   if (entry.action === EntryAction.Judge && entry.judge) return <JudgeLine judge={entry.judge} />;
   return null;
 }

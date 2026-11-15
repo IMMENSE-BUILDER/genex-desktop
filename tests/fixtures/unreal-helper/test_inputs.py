@@ -30,7 +30,7 @@ class Capture(HelperCase):
         unreal.state['player'] = unreal.Character('Hero_0', unreal.Vector())
         older = self.write(os.path.join(self.project, 'Saved', 'Genex', 'captures', 'yard-1.png'), 'old')
         result = self.call('capture_play', 'yard-1', 99999, 10)
-        self.assertEqual(result, {'queued': True, 'file': older})
+        self.assertEqual(result, {'queued': True, 'file': older, 'ui': False})
         self.assertFalse(os.path.exists(older), 'the older shot is removed before the new one is queued')
         self.assertEqual(self.shots_asked(), [f'HighResShot 3840x240 filename="{older}"'])
         self.assertNotIn('screenshot', [call[0] for call in unreal.calls],
@@ -123,6 +123,19 @@ class Exports(HelperCase):
                 self.assert_refused(self.call('export_reference', file, pins))
                 self.assertFalse(os.path.exists(file))
 
+    def test_an_unreal_without_epics_python_blueprint_tools_says_which_tools_write_blueprints_there(self) -> None:
+        from editor_toolset.toolsets import blueprint as epic
+        tools, cache = epic.BlueprintTools, epic._BlueprintCache
+        del epic.BlueprintTools, epic._BlueprintCache
+        try:
+            file = os.path.join(self.project, 'Saved', 'Genex', 'names', 'reference.json')
+            result = self.call('export_reference', file, '')
+            self.assert_refused(result)
+            self.assertIn('BlueprintDslToolset', result['error'])
+            self.assertFalse(os.path.exists(file))
+        finally:
+            epic.BlueprintTools, epic._BlueprintCache = tools, cache
+
     def test_writes_python_names_inside_saved_genex(self) -> None:
         file = os.path.join(self.project, 'Saved', 'Genex', 'names', 'python-names.json')
         result = self.call('export_python_names', file)
@@ -136,6 +149,21 @@ class Session(HelperCase):
         unreal.state['pie'] = True
         self.assertEqual(self.call('stop_play'), {'stopping': True, 'released': 0})
         self.assertEqual(unreal.calls, [('end_play',)])
+
+    def test_run_settings_read_and_set_background_throttle_for_this_run(self) -> None:
+        unreal.state['cvars']['r.RayTracing'] = 1
+        self.assertEqual(self.call('run_settings'), {'throttle': True, 'rayTracing': True})
+        self.assertEqual(self.call('set_background_throttle', False), {'throttle': False})
+        self.assertEqual(self.call('run_settings'), {'throttle': False, 'rayTracing': True})
+        unreal.state['cvars']['r.RayTracing'] = 0
+        self.assertEqual(self.call('set_background_throttle', True), {'throttle': True})
+        self.assertEqual(self.call('run_settings'), {'throttle': True, 'rayTracing': False})
+        self.assertEqual(unreal.calls, [], 'nothing saved, nothing else touched')
+
+    def test_run_settings_say_so_when_the_editor_keeps_no_such_setting(self) -> None:
+        unreal.state['performance_settings'] = None
+        self.assertEqual(self.call('run_settings'), {'throttle': None, 'rayTracing': False})
+        self.assertIn('error', self.call('set_background_throttle', False))
 
     def test_play_state_and_game_state_read_without_changing_anything(self) -> None:
         tagged = unreal.Actor('Lantern_0', unreal.Vector(300.4, -200, 50))
@@ -182,4 +210,4 @@ class Session(HelperCase):
     def test_play_state_reads_the_play_sessions_game_clock(self) -> None:
         unreal.state['pie'] = True
         unreal.state['game_seconds'], unreal.state['world_delta'] = 12.25, 0.125
-        self.assertEqual(self.call('play_state'), {'pie': True, 'world': 'PIE_Map', 'gameSeconds': 12.25, 'fps': 8.0})
+        self.assertEqual(self.call('play_state'), {'pie': True, 'world': 'Map', 'gameSeconds': 12.25, 'fps': 8.0})

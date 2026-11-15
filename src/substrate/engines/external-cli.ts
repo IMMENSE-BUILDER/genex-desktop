@@ -20,7 +20,7 @@ import { childEnv } from "../child-env.ts";
 import { atomicWriteText } from "../fsx.ts";
 import type { CodingProvider, CodingCliStatus } from "../../shared/coding-cli.ts";
 import { errorMessage } from "../../shared/errors.ts";
-import { CodingCliState } from "../../shared/coding-cli.ts";
+import { CodingCliState, CodingCliUnavailable } from "../../shared/coding-cli.ts";
 import { SECOND_MS } from "../../shared/duration.ts";
 import { EngineId } from "../../shared/providers.ts";
 import { OpenCodeDialect, OpenCodeVersionProblem, openCodeRelease } from "./opencode-cli.ts";
@@ -55,6 +55,7 @@ const CLI_BINARY = {
   [EngineId.Pi]: "pi",
   [EngineId.Grok]: "grok",
   [EngineId.Cursor]: "cursor-agent",
+  [EngineId.Antigravity]: "agy",
 } as const satisfies Record<CodingProvider, string>;
 /** Whose variables each CLI's own process keeps (`childEnv`'s vendor). */
 const CLI_VENDOR = {
@@ -64,6 +65,7 @@ const CLI_VENDOR = {
   [EngineId.Grok]: "grok",
   [EngineId.Cursor]: "cursor",
   [EngineId.Pi]: "pi",
+  [EngineId.Antigravity]: "antigravity",
 } as const satisfies Record<CodingProvider, string>;
 /** Where the user is sent to install each CLI. */
 const GUIDANCE_URL = {
@@ -73,6 +75,7 @@ const GUIDANCE_URL = {
   [EngineId.Pi]: "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
   [EngineId.Grok]: "https://docs.x.ai/build/overview",
   [EngineId.Cursor]: "https://cursor.com/docs/cli/installation",
+  [EngineId.Antigravity]: "https://antigravity.google/docs/cli",
 } as const satisfies Record<CodingProvider, string>;
 /** The help each CLI is asked for, and the options it must list: every one Studio passes. */
 const HELP_ARGS: Record<CodingProvider, string[]> = {
@@ -82,6 +85,8 @@ const HELP_ARGS: Record<CodingProvider, string[]> = {
   [EngineId.Pi]: ["--help"],
   [EngineId.Grok]: ["--help"],
   [EngineId.Cursor]: ["--help"],
+  // The ACP server's own help: the only command Genex starts.
+  [EngineId.Antigravity]: ["acp", "--help"],
 };
 const REQUIRED_FLAGS: Record<Exclude<CodingProvider, typeof EngineId.OpenCode>, string[]> = {
   [EngineId.Codex]: ["--json", "--output-schema", "--ignore-user-config", "--skip-git-repo-check"],
@@ -112,6 +117,7 @@ const REQUIRED_FLAGS: Record<Exclude<CodingProvider, typeof EngineId.OpenCode>, 
     "--cwd",
   ],
   [EngineId.Cursor]: ["--print", "--output-format", "--resume", "--model", "--force", "--trust", "--sandbox", "--mode"],
+  [EngineId.Antigravity]: ["--login"],
 };
 /**
  * `opencode run`'s options by the command line its version speaks: 1.18 lists every one (an older
@@ -901,6 +907,7 @@ export async function requireCodingCli(
   refresh = true,
 ): Promise<CliInstallation & { path: string }> {
   const result = await resolveCodingCli(provider, override, signal, refresh);
-  if (result.status.state !== CodingCliState.Ready || !result.status.path) throw new Error(result.status.detail);
+  if (result.status.state !== CodingCliState.Ready || !result.status.path)
+    throw new CodingCliUnavailable(result.status.state, result.status.detail);
   return { ...result, path: result.status.path };
 }

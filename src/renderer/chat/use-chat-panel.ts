@@ -18,7 +18,8 @@ import { useComposeInChat } from "./use-compose-in-chat.ts";
 import { type LaunchHandover, useLaunchHandover } from "./use-launch-handover.ts";
 import { useEngines } from "../state/hooks.ts";
 import { useKeepBuilding } from "./use-keep-building.ts";
-import { type Report, type Send, useReport, useSubmit } from "./use-submit.ts";
+import { useRunTheGame } from "./use-run-the-game.ts";
+import { type Report, type Send, type SendAnswered, useReport, useSubmit } from "./use-submit.ts";
 
 /** Whether a reply is being written on screen, as the streaming reply reports it. */
 export interface StreamShowing {
@@ -34,6 +35,8 @@ export interface ChatParts {
   work: ChatWorkView;
   follow: FollowScroll;
   submit: Send;
+  /** The same send, answering whether the message went to the chat: a pressed answer's card comes back when it did not. */
+  sendAnswered: SendAnswered;
   /** Send words the chat wrote itself, unseen in the transcript (a command's result, a plugin turned on). */
   report: Report;
   focusComposer: () => void;
@@ -68,7 +71,8 @@ export function useChatPanel(props: ChatPanelProps) {
   const submit: Send = async (text, extras, preserveDraft, source) => {
     await sendAnswered(text, extras, preserveDraft, source);
   };
-  useKeepBuilding(chat.threadId, sendAnswered, props.onNotice, composerRef);
+  useKeepBuilding(chat.threadId, sendAnswered, props.onNotice);
+  useRunTheGame(chat.project, sendAnswered, props.onNotice);
   useComposeInChat(chat.threadId, chat.project, composer.drafts, composerRef, sendAnswered);
   const report = useReport(props, chat, composer, work);
   const enginesRead = useEngines((s) => s.list.length > 0);
@@ -99,6 +103,7 @@ export function useChatPanel(props: ChatPanelProps) {
     work,
     follow,
     submit,
+    sendAnswered,
     report,
     focusComposer,
     reply,

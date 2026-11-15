@@ -86,9 +86,13 @@ type Script = (
   call: (name: string, args: Record<string, unknown>) => Promise<string>,
 ) => Promise<void>;
 
-/** The fake delegated engine: the chat starts the Loop, the reviewer says yes, the rest follows `scripts`. */
+/**
+ * The fake delegated engine: the chat starts the Loop, the reviewer says yes, the rest follows
+ * `scripts`. `leadsAnswered` settles once every lead turn so far has returned, its tools' answers in.
+ */
 function loopEngine(rig: Rig, scripts: { lead: Script[]; worker: Script }) {
   const requests: Array<{ seat: Seat; request: DelegateRequest }> = [];
+  const leadTurnsRun: Promise<unknown>[] = [];
   let leadTurns = 0;
   let chatTurns = 0;
   rig.core.engines.register({
@@ -113,7 +117,11 @@ function loopEngine(rig: Rig, scripts: { lead: Script[]; worker: Script }) {
         if (!onLiveTool) throw new Error(`no live tools on this ${seat} turn`);
         return text(await onLiveTool(name, args));
       };
-      if (seat === Seat.Lead) await scripts.lead[leadTurns++]?.(request, call);
+      if (seat === Seat.Lead) {
+        const turn = Promise.resolve(scripts.lead[leadTurns++]?.(request, call));
+        leadTurnsRun.push(turn.catch(() => {}));
+        await turn;
+      }
       if (seat === Seat.Chat) chatTurns++;
       if (seat === Seat.Worker) await scripts.worker(request, call);
       const sessionId = request.resume ?? (seat === Seat.Worker ? `worker-${requests.length}` : "chat-session");
@@ -131,7 +139,11 @@ function loopEngine(rig: Rig, scripts: { lead: Script[]; worker: Script }) {
       };
     },
   } as never);
-  return { requests, seat: (seat: Seat) => requests.filter((r) => r.seat === seat).map((r) => r.request) };
+  return {
+    requests,
+    seat: (seat: Seat) => requests.filter((r) => r.seat === seat).map((r) => r.request),
+    leadsAnswered: () => Promise.all(leadTurnsRun),
+  };
 }
 
 /** A rig whose game is a copy of one project fixture, opened as the person opens a folder, with its chat. */
@@ -153,15 +165,15 @@ async function openedProject(project: Project, plugin?: string) {
   return { rig, game, threadId };
 }
 
-/** Send the message with Loop on and no hours (∞), and wait for the Loop's close. */
-async function loopUntilClosed(rig: Rig, threadId: string) {
-  await rig.core.sendUserMessage("make a garden with a pond", { thread: threadId, engine: ENGINE, autopilot: {} });
-  const events = await waitForLog(
-    rig.core,
-    (log) => customEvents(log, "run_finished").length >= 1,
-    CLOSE_WAIT_MS,
-    "the Loop's close",
-  );
+/**
+ * Send the message the chat starts a Loop for, and wait for the Loop's close and for every lead turn
+ * to have returned: a finish's close is written inside its call, before the call answers the lead.
+ */
+async function loopUntilClosed(rig: Rig, threadId: string, engine: { leadsAnswered: () => Promise<unknown> }) {
+  await rig.core.sendUserMessage("make a garden with a pond", { thread: threadId, engine: ENGINE });
+  await waitForLog(rig.core, (log) => customEvents(log, "run_finished").length >= 1, CLOSE_WAIT_MS, "the Loop's close");
+  await engine.leadsAnswered();
+  const events = await rig.core.listAllEvents();
   return { events, finished: customEvents(events, "run_finished") };
 }
 
@@ -276,7 +288,7 @@ async function toyLoop(plugin: { dir: string; id: string; rename: (tool: string)
   const calls = recordPluginCalls(rig);
   const answers: Record<string, string> = {};
   const engine = loopEngine(rig, { lead: toyLead(answers), worker: pondWorker });
-  const { events, finished } = await loopUntilClosed(rig, threadId);
+  const { events, finished } = await loopUntilClosed(rig, threadId, engine);
   assert.equal(finished.length, 1, "the Loop closed once");
   assert.equal(finished[0]?.victory, true, `${String(finished[0]?.stoppedBecause)} ${JSON.stringify(answers)}`);
   const name = plugin.rename;
@@ -376,7 +388,7 @@ describe("a Loop on a project with no plugin, through the real studio", () => {
       ],
       worker: async () => {},
     });
-    const { events, finished } = await loopUntilClosed(rig, threadId);
+    const { events, finished } = await loopUntilClosed(rig, threadId, engine);
     assert.equal(finished.length, 1);
     assert.equal(finished[0]?.victory, true, `${String(finished[0]?.stoppedBecause)} ${JSON.stringify(answers)}`);
     assert.deepEqual(
@@ -401,5 +413,32 @@ describe("a Loop on a project with no plugin, through the real studio", () => {
     assert.match(answers.saved ?? "", /Door/);
     assert.ok(customEvents(events, "finish_check").some((check) => check.step === "accepted"));
     assert.match(answers.finish ?? "", /Accepted/);
+  });
+});
+
+describe("a web game's Loop, through the real studio", () => {
+  it("a save point whose lead named no picture keeps Genex's own picture of the page, a file in the run's folder the Builds cards read", {
+    timeout: RIG_TIMEOUT_MS,
+  }, async () => {
+    const { rig, threadId } = await openedProject(Project.WebFolder);
+    const answers: Record<string, string> = {};
+    const engine = loopEngine(rig, {
+      lead: [
+        async (request, call) => {
+          await writeFile(path.join(String(request.director?.root), "corridor.js"), "// the corridor\n");
+          answers.saved = await call("save_point", { label: "Corridor", summary: "the corridor is playable" });
+          answers.finish = await call("finish", { summary: "The corridor is in.", proof: "corridor.js" });
+        },
+      ],
+      worker: async () => {},
+    });
+    const { events, finished } = await loopUntilClosed(rig, threadId, engine);
+    assert.equal(finished.length, 1, JSON.stringify(answers));
+    const [saved] = customEvents(events, "facet_iteration");
+    const shots = (saved?.shots ?? []) as Array<{ camera: string; path: string }>;
+    assert.equal(shots.length, 1, JSON.stringify(saved));
+    assert.equal(shots[0]?.camera, "default");
+    const still = await rig.core.readRunStill(String(shots[0]?.path));
+    assert.equal(still?.mimeType, "image/jpeg", "the card reads the picture through the run folder's gate");
   });
 });

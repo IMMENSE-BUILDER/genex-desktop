@@ -28,7 +28,7 @@ import { pressStageView, stageCurrent, stageOffers } from "./stage-views.ts";
 import { sleep, waitFor as waitUntil } from "./wait.ts";
 import { errorMessage } from "../../shared/errors.ts";
 import { expectedStatusFlag, flagValue, hasFlag, StudioFlag } from "../dev/launch-flags.ts";
-import { RunControlAction } from "../../shared/coordinator.ts";
+import { RunControlAction } from "../../shared/chat-run.ts";
 import { CustomEvent } from "../../shared/custom-events.ts";
 import { EventKind, SnapshotScope } from "../../shared/event-log.ts";
 import { EngineId } from "../../shared/providers.ts";
@@ -36,7 +36,7 @@ import { HostMethod } from "../../shared/harness-api.ts";
 import { EngineKind, EngineStatusCode } from "../../shared/engine-descriptor.ts";
 import { ReasoningEffort } from "../../shared/model-preferences.ts";
 import { PluginSourceKind } from "../../shared/plugins.ts";
-import { MINUTE_MS, SECOND_MS } from "../../shared/duration.ts";
+import { SECOND_MS } from "../../shared/duration.ts";
 import { CredentialState } from "../../substrate/session-credentials.ts";
 import { StudioPlatform } from "../../shared/boot.ts";
 import { recommendModels, type HardwareInfo } from "../../substrate/hardware.ts";
@@ -147,7 +147,7 @@ interface Smoke {
 /** Why the smoke cannot go on: a hook or value its fixtures promised is missing. */
 const MESSAGE = {
   missing: (what: string) => `smoke setup is missing ${what}`,
-  coordinatorExpected: "Smoke expected a coordinator; a worker must not launch",
+  chatTurnExpected: "Smoke expected the chat's own turn; a worker must not launch",
 } as const;
 
 /** A value the smoke cannot go on without; a named smoke failure when it is missing. */
@@ -490,7 +490,7 @@ async function runBuildSmoke(smoke: Smoke): Promise<void> {
   await checkScaffoldHealth(buildSmoke);
   const asset = await deliverFixtureAsset(buildSmoke);
   await checkAssetsView(buildSmoke, asset.delivered);
-  const captureDir = await checkStartNodes(buildSmoke);
+  const captureDir = await checkFirstParts(buildSmoke);
   await checkPluginJobInGraph(buildSmoke, asset.assetJobId);
   await checkComposerDuringBuild(buildSmoke);
   await checkStopAndKeepAwake(buildSmoke, await checkInterruptControls(buildSmoke));
@@ -503,7 +503,6 @@ async function runBuildSmoke(smoke: Smoke): Promise<void> {
   await finishOutcomeRun(buildSmoke, await seedOutcomeRun(buildSmoke), captureDir);
   await checkOutcomePanel(buildSmoke);
   await checkPartRows(buildSmoke);
-  await checkChecksAndCapture(buildSmoke);
   await checkActivityAndMcp(buildSmoke);
   await captureBuildShot(buildSmoke);
   await checkSharedDesign(buildSmoke);
@@ -528,8 +527,6 @@ async function checkCredentialedPlugins(buildSmoke: BuildSmoke): Promise<void> {
 }
 
 /** The build smoke's fixture game, its thread and run, and the helpers every scenario uses. */
-/** The time the follow smoke's run was given: its status reads "… of 30 min". */
-const FOLLOW_RUN_WALL_CLOCK_MS = 30 * MINUTE_MS;
 /** How long a follow shot waits for the restored window to paint. */
 const FOLLOW_SHOT_SETTLE_MS = 700;
 /** Longer than Live's old automatic swap took (five seconds): long enough to see that nothing swaps now. */
@@ -585,14 +582,14 @@ interface OutcomeRun {
   outcomeEvent: (type: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
-/** The fixture game and its thread, the scripted coordinator, and the window pointed at them. */
+/** The fixture game and its thread, the scripted chat session, and the window pointed at them. */
 async function startBuildSmoke(smoke: Smoke): Promise<BuildSmoke> {
   const { wc } = smoke;
   const { core } = smoke.ctx;
   const project = await core.games.scaffold("build-preview-smoke", { title: "Build preview smoke" });
   const threadId = await core.threadForGame(project.name);
   const runId = "run_preview_smoke";
-  // Script only the coordinator in this isolated smoke app; never call a paid model.
+  // Script only the chat's own turn in this isolated smoke app; never call a paid model.
   core.engines.register({
     id: EngineId.Codex,
     label: "Codex",
@@ -617,14 +614,13 @@ async function startBuildSmoke(smoke: Smoke): Promise<BuildSmoke> {
       usage: {},
     }),
     delegate: async (request) => {
-      if (!request.coordinator) throw new Error(MESSAGE.coordinatorExpected);
-      await required(request.onLiveTool, "a live tool bridge")("run_status", {});
+      if (request.director || request.worker) throw new Error(MESSAGE.chatTurnExpected);
       return {
         ok: true,
         engine: EngineId.Codex,
         turns: 1,
         usage: {},
-        sessionId: "smoke-coordinator",
+        sessionId: "smoke-chat",
         summary: "The existing river and cottages builds are still visible. No new build was started.",
       };
     },
@@ -739,6 +735,8 @@ async function checkModelRoles(buildSmoke: BuildSmoke): Promise<void> {
     ramBytes: 32 * 1024 ** 3,
     ramGb: 32,
     usableModelGb: 23,
+    gpus: [],
+    gpuModelGb: 0,
     platform: StudioPlatform.Mac,
     arch: "arm64",
     appleSilicon: true,
@@ -1453,8 +1451,8 @@ async function checkAssetsView(buildSmoke: BuildSmoke, delivered: string[]): Pro
   }
 }
 
-/** The start, the parallel nodes and the base failure appear before any verdict. */
-async function checkStartNodes(buildSmoke: BuildSmoke): Promise<string> {
+/** The parallel parts' rows and the base failure appear before any verdict. */
+async function checkFirstParts(buildSmoke: BuildSmoke): Promise<string> {
   const { wc, check, runId, append, waitFor } = buildSmoke;
   const { core, pushUiEvent } = buildSmoke.ctx;
   // The stage goes back to the game before the Builds checks below, which start from Live.
@@ -1469,18 +1467,6 @@ async function checkStartNodes(buildSmoke: BuildSmoke): Promise<string> {
     await waitFor(
       `document.querySelector('[data-testid="build-status"]')?.textContent.includes('building the starting point')`,
     ),
-  );
-  await wc.executeJavaScript(`document.querySelector('[data-graph-node="start"]')?.click()`);
-  check(
-    "the start opens before the base has any screenshots",
-    await waitFor(`!!document.querySelector('[data-graph-panel="start"] [data-testid="build-capture"]')`),
-  );
-  await wc.executeJavaScript(
-    `document.querySelector('[data-graph-panel="start"] [data-panel-row="technical-details"]')?.click()`,
-  );
-  check(
-    "the start names the cross-provider builder",
-    await waitFor(`document.querySelector('[data-graph-panel="start"]')?.textContent.includes('Claude Code · sonnet')`),
   );
   await append(CustomEvent.AutopilotBase, { ok: false, error: "Camera views were identical" });
   await append(CustomEvent.DirectorWorker, { workerId: "river", title: "River and bridge", state: "running" });
@@ -1503,7 +1489,7 @@ async function checkStartNodes(buildSmoke: BuildSmoke): Promise<string> {
   check(
     "parallel nodes and base failure appear before any verdict",
     await waitFor(
-      `(()=>{const t=document.querySelector('[data-testid="build-status"]')?.textContent??'';return t.includes('2 parts working')&&t.includes('the starting point failed')&&document.querySelector('[data-graph-node="start"]')?.textContent.includes('Start failed')&&document.querySelector('[data-graph-panel="start"]')?.textContent.includes('Camera views were identical');})()`,
+      `(()=>{const t=document.querySelector('[data-testid="build-status"]')?.textContent??'';return t.includes('2 parts working')&&t.includes('the starting point failed')&&!!document.querySelector('[data-graph-node="step:river:1"][data-working]')&&!!document.querySelector('[data-graph-node="step:cottages:1"][data-working]');})()`,
     ),
   );
   check(
@@ -1553,7 +1539,7 @@ async function checkPluginJobInGraph(buildSmoke: BuildSmoke, assetJobId: string)
   check(
     "a plugin's asset job appears in the graph under the part that asked for it",
     await waitFor(
-      `(() => { const node = document.querySelector('[data-graph-node="assets"]'); if (!node || !node.textContent.includes('Making 1')) return false; node.click(); const panel = document.querySelector('[data-graph-panel="assets"]')?.textContent || ""; return panel.includes('Genex plugin') && panel.includes('Part 1') && panel.includes('Making'); })()`,
+      `(() => { const panel = document.querySelector('[data-graph-panel="assets"]')?.textContent; if (panel !== undefined) return panel.includes('Genex plugin') && panel.includes('Part 1') && panel.includes('Making'); const row = document.querySelector('[data-graph-node="assets"]'); if (row?.textContent.includes('Making 1')) row.click(); return false; })()`,
     ),
   );
   pushUiEvent({
@@ -1576,12 +1562,6 @@ async function checkPluginJobInGraph(buildSmoke: BuildSmoke, assetJobId: string)
 async function checkComposerDuringBuild(buildSmoke: BuildSmoke): Promise<void> {
   const { wc, check, threadId, waitFor } = buildSmoke;
   const { core } = buildSmoke.ctx;
-  check(
-    "a running build's Mode is disabled and dimmed like the composer's disabled icons",
-    await waitFor(
-      `(() => { const mode = document.querySelector('[data-promptbar] button[aria-label="Mode"]'); return mode?.disabled === true && getComputedStyle(mode).opacity === '0.45'; })()`,
-    ),
-  );
   await wc.executeJavaScript(
     `(() => { const input = document.querySelector('textarea[aria-label="Prompt"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Is the river ready?'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`,
   );
@@ -1593,7 +1573,7 @@ async function checkComposerDuringBuild(buildSmoke: BuildSmoke): Promise<void> {
   );
   await wc.executeJavaScript(`document.querySelector('button[aria-label="Send"]').click()`);
   check(
-    "coordinator answers while the existing build graph remains visible",
+    "the chat answers while the existing build graph remains visible",
     await waitFor(
       `document.body.innerText.includes('No new build was started.') && !!document.querySelector('[data-graph-node="step:river:1"] img') && document.querySelector('[data-testid="build-status"]')?.textContent.includes('2 parts working')`,
     ),
@@ -1641,7 +1621,7 @@ async function checkInterruptControls(buildSmoke: BuildSmoke): Promise<Interrupt
       stopDispatches.length === 0
     );
   });
-  // The coordinator's finish tool remains separate from interruption.
+  // Wrap up remains separate from interruption.
   await checkAsync("Wrap up asks the run to finish instead of stopping it", async () => {
     await wc.executeJavaScript(`window.studio.finishRun(${JSON.stringify(runId)}, ${JSON.stringify(threadId)})`);
     const log = await core.store.listEvents(threadId);
@@ -1777,16 +1757,6 @@ async function checkFinishedRun(buildSmoke: BuildSmoke): Promise<void> {
       `document.querySelector('[data-graph-panel="final"]')?.textContent.includes('the reviewer preferred it to the one you had')`,
     ),
   );
-  await waitFor(`document.querySelector('button[aria-label="Mode"]')?.disabled === false`);
-  await wc.executeJavaScript(`document.querySelector('button[aria-label="Mode"]')?.click()`);
-  check(
-    "a finished chat's Mode opens on its own Loop, with no new-build choice",
-    await waitFor(
-      `!!document.querySelector('[aria-label="Mode options"] [aria-label="Loop time limit"]') && !/new build/i.test(document.querySelector('[aria-label="Mode options"]')?.textContent ?? 'new build') && getComputedStyle(document.querySelector('button[aria-label="Mode"]')).opacity === '1'`,
-    ),
-  );
-  wc.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
-  wc.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
 }
 
 /** The morning card, and the earlier build opened from its chat card. */
@@ -1847,7 +1817,7 @@ async function checkConcurrentPlay(buildSmoke: BuildSmoke): Promise<void> {
   check("repeated Play reopens the existing scratch location safely", replayResult === true, String(replayResult));
 }
 
-/** Parallel rounds stay in view; moving the canvas offers Jump to now. */
+/** Parallel rounds are listed as working; a row opens its card in place and Escape closes it. */
 async function checkFollowRounds(buildSmoke: BuildSmoke): Promise<FollowRun> {
   const { wc, check, project, append, waitFor } = buildSmoke;
   const { pushUiEvent } = buildSmoke.ctx;
@@ -1858,7 +1828,7 @@ async function checkFollowRounds(buildSmoke: BuildSmoke): Promise<FollowRun> {
   await followEvent(CustomEvent.RunStarted, {
     goal: "Follow active rounds",
     mode: "director",
-    budgets: { wallClockMs: FOLLOW_RUN_WALL_CLOCK_MS },
+    budgets: {},
   });
   await followEvent(CustomEvent.AutopilotStarted, { director: true, maxParallel: 2, facets: [] });
   for (const id of ["water", "fish"]) {
@@ -1868,63 +1838,51 @@ async function checkFollowRounds(buildSmoke: BuildSmoke): Promise<FollowRun> {
   await followEvent(CustomEvent.FacetBuildStarted, { facetId: "water", facetTitle: "water", iteration: 2 });
   pushUiEvent({ type: UiEvent.AutopilotFacet, payload: { runId: followRun } });
   await waitFor(`(()=>{${openBuildScript(followRun)};return ${selectedRunIs(followRun)};})()`);
-  // A live run keeps its work in view until the user moves the canvas; then "Jump to now" brings it back.
-  const inView = (id: string) =>
-    `(()=>{const n=document.querySelector('[data-graph-node="${id}"]')?.getBoundingClientRect(),v=document.querySelector('[data-zoom]')?.getBoundingClientRect();return !!n&&!!v&&n.width>0&&n.left>=v.left&&n.right<=v.right&&n.top>=v.top&&n.bottom<=v.bottom;})()`;
+  // A live run lists its work at the top, each part's newest step a working row; a press opens its card in place.
+  const working = (id: string) =>
+    `!!document.querySelector('[data-builds-list] [data-graph-node="${id}"][data-working]')`;
   check(
-    "live work is in view without opening anything",
-    await waitFor(
-      `${inView("step:water:2")}&&!document.querySelector('[data-graph-panel]')&&!Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Jump to now')`,
-    ),
+    "live work is listed as working without opening anything",
+    await waitFor(`${working("step:water:2")}&&!document.querySelector('[data-graph-panel]')`),
   );
   await followEvent(CustomEvent.FacetBuildStarted, { facetId: "fish", facetTitle: "fish", iteration: 2 });
   pushUiEvent({ type: UiEvent.AutopilotFacet, payload: { runId: followRun } });
   check(
-    "a parallel part's new work stays in view too",
-    await waitFor(`${inView("step:fish:2")}&&${inView("step:water:2")}`),
+    "a parallel part's new work is listed as working too",
+    await waitFor(`${working("step:fish:2")}&&${working("step:water:2")}`),
   );
-  // The zoom pill names the canvas's zoom; opening a node keeps it.
-  const zoomLabel = `document.querySelector('[aria-label^="Zoom "][aria-label$="%"]')?.getAttribute('aria-label')`;
-  const zoomBefore = await wc.executeJavaScript(zoomLabel);
   await wc.executeJavaScript(`document.querySelector('[data-graph-node="step:water:1"]')?.click()`);
-  check(
-    "selecting a node opens its card in place without zooming the canvas",
-    await waitFor(
-      `!!document.querySelector('[data-graph-panel="step:water:1"]')&&${inView("step:water:1")}&&${zoomLabel}===${JSON.stringify(zoomBefore)}`,
-    ),
-  );
-  await wc.executeJavaScript(
-    `document.querySelector('[data-zoom]')?.dispatchEvent(new WheelEvent('wheel',{deltaY:400,bubbles:true,cancelable:true}))`,
-  );
-  check(
-    "moving the canvas closes the card where it is and offers Jump to now",
-    await waitFor(
-      `!document.querySelector('[data-graph-panel]')&&Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Jump to now')`,
-    ),
-  );
+  const waterCard = `!!document.querySelector('[data-builds-list] [data-graph-node="step:water:1"][aria-expanded="true"] + [data-graph-panel="step:water:1"]')`;
+  check("selecting a row opens its card in place, under the row's own header", await waitFor(waterCard));
   await followEvent(CustomEvent.FacetBuildStarted, { facetId: "water", facetTitle: "water", iteration: 3 });
   pushUiEvent({ type: UiEvent.AutopilotFacet, payload: { runId: followRun } });
-  await wc.executeJavaScript(
-    `Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Jump to now')?.click()`,
-  );
   check(
-    "Jump to now brings the newest work back into view",
+    "new work joins the list while the open card stays where it is",
+    await waitFor(`${working("step:water:3")}&&${waterCard}`),
+  );
+  // From the page itself, not from the composer, which keeps Escape for its own text.
+  wc.focus();
+  await wc.executeJavaScript(`document.activeElement?.blur();true`);
+  wc.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+  wc.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+  check(
+    "Escape closes the open card back into its row",
     await waitFor(
-      `${inView("step:water:3")}&&!Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Jump to now')`,
+      `!document.querySelector('[data-graph-panel]')&&!!document.querySelector('[data-graph-node="step:water:1"][aria-expanded="false"]')`,
     ),
   );
   return { followRun, followEvent };
 }
 
-/** The build's time against its budget, and the lead's node while every part waits for it. */
+/** The build's worked time, with no limit beside it, and the lead's node while every part waits for it. */
 async function checkRunTimeAndLead(buildSmoke: BuildSmoke, { followRun, followEvent }: FollowRun): Promise<void> {
   const { check, waitFor } = buildSmoke;
   const { pushUiEvent } = buildSmoke.ctx;
   await followShot(buildSmoke, "follow-working");
   check(
-    "the build's time is told against the time it was given on the stage, and as its cap in the chat",
+    "the build's time is told as the time it worked on the stage, with no limit there or in the chat",
     await waitFor(
-      `document.querySelector('[data-testid="build-status"]')?.textContent.includes(' of 30 min')&&!!document.querySelector('[data-build-status]')?.textContent.includes('up to 30m')&&!document.querySelector('[data-build-activity],[data-worker-state]')`,
+      `!!document.querySelector('[data-testid="build-status"]')?.textContent.includes(' min')&&!document.querySelector('[data-testid="build-status"]')?.textContent.includes(' of ')&&!!document.querySelector('[data-build-status]')&&!document.querySelector('[data-build-status]')?.textContent.includes('up to')&&!document.querySelector('[data-build-activity],[data-worker-state]')`,
     ),
   );
   // Every part judged and done, nothing merged yet: the lead has the run, and the graph says so.
@@ -1997,7 +1955,7 @@ async function checkLiveRevisions(buildSmoke: BuildSmoke, { followRun, followEve
   check(
     "a build just merged is being checked, not ready to play, until it has run",
     await waitFor(
-      `document.querySelector('[data-graph-node="final"]')?.textContent.includes('Checking it starts')&&!document.querySelector('[data-graph-node="lead"]')&&document.querySelector('[data-testid="build-status"]')?.textContent.includes('checking the new build starts')`,
+      `!document.querySelector('[data-graph-node="final"]')&&!document.querySelector('[data-graph-node="lead"]')&&document.querySelector('[data-testid="build-status"]')?.textContent.includes('checking the new build starts')`,
     ),
   );
   await followShot(buildSmoke, "follow-checking");
@@ -2231,20 +2189,17 @@ async function checkOutcomePanel(buildSmoke: BuildSmoke): Promise<void> {
   await waitFor(`!!document.querySelector('[data-graph-node="final"]')`);
   await wc.executeJavaScript(`document.querySelector('[data-graph-node="final"]')?.click()`);
   await waitFor(`!!document.querySelector('[data-graph-panel="final"]')`);
-  await wc.executeJavaScript(
-    `document.querySelector('[data-graph-panel="final"] [data-panel-row="technical-details"]')?.click()`,
-  );
   check(
     "chat outcome hides technical details by default",
     await waitFor(
       `!!document.querySelector('[data-chat-outcome]')&&!document.querySelector('[data-chat-outcome-details]')`,
     ),
   );
-  // Counts belong to Builds, not to the chat's card (it names the delivery and its capture).
+  // The build's card is for the person: no counts, revisions or check lists (they live in the run's files).
   check(
-    "the build's technical details carry the recorded integration and evaluated-attempt counts",
+    "the build's card carries no developer details",
     await waitFor(
-      `(()=>{const t=document.querySelector('[data-graph-panel="final"] [data-testid="build-details"]')?.textContent??'';return t.includes('6 recorded integrations')&&t.includes('4 evaluated attempts (3 accepted, 1 rejected)')&&!document.querySelector('[data-chat-outcome]')?.textContent.includes('recorded integrations');})()`,
+      `(()=>{const p=document.querySelector('[data-graph-panel="final"]');return !!p&&!p.querySelector('[data-panel-row]')&&!p.textContent.includes('recorded integrations');})()`,
     ),
     String(
       await wc.executeJavaScript(
@@ -2253,94 +2208,56 @@ async function checkOutcomePanel(buildSmoke: BuildSmoke): Promise<void> {
     ),
   );
   check(
+    "the build's card still names the check that failed on it",
+    await waitFor(
+      `document.querySelector('[data-graph-panel="final"]')?.textContent.includes('Is the requested first-person view confirmed?')`,
+    ),
+  );
+  check(
     "delivery keeps its failed check in the status line",
     await waitFor(
       `(()=>{const t=document.querySelector('[data-testid="build-status"]')?.textContent??'';return t.includes('Live in your game')&&t.includes('1 check failed');})()`,
     ),
   );
-  // The recorded checks sit under the technical details opened above.
+  // The step the build kept is listed under what changed; the stopped follow-up waits under the left-out row.
+  await wc.executeJavaScript(`document.querySelector('[data-builds-left-out][aria-expanded="false"]')?.click()`);
   check(
-    "delivery retains failed visual and incomplete interaction evidence",
+    "the lead's stopped follow-up is listed under the steps left out of the build",
     await waitFor(
-      `(()=>{const t=document.querySelector('[data-graph-panel="final"]')?.textContent??'';return t.includes('A visual question failed.')&&t.includes('Independent interaction coverage is incomplete');})()`,
-    ),
-  );
-  check(
-    "the lead's stopped follow-up hangs below the line it followed",
-    await waitFor(
-      `(()=>{const a=document.querySelector('[data-graph-node="step:task-1:1"]')?.getBoundingClientRect(),b=document.querySelector('[data-graph-node="step:task-1:2"]')?.getBoundingClientRect();return !!a&&!!b&&b.top>a.bottom&&!!document.querySelector('[data-graph-row="task-1"]');})()`,
+      `(()=>{const toggle=document.querySelector('[data-builds-left-out]'),kept=document.querySelector('[data-graph-node="step:task-1:1"]'),stopped=document.querySelector('[data-graph-node="step:task-1:2"]');return toggle?.getAttribute('aria-expanded')==='true'&&!!kept&&!!stopped&&!!(kept.compareDocumentPosition(toggle)&Node.DOCUMENT_POSITION_FOLLOWING)&&!!(toggle.compareDocumentPosition(stopped)&Node.DOCUMENT_POSITION_FOLLOWING);})()`,
     ),
   );
 }
 
-/** A replaced worker stays one part; parts open from the keyboard. */
+/** A replaced worker stays one part; a row opens from the keyboard. */
 async function checkPartRows(buildSmoke: BuildSmoke): Promise<void> {
   const { wc, check, waitFor } = buildSmoke;
-  // A part built in one session is its one node (no label over it); one built in steps has its label.
-  await wc.executeJavaScript(
-    `(document.querySelector('[data-graph-row="task-5"]')??document.querySelector('[data-graph-node="session:task-5"]'))?.click()`,
-  );
-  await waitFor(`!!document.querySelector('[data-graph-panel="part:task-5"],[data-graph-panel="session:task-5"]')`);
-  await wc.executeJavaScript(
-    `document.querySelector(':is([data-graph-panel="part:task-5"],[data-graph-panel="session:task-5"]) [data-panel-row="technical-details"]')?.click()`,
-  );
+  // A part built in one session is one row, its session step.
+  await wc.executeJavaScript(`document.querySelector('[data-graph-node="session:task-5"]')?.click()`);
+  await waitFor(`!!document.querySelector('[data-graph-panel="session:task-5"]')`);
   check(
-    "a replaced single worker stays one part with its replacement named",
+    "a replaced single worker stays one part",
     await waitFor(
-      `document.querySelector('[data-graph-panel="part:task-5"],[data-graph-panel="session:task-5"]')?.textContent.includes('task-5 → task-6')&&!document.querySelector('[data-graph-row="task-6"],[data-graph-node="session:task-6"]')`,
+      `!!document.querySelector('[data-graph-panel="session:task-5"]')&&!document.querySelector('[data-graph-node="session:task-6"],[data-graph-panel="session:task-6"]')`,
     ),
   );
   wc.focus();
-  await wc.executeJavaScript(`document.querySelector('[data-graph-row="task-1"]')?.focus()`);
+  await wc.executeJavaScript(`document.querySelector('[data-graph-node="step:task-1:1"]')?.focus()`);
   check(
-    "a part's label accepts keyboard focus",
-    await waitFor(`document.activeElement===document.querySelector('[data-graph-row="task-1"]')`),
+    "a step's row accepts keyboard focus",
+    await waitFor(`document.activeElement===document.querySelector('[data-graph-node="step:task-1:1"]')`),
   );
   wc.sendInputEvent({ type: "keyDown", keyCode: "Return" });
   wc.sendInputEvent({ type: "char", keyCode: "\r" });
   wc.sendInputEvent({ type: "keyUp", keyCode: "Return" });
   check(
-    "a part opens from the keyboard",
-    await waitFor(`!!document.querySelector('[data-graph-panel="part:task-1"]')`),
+    "a step opens from the keyboard",
+    await waitFor(`!!document.querySelector('[data-graph-panel="step:task-1:1"]')`),
   );
   check(
     "graph controls have the pointer cursor",
     await waitFor(
-      `[...document.querySelectorAll('[data-testid="build-status"] button,[data-graph-node],[data-graph-row],[data-graph-gate]')].every(b=>getComputedStyle(b).cursor==='pointer')&&document.querySelectorAll('[data-graph-gate]').length>0`,
-    ),
-  );
-}
-
-/** Checks name the failed question, and its capture loads through the host. */
-async function checkChecksAndCapture(buildSmoke: BuildSmoke): Promise<void> {
-  const { wc, check, waitFor } = buildSmoke;
-  await wc.executeJavaScript(`document.querySelector('[data-graph-node="final"]')?.click()`);
-  await waitFor(`!!document.querySelector('[data-graph-panel="final"]')`);
-  await wc.executeJavaScript(
-    `document.querySelectorAll('[data-graph-panel="final"] [data-panel-row][aria-expanded="false"]').forEach(b=>b.click())`,
-  );
-  check(
-    "checks show the failed question on its own revision",
-    await waitFor(
-      `(()=>{const groups=Array.from(document.querySelectorAll('[data-graph-panel="final"] [data-outcome-checks] section'));const current=groups.find(e=>e.querySelector('h4')?.textContent==='This build'),earlier=groups.find(e=>e.querySelector('h4')?.textContent==='Earlier builds');return !!current?.querySelector('[data-check-status="failed"]')?.textContent.includes('Is the requested first-person view confirmed?')&&current.textContent.includes('Failed · Reviewer')&&!current.textContent.includes('Earlier revision walkthrough')&&!!earlier?.textContent.includes('Earlier revision walkthrough')&&document.querySelector('[data-graph-panel="final"] [data-testid="build-details"]')?.textContent.includes('Available revision: head-6');})()`,
-    ),
-  );
-  await wc.executeJavaScript(
-    `Array.from(document.querySelectorAll('button')).filter(b=>b.textContent==='View capture').at(-1)?.click()`,
-  );
-  check(
-    "check capture loads through the protected host reader",
-    await waitFor(
-      `Array.from(document.querySelectorAll('img[alt="Recorded check capture"]')).some(i=>i.complete&&i.naturalWidth===1)&&document.body.innerText.includes('Fixture observation on head-6')`,
-    ),
-  );
-  await wc.executeJavaScript(
-    `Array.from(document.querySelectorAll('button')).filter(b=>b.textContent==='Close capture').forEach(b=>b.click())`,
-  );
-  check(
-    "learning remains separate from delivered build",
-    await waitFor(
-      `document.querySelector('[data-graph-panel="final"]')?.textContent.includes('Studio learning: running — separate from game execution.')&&document.querySelector('[data-testid="build-status"]')?.textContent.includes('Live in your game')`,
+      `[...document.querySelectorAll('[data-testid="build-status"] button,[data-graph-node],[data-builds-left-out]')].every(b=>getComputedStyle(b).cursor==='pointer')&&document.querySelectorAll('[data-graph-node]').length>0&&!!document.querySelector('[data-builds-left-out]')`,
     ),
   );
 }
@@ -2377,7 +2294,9 @@ async function checkActivityAndMcp(buildSmoke: BuildSmoke): Promise<void> {
   await wc.executeJavaScript(`document.querySelector('nav [data-thread="${threadId}"]')?.click()`);
   check(
     "returning from Studio preserves the selected run",
-    await waitFor(`${selectedRunIs("run_outcome_smoke")}&&!!document.querySelector('[data-graph-row="task-1"]')`),
+    await waitFor(
+      `${selectedRunIs("run_outcome_smoke")}&&!!document.querySelector('[data-graph-node="step:task-1:1"],[data-graph-panel="step:task-1:1"]')`,
+    ),
   );
 }
 
@@ -2391,7 +2310,6 @@ async function captureBuildShot(buildSmoke: BuildSmoke): Promise<void> {
     await fs.writeFile(shotPath, (await wc.capturePage()).toPNG());
     await wc.executeJavaScript(`document.querySelector('[data-graph-panel] button[title="Close (Esc)"]')?.click()`);
     await waitFor(`!document.querySelector('[data-graph-panel]')`);
-    await wc.executeJavaScript(`document.querySelector('button[title="Fit everything (0)"]')?.click()`);
     await fs.writeFile(shotPath.replace(/\.png$/, "-overview.png"), (await wc.capturePage()).toPNG());
     window.setContentSize(1000, 720);
     check(
@@ -2818,7 +2736,7 @@ async function openOnBuilds(
  */
 const AGENT_SCREEN_REPORT = `JSON.stringify({
   stage: document.querySelector('[data-stage-view]')?.getAttribute('data-stage-view') ?? null,
-  nodes: [...document.querySelectorAll('[data-graph-node]')].map((n) => [n.getAttribute('data-graph-node'), n.getAttribute('data-agent-screen'), n.querySelectorAll('img').length]),
+  nodes: [...document.querySelectorAll('[data-graph-node]')].map((n) => [n.getAttribute('data-graph-node'), n.querySelector('[data-agent-screen]')?.getAttribute('data-agent-screen') ?? null, n.querySelectorAll('img').length]),
   buildRow: document.querySelector('[data-build-status]') ? document.querySelectorAll('[data-build-status] img').length : null,
 })`;
 
@@ -2957,7 +2875,7 @@ async function driveComputer(computerSmoke: ComputerSmoke, request: DelegateRequ
   const reported = () => reportedState(computerSmoke, project.name);
   results.tools = (request.liveTools ?? []).map((t) => t.name);
   results.shot = await computer({ action: "screenshot" });
-  results.uiNode = await waitFor(`!!document.querySelector('[data-graph-node][data-agent-screen] img')`);
+  results.uiNode = await waitFor(`!!document.querySelector('[data-graph-node] [data-agent-screen] img')`);
   if (results.uiNode !== true) results.uiNodeReport = await agentScreenReport(computerSmoke.wc);
   results.state0 = await reported();
   results.key = await computer({ action: "key", text: "i" });
@@ -2982,7 +2900,9 @@ async function captureComputerShot({ wc, ctx }: ComputerSmoke): Promise<void> {
   const { window } = ctx;
   if (window.isMinimized()) window.restore();
   window.showInactive();
-  await wc.executeJavaScript(`document.querySelector('[data-graph-node][data-agent-screen]')?.click()`).catch(() => {});
+  await wc
+    .executeJavaScript(`document.querySelector('[data-graph-node]:has([data-agent-screen])')?.click()`)
+    .catch(() => {});
   await sleep(600);
   await fs.writeFile(shot, (await wc.capturePage()).toPNG());
   await wc.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`).catch(() => {});
@@ -3204,9 +3124,9 @@ function checkWebGpuWorker({ check }: ComputerSmoke, gpu: Seen): void {
 
 /**
  * The Loop: a run on this Electron — the real harness child, real offscreen windows, the dispatch
- * that answers — with a scripted lead that looks, starts one worker in a copy of its own, merges its
- * work (one health check of the merged build), shows it and finishes (the health check again before
- * the landing); its screen is the lead's node in Builds meanwhile.
+ * that answers — with a scripted lead in the web game's own folder that starts one worker in a copy
+ * of its own, merges its work into the folder and finishes (one health check of the game's page,
+ * then the close in place).
  */
 async function checkScriptedDirector(computerSmoke: ComputerSmoke): Promise<void> {
   const { wc, waitFor, reports } = computerSmoke;
@@ -3220,7 +3140,7 @@ async function checkScriptedDirector(computerSmoke: ComputerSmoke): Promise<void
   core.engines.register(
     scriptedCodex(
       async (request) => {
-        if (request.director) return directLoopRun(computerSmoke, request, dir);
+        if (request.director) return directLoopRun(request, dir);
         // A worker of the run's pool, in its own copy of the game: Genex commits what it leaves.
         dir.workerCwd = request.cwd;
         dir.workerTools = (request.liveTools ?? []).map((tool) => tool.name);
@@ -3239,34 +3159,24 @@ async function checkScriptedDirector(computerSmoke: ComputerSmoke): Promise<void
     mode: "autopilot",
     engine: EngineId.Codex,
     reference: { name: "sign", shots: [] },
-    budgets: { wallClockMs: 10 * 60_000 },
+    budgets: {},
   });
   const dirFinished = (await core.listAllEvents())
     .filter((e) => e.data.type === EventKind.Custom && e.data.event_type === CustomEvent.RunFinished)
     .map((e) => (e.data as { payload: Record<string, unknown> }).payload)
     .find((p) => p.runId === dirRunId);
   checkDirectorLoopRun(computerSmoke, dir, dirProject.dir);
-  checkDirectorLanding(computerSmoke, dir, dirFinished, dirProject.dir);
+  checkDirectorClose(computerSmoke, dir, dirFinished, dirProject.dir);
 }
 
-/** The scripted lead's run: look, one worker in a copy, its work merged, show, finish. */
-async function directLoopRun(
-  { wc, waitFor }: ComputerSmoke,
-  request: DelegateRequest,
-  dir: DirectorSeen,
-): Promise<DelegateResult> {
+/** The scripted lead's run: one worker in a copy, its work merged into the game folder, finish. */
+async function directLoopRun(request: DelegateRequest, dir: DirectorSeen): Promise<DelegateResult> {
   // A lead woken after its finish has nothing left to do.
   if (dir.finished !== undefined)
     return { ok: true, engine: EngineId.Codex, turns: 1, usage: {}, sessionId: "director", summary: "run done" };
   const call = (name: string, args: Record<string, unknown>) =>
     required(request.onLiveTool, "a live tool bridge")(name, args);
-  dir.look = await call("look", { target: "integration" });
-  dir.chatFrame = await waitFor(`!!document.querySelector('[data-build-status] img')?.naturalWidth`);
-  if (dir.chatFrame !== true) dir.chatFrameReport = await agentScreenReport(wc);
-  // No worker works yet, so the lead has the run: its node in Builds is its own screen.
-  await pressStageView(wc, "builds");
-  dir.uiCard = await waitFor(`!!document.querySelector('[data-graph-node="lead"][data-agent-screen] img')`);
-  if (dir.uiCard !== true) dir.uiCardReport = await agentScreenReport(wc);
+  dir.leadTools = (request.liveTools ?? []).map((tool) => tool.name);
   dir.started = asText(
     await call("worker_start", { title: "Sign", task: "add a sign to the street", isolation: "copy" }),
   );
@@ -3276,25 +3186,19 @@ async function directLoopRun(
     dir.waited = asText(await call("worker_wait", { id, seconds: "3" }));
     if (!/ · running · /.test(dir.waited)) break;
   }
-  dir.lookWorker = await call("look", { target: id });
   dir.marked = asText(await call("worker_mark", { id, verdict: "used", note: "the sign is in" }));
-  dir.shown = asText(await call("show", { target: "integration" }));
-  dir.finished = asText(await call("finish", { summary: "a sign on the street", land: "yes", victory: "yes" }));
-  return { ok: true, engine: EngineId.Codex, turns: 8, usage: {}, sessionId: "director", summary: "run done" };
+  dir.finished = asText(await call("finish", { summary: "a sign on the street" }));
+  return { ok: true, engine: EngineId.Codex, turns: 6, usage: {}, sessionId: "director", summary: "run done" };
 }
 
 /** What the lead saw and did during the run. */
 function checkDirectorLoopRun({ check }: ComputerSmoke, dir: DirectorSeen, dirProjectDir: string): void {
+  // Flipped (one Loop): the lead had no window of its own, no look and no computer. It is the chat's
+  // own session and has the window its chat's turns have; no `look` was ever brought back.
   check(
-    "the lead's window shows the integration worktree with the game running in it",
-    /the window now shows integration/.test(asText(dir.look)) && images(dir.look) === 1,
-    asText(dir.look).slice(0, 160),
-  );
-  check("the lead's screen is its node in Builds while it works", dir.uiCard === true, dir.uiCardReport ?? "");
-  check(
-    "the lead's current view is the build row's picture in chat",
-    dir.chatFrame === true,
-    dir.chatFrameReport ?? "",
+    "the lead has its chat's window: the computer, and no look",
+    Array.isArray(dir.leadTools) && !dir.leadTools.includes("look") && dir.leadTools.includes("computer"),
+    JSON.stringify(dir.leadTools ?? null).slice(0, 300),
   );
   check(
     "the worker built in a copy of its own and finished",
@@ -3307,39 +3211,29 @@ function checkDirectorLoopRun({ check }: ComputerSmoke, dir: DirectorSeen, dirPr
     ),
   );
   check(
-    "look points the lead's window at the worker's copy",
-    new RegExp(`the window now shows ${dir.workerId}\\b`).test(asText(dir.lookWorker)),
-    asText(dir.lookWorker).slice(0, 120),
-  );
-  check(
-    "worker_mark used merged the worker, and the merged build passed its health check",
-    /Merged \S+ work into your folder/.test(dir.marked ?? "") && /Health check: the page loads/.test(dir.marked ?? ""),
+    "worker_mark used merged the worker's work into the game folder",
+    /Merged \S+ work into your folder/.test(dir.marked ?? "") && existsSync(path.join(dirProjectDir, "src", "sign.js")),
     String(dir.marked).slice(0, 300),
-  );
-  check(
-    "show offered the integrated build on Live's Reload",
-    /Live's Reload now offers integration/.test(dir.shown ?? ""),
-    String(dir.shown),
   );
 }
 
-/** How the run ended: landed in the live folder, closed on the lead's word, every window gone. */
-function checkDirectorLanding(
+/** How the run ended: closed in the game folder on the lead's word, after its page's health check; every window gone. */
+function checkDirectorClose(
   { check, ctx }: ComputerSmoke,
   dir: DirectorSeen,
   dirFinished: Record<string, unknown> | undefined,
   dirProjectDir: string,
 ): void {
   check(
-    "finish checked the integration branch's health and landed it in the live folder",
-    dirFinished?.landed === true &&
+    "finish checked the game's page and closed the Loop in the game folder",
+    dirFinished?.profile === "open" &&
       existsSync(path.join(dirProjectDir, "src", "sign.js")) &&
-      /is live in the game folder/.test(dir.finished ?? ""),
-    `${JSON.stringify({ landed: dirFinished?.landed, stoppedBecause: dirFinished?.stoppedBecause })} | ${String(dir.finished).slice(0, 160)}`,
+      /closed on your word/.test(dir.finished ?? ""),
+    `${JSON.stringify({ profile: dirFinished?.profile, stoppedBecause: dirFinished?.stoppedBecause })} | ${String(dir.finished).slice(0, 160)}`,
   );
   check(
     "the run closed on the lead's word, mode director",
-    dirFinished?.mode === "director" && dirFinished?.stoppedBecause === "the lead finished the run",
+    dirFinished?.mode === "director" && dirFinished?.stoppedBecause === "the lead says the goal is reached",
     JSON.stringify(dirFinished ?? null)?.slice(0, 200),
   );
   check("every window closed with the run", ctx.core.agentScreens().length === 0);

@@ -5,9 +5,10 @@
 Assets groups media in `assets/`, `public/assets/` and the project kind's asset folders (Unreal `Content`,
 Unity `Assets`, Blender files, a plugin's) by source and generation, engine files by name;
 deliveries and outside changes refresh it. Cards hide metadata; [jobs being made](../plugins.md#assets-being-made)
-(any plugin's, any MCP tool's) keep their spot, chat included; animation-only GLBs fold into models.
+(any tool's) keep their spot, chat included; animation-only GLBs fold into models.
+Tabs and sorting narrow it.
 
-An opened file has only Reveal in Finder and Close: images (click: full size), audio/video, 3D
+An opened file has only Reveal and Close: images (click: full size), audio/video, 3D
 models with clips, textures, bounded text; unsupported formats and decoder failures say why.
 
 Chat shows game-folder files with Open in Assets. A running Loop's build-only deliveries show In the running build until it lands. Job completion or “seen in game” never proves integration or passing checks. [Save, Share, search](../play.md#asset-library-and-sharing).
@@ -22,18 +23,18 @@ Community plugins and the plugin guide ([icons](../plugins.md#icons)). Install f
 (else newest commit). Games build, preview and export without plugins. The host draws Genex's
 app-wide page (balance, routed tools, candidate pictures) and Local Blender's runtime card. Connect,
 unapproved, turns Genex on and reuses a saved account or opens browser sign-in; setup survives restart and reinstall.
-Spend: usage panel; prices: Credits. Genex's optional advice is `genex-recommendations`, off until turned on.
+Spend: usage panel; prices: Credits. Genex's advice (`genex-recommendations`) runs hidden, on with Genex.
 Generations wait for unaccepted terms (Review: sidebar, chat).
 
-Genex bundles its MCP (game/animation search, owned games, generation status) on the same account;
+Genex bundles its MCP (game/animation search, owned games, generation status) on one account;
 host tools run the pinned CLI outside the game: `genex__cli` and `genex__package` (multiplayer,
-player identity; template games map Studio's copies) free; `genex__cli-paid` after consent; a
+player identity; template games map Studio's copies) and `genex__room` (a local server
+room, bots) free; `genex__cli-paid` after consent; a
 `shop add --json` draft becomes chat's [Listing draft card](../play.md#the-item-store). Publish (host-drawn)
-refuses empty starters, connects SDK-less games, tests the draft, goes public, sends the cover and clip
-the agent kept (after a landed build, a web or engine game's agent hands `genex__cover` a picture, clip optional, as files in
-the game folder; [rules](../plugins.md#first-party-privileges)), plus its project if remixable
+refuses empty starters, connects SDK-less games, ships room modules, tests the draft, goes public, sends the cover and clip
+the agent kept (after a landed build, `genex__cover` takes a picture, clip optional, as game files; [rules](../plugins.md#first-party-privileges)), plus its project if remixable
 ([Remix](../play.md)); else Studio's plain frame, never blank; consented `genex__cover-set` sends it now; chat shows it. Multiplayer (built, single-player) asks chat (Genex
-off: enable it); Publish needs only the account; both offer Update while older. Agents read
+off: enable it); Publish needs only the account. Agents read
 Genex’s guide via `genex__skill`, not game files. Plugin MCPs connect on first use.
 
 The curated catalog (`plugins.genex.games`; reviewed releases in `genex-games/genex-plugins`) lists
@@ -51,14 +52,14 @@ Connector tools ask before each call unless Settings holds an exact grant (a plu
 tools never ask, its others not in Auto); server hints grant nothing. Plugin uploads show every
 included/excluded file for a second approval. Revoking stops future calls, not remote effects.
 Removal (never Genex's) keeps data, credentials and jobs; updates (newer compatible releases) also keep
-settings: rows offer **Update to x**, the sidebar's **plugin updates** the ticked ones. Built-ins install and update
-unasked. Reusing a plugin's id from another source needs **Replace and erase data** (never a
+settings: rows offer **Update to x**, the sidebar's **plugin updates** the ticked ones. Built-ins install
+unasked and update with Studio at launch. Reusing a plugin's id from another source needs **Replace and erase data** (never a
 bundled id). Reinstall is explicit; local reinstall reviews a fresh snapshot. Host-managed secrets
 never enter composer text.
 
 Skills lists Studio’s own (local chat, planner, director), the game’s, providers’ global and plugin
 skills. Codex says whether workers load its catalog; Claude’s global entries stay excluded. Plugin
-switches cover all games; resumed workers hear what was withdrawn.
+switches cover all games; a resumed session's tools follow them.
 
 ## Where to work
 

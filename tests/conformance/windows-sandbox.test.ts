@@ -17,7 +17,7 @@ import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { setImmediate as turn, setTimeout as delay } from "node:timers/promises";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import { SandboxProblemCode, WindowsSetupNeed } from "../../src/shared/boot.ts";
+import { SandboxFolderKind, SandboxProblemCode, WindowsSetupNeed } from "../../src/shared/boot.ts";
 import { launchGameBridge } from "../../src/main/core/game-bridge-target.ts";
 import { openCodeEvents } from "../../src/substrate/engines/opencode.ts";
 import { HarnessHost } from "../../src/substrate/harness-host.ts";
@@ -47,6 +47,7 @@ import {
   grantsCover,
   insideWindowsPath,
   keepWindowsDenies,
+  leftOutFolder,
   msysPath,
   msysPathList,
   granteeOf,
@@ -1074,6 +1075,67 @@ Set-Acl -LiteralPath $env:GENEX_ACL_PATH -AclObject $acl`,
     }
   });
 
+  // A field PC ran Genex from C:\Program Files\Genex, whose entries a standard user may not change:
+  // the read grant on the install folder stopped every start, though BUILTIN\Users read and run
+  // everything there. Program Files passes Users its read in two entries, one for the folder itself
+  // and one, in generic rights, for everything under it.
+  /** One shape of a folder the person may not change: its name, its extra allows and denies, whether the start goes on. */
+  type RefusedGrant = [string, string[], boolean, string[]?];
+  const refusedGrants: RefusedGrant[] = [
+    ["Users may read and run everything in it", [`*${USERS}:(OI)(CI)(RX)`], true],
+    [
+      "Program Files' two entries let Users read and run everything",
+      [`*${USERS}:(RX)`, `*${USERS}:(OI)(CI)(IO)(GR,GE)`],
+      true,
+    ],
+    [
+      "the sandbox users' group may read and run everything in it, in generic rights",
+      [`*${GUESTS}:(OI)(CI)(GR,GE)`],
+      true,
+    ],
+    ["Users may read and run the folder alone", [`*${USERS}:(RX)`], false],
+    ["Users may read and run what is in it, not the folder", [`*${USERS}:(OI)(CI)(IO)(RX)`], false],
+    ["Users may read its files, not its folders", [`*${USERS}:(OI)(RX)`], false],
+    ["Users may only read, not run, what is in it", [`*${USERS}:(OI)(CI)(R)`], false],
+    [
+      "Users may open it, and the sandbox users' group is denied reading",
+      [`*${USERS}:(OI)(CI)(RX)`],
+      false,
+      [`*${GUESTS}:(OI)(CI)(R)`],
+    ],
+  ];
+  for (const [shape, also, goesOn, denies = []] of refusedGrants) {
+    it(`${goesOn ? "goes on past" : "still stops at"} a read grant Windows refuses where ${shape}`, async () => {
+      const root = realpathSync.native(await tmpDir("folder-grant-refused-open-"));
+      const install = path.join(root, "Genex");
+      await mkdir(path.join(install, "resources"), { recursive: true });
+      await writeFile(path.join(install, "Genex.exe"), "app");
+      if (denies.length > 0) icacls(install, "/deny", ...denies);
+      refusesChanges(install, ...also);
+      const before = ownerAndDacl(install);
+      try {
+        const outcomes = await folderOwnEditor({ powershell: withoutPrivileges })([
+          {
+            dir: install,
+            sid: GUESTS,
+            op: FolderAceOp.Own,
+            deny: null,
+            guard: false,
+            grant: GrantAccess.Read,
+            allows: true,
+          },
+        ]);
+        const [outcome] = outcomes ?? [];
+        const unneeded = outcome?.ok === true && typeof outcome.refused === "string";
+        assert.equal(unneeded, goesOn, JSON.stringify(outcomes));
+        assert.equal(outcome?.ok, goesOn, JSON.stringify(outcomes));
+        assert.equal(ownerAndDacl(install), before, "the folder is left as it was");
+      } finally {
+        giveBack(install);
+      }
+    });
+  }
+
   it("passes a deny down at once where the folder itself passes Users an allow", async () => {
     const root = realpathSync.native(await tmpDir("folder-deny-open-"));
     const secret = path.join(root, "User Data");
@@ -1576,6 +1638,24 @@ function refusedLogon(hresult: string, words: string): InitializeFailure {
   };
 }
 
+/**
+ * sandbox-runtime's error for a session start whose persistent write grant on `root` Windows
+ * refused, in srt-win's words (`code`: Windows' error, 0x00000005 ERROR_ACCESS_DENIED). From the
+ * field: a game folder on another drive whose entries the person may not change (feedback
+ * cmwdpn67, `D:\<game>\client`). srt-win names the root by its extended-length path, and from
+ * the second start on also warns that its replay of the root's pending grant failed.
+ */
+function refusedWriteGrant(root: string, code = "0x00000005", replay = true): InitializeFailure {
+  const named = `\\\\?\\${root}`;
+  const refusal = `persistent ACEs '${named}': SetNamedSecurityInfoW('${named}'): WIN32_ERROR=${code}`;
+  const warning = replay ? `srt-win: WARNING: replay persistent write '${named}': ${refusal}\n` : "";
+  return {
+    code: "acl_grant_failed",
+    subcommand: "acl",
+    message: `srt-win acl grant --persistent exited 1 (failed): ${warning}srt-win: error: persistent grant '${named}': ${refusal}`,
+  };
+}
+
 function fakeSessionRuntime() {
   const calls: string[] = [];
   const configs: SandboxRuntimeConfig[] = [];
@@ -1698,6 +1778,7 @@ function session(
   } = {},
 ) {
   const runtime = fakeSessionRuntime();
+  const refused: string[] = [];
   const ancestors = fakeAncestors();
   const own = fakeOwnEntries(runtime.calls, {
     available: options.ownDenies !== "unavailable",
@@ -1715,8 +1796,9 @@ function session(
     ...(options.walkDelayMs === undefined ? {} : { walkDelayMs: options.walkDelayMs }),
     ...(options.logonRetryMs ? { logonRetryMs: options.logonRetryMs } : {}),
     log: (line) => logged.push(line),
+    refused: (root) => refused.push(root),
   });
-  return { session: value, runtime, ancestors, own, logged };
+  return { session: value, runtime, ancestors, own, logged, refused };
 }
 
 const GAMES = at("AI Games");
@@ -1993,6 +2075,114 @@ describe("the grant session", () => {
       /0x80070422/,
     );
     assert.deepEqual(s.runtime.calls, ["initialize"]);
+  });
+
+  it("leaves out a write root Windows refuses srt-win's grant on, and starts with the rest", async () => {
+    // Feedback cmwdpn67: Windows refused the persistent grant on one game folder on another drive
+    // (ERROR_ACCESS_DENIED: the person may not change its entries), and no agent started at all.
+    const s = session();
+    const claude = path.win32.join(LATE, ".claude");
+    const config = { ...BASE_CONFIG, filesystem: { ...BASE_CONFIG.filesystem, denyWrite: [claude, at(".ssh")] } };
+    s.runtime.failInitializeWith(refusedWriteGrant(LATE));
+    await s.session.join({}, { grants: { write: [GAMES, LATE], read: [] }, config });
+    assert.deepEqual(s.runtime.calls, ["initialize", "initialize"]);
+    assert.deepEqual(s.runtime.last().filesystem.allowWrite, [GAMES]);
+    assert.deepEqual(
+      s.runtime.last().filesystem.denyWrite,
+      [at(".ssh")],
+      "nothing writes in a root srt-win did not grant, so a write deny there has nothing to stop",
+    );
+    assert.deepEqual(s.session.applied, { write: [GAMES], read: [] });
+    assert.deepEqual(s.refused, [LATE]);
+    assert.ok(
+      s.logged.some((line) => line.includes(LATE) && line.includes("0x00000005")),
+      `the log names the folder and Windows' code: ${s.logged.join("\n")}`,
+    );
+
+    assert.equal(s.session.refusedAt([path.win32.join(LATE, "src").toUpperCase()]), LATE);
+    assert.equal(s.session.refusedAt([GAMES, `${LATE}2`, "D:\\Elsewhere"]), null);
+  });
+
+  it("does not try a refused root again for the rest of the launch, and grants the others it gains", async () => {
+    const s = session();
+    const member = {};
+    s.runtime.failInitializeWith(refusedWriteGrant(LATE));
+    await s.session.join(member, { grants: { write: [GAMES, LATE], read: [] }, config: BASE_CONFIG });
+    s.session.update(member, { write: [GAMES, LATE], read: [] });
+    await s.session.join({}, { grants: { write: [LATE], read: [] }, config: BASE_CONFIG });
+    await s.session.settled();
+    assert.equal(s.session.regrants, 0, "a member that only asks for the refused root again changes nothing");
+
+    const other = "E:\\Games\\Tetris";
+    s.session.update(member, { write: [GAMES, LATE, other], read: [] });
+    await s.session.settled();
+    assert.equal(s.session.regrants, 1);
+    assert.deepEqual(s.runtime.calls, ["initialize", "initialize", "reset", "initialize"]);
+    assert.deepEqual(s.runtime.last().filesystem.allowWrite, [GAMES, other]);
+    assert.deepEqual(s.refused, [LATE], "told once");
+  });
+
+  it("leaves out each refused root in turn, a folder inside one with it", async () => {
+    const s = session();
+    const inner = path.win32.join(LATE, "client");
+    const other = "E:\\Games\\Tetris";
+    // The first start of a root has no earlier grant to replay, so srt-win's error is all it says.
+    s.runtime.failInitializeWith(refusedWriteGrant(LATE), refusedWriteGrant(other, undefined, false));
+    await s.session.join({}, { grants: { write: [GAMES, LATE, other], read: [] }, config: BASE_CONFIG });
+    assert.deepEqual(s.runtime.calls, ["initialize", "initialize", "initialize"]);
+    assert.deepEqual(s.runtime.last().filesystem.allowWrite, [GAMES]);
+    assert.deepEqual(s.refused, [LATE, other]);
+    await s.session.join({}, { grants: { write: [inner], read: [] }, config: BASE_CONFIG });
+    await s.session.settled();
+    assert.equal(s.session.regrants, 0, "a folder inside a refused root is refused with it");
+    assert.equal(s.session.refusedAt([inner]), LATE);
+  });
+
+  it("still fails a start whose grant failed any other way, leaving every root in", async () => {
+    // Hostile and near-miss refusals: only Windows' ERROR_ACCESS_DENIED on a root the session
+    // asked for is let go; a root's parent or child, another error or another step fails as before.
+    const cases: Array<[string, InitializeFailure]> = [
+      ["another Windows error", refusedWriteGrant(LATE, "0x00000020")],
+      ["a folder above the root", refusedWriteGrant("D:\\Elsewhere")],
+      ["a folder inside the root", refusedWriteGrant(path.win32.join(LATE, "src"))],
+      ["a root no member asked for", refusedWriteGrant("F:\\Other")],
+      ["another step's failure", { ...refusedWriteGrant(LATE), code: "wfp_fence_inactive" }],
+      [
+        "only the replay's warning",
+        { ...refusedWriteGrant(LATE), message: refusedWriteGrant(LATE).message?.split("\n")[0] },
+      ],
+    ];
+    for (const [name, failure] of cases) {
+      const s = session();
+      s.runtime.failInitializeWith(failure);
+      await assert.rejects(
+        s.session.join({}, { grants: { write: [GAMES, LATE], read: [] }, config: BASE_CONFIG }),
+        (error: unknown) => error instanceof Error && error.message === failure.message,
+        name,
+      );
+      assert.deepEqual(s.runtime.calls, ["initialize"], name);
+      assert.deepEqual(s.refused, [], name);
+      assert.equal(s.session.refusedAt([LATE]), null, name);
+    }
+  });
+
+  it("tells analytics what a left-out folder is to Genex and whether it is on another drive", () => {
+    const places = {
+      profile: PROFILE,
+      gamesRoot: GAMES,
+      games: [path.win32.join(GAMES, "Pong"), "D:\\EverPlanet\\client"],
+      data: [WS, at("AppData", "Roaming", "Genex", "runs")],
+    };
+    const cases: Array<[string, { kind: SandboxFolderKind; otherDrive: boolean }]> = [
+      ["d:\\everplanet\\CLIENT", { kind: SandboxFolderKind.Game, otherDrive: true }],
+      [path.win32.join(GAMES, "Snake"), { kind: SandboxFolderKind.Game, otherDrive: false }],
+      [GAMES.toUpperCase(), { kind: SandboxFolderKind.GamesRoot, otherDrive: false }],
+      [path.win32.join(WS, "harness"), { kind: SandboxFolderKind.GenexData, otherDrive: false }],
+      ["E:\\Projects\\shooter", { kind: SandboxFolderKind.Other, otherDrive: true }],
+      ["D:\\EverPlanet", { kind: SandboxFolderKind.Other, otherDrive: true }],
+      [at(".grok"), { kind: SandboxFolderKind.Other, otherDrive: false }],
+    ];
+    for (const [dir, expected] of cases) assert.deepEqual(leftOutFolder(dir, places), expected, dir);
   });
 
   it("network changes apply live, with every member's domains and no regrant", async () => {
@@ -2690,6 +2880,30 @@ describe("Genex's own deny entries", () => {
       assert.deepEqual(own.walks(), [], "passed down once the start was past");
     });
 
+    it("starts past a grant Windows refused where the sandbox user may already read everything, and says so", async () => {
+      // A field PC ran Genex from C:\Program Files\Genex: the person may not change its entries,
+      // and BUILTIN\Users already read and run everything in it. The script answers so only there.
+      const programFiles = "C:\\Program Files\\Genex";
+      const logged: string[] = [];
+      const asked: string[][] = [];
+      const own = holder(await tmpDir("windows-denies-"), 1, [], {
+        urgent: (dir) => dir === programFiles,
+        log: (line) => logged.push(line),
+        edit: async (edits) => {
+          asked.push(edits.map((edit) => edit.dir));
+          return edits.map((edit) =>
+            edit.dir === programFiles ? ({ ok: true, refused: "Access is denied." } as const) : ({ ok: true } as const),
+          );
+        },
+      });
+      assert.equal(await own.sync([guard, grantOf(programFiles)]), true, "the start goes on");
+      assert.deepEqual(logged, [
+        `own entries: left ${programFiles} as it is: Windows refused the grant (Access is denied.), and the sandbox user may already read everything in it`,
+      ]);
+      assert.equal(await own.sync([guard, grantOf(programFiles)]), true);
+      assert.ok(asked.at(-1)?.includes(programFiles), "the next start asks for the grant again");
+    });
+
     it("leaves nothing to walk for a grant the budget finished", async () => {
       const holders = await tmpDir("windows-denies-");
       const own = budgeted(
@@ -2994,6 +3208,8 @@ async function windowsSandbox(
     failInitializeIn?: { subcommand: string; code: string };
     /** Genex sets the denies outside the grants itself. */
     ownDenies?: boolean;
+    /** Windows refuses srt-win's persistent grant on the workspace at the first initialize. */
+    refuseWorkspace?: boolean;
   } = {},
 ) {
   const root = realpathSync.native(await tmpDir("windows-launch-"));
@@ -3006,6 +3222,7 @@ async function windowsSandbox(
   const openInitialize = options.holdInitialize ? s.runtime.hold() : () => {};
   if (options.failInitializeIn)
     s.runtime.failInitializeIn(options.failInitializeIn.subcommand, options.failInitializeIn.code);
+  if (options.refuseWorkspace) s.runtime.failInitializeWith(refusedWriteGrant(workspace));
   if (options.initializeError) {
     const error = options.initializeError;
     s.runtime.runtime.initialize = async () => {
@@ -3253,6 +3470,31 @@ describe("ProcessSandbox on Windows", () => {
     await w.session.session.settled();
     assert.equal(w.session.session.applied, null);
     assert.equal(w.session.runtime.calls.at(-1), "reset");
+  });
+
+  it("refuses a command in a folder Windows would not grant, in plain words, and runs the others", async () => {
+    // Feedback cmwdpn67: the session starts without the game folder Windows refused; a command
+    // there would only meet "Permission denied" on its first write, so it does not start.
+    const w = await windowsSandbox({ refuseWorkspace: true });
+    // The session spells its roots the Windows way, as on a PC.
+    const workspace = path.win32.resolve(w.workspace);
+    assert.deepEqual(w.session.refused, [workspace]);
+    const refused = (error: unknown) => {
+      assert.ok(error instanceof SandboxLaunchError, String(error));
+      assert.equal(error.code, SandboxLaunchCode.WriteRefused);
+      assert.ok(error.message.includes(workspace), error.message);
+      assert.doesNotMatch(error.message, /srt-win|WIN32_ERROR|SetNamedSecurityInfo/, "plain words");
+      return true;
+    };
+    await assert.rejects(w.sandbox.run({ command: "true", cwd: path.join(w.workspace, "src") }), refused);
+    await assert.rejects(
+      w.sandbox.run({ command: "true", cwd: w.sandbox.scratchDir, policy: { allowWrite: [w.workspace] } }),
+      refused,
+    );
+    assert.equal(w.wraps.length, 0, "nothing was wrapped, so nothing started");
+    assert.equal(w.session.session.active, 0);
+    const elsewhere = await w.sandbox.run({ command: "true", cwd: w.sandbox.scratchDir });
+    assert.equal(elsewhere.code, 0);
   });
 
   it("refuses a per-run write outside the session's grants, and releases everything", async () => {
@@ -3521,6 +3763,25 @@ describe("what is not set up yet", () => {
     }
   });
 
+  it("takes srt-win's own word for a disabled Secondary Logon service when `sc` could not read it", () => {
+    // Feedback from 0.1.25: `sc` said nothing, so Set up installed the sandbox user alone, and the
+    // start then failed on srt-win's "seclogon is disabled" with no Set up to turn it on.
+    const installed = { state: "installed" };
+    const missing = { provisioned: false, credPresent: false };
+    assert.deepEqual(needs(setupGaps({ user: { ...set, seclogon: "disabled" }, wfp: installed, logonService: null })), [
+      WindowsSetupNeed.LogonService,
+    ]);
+    assert.deepEqual(
+      needs(setupGaps({ user: { ...missing, seclogon: "disabled" }, wfp: { state: "absent" }, logonService: null })),
+      [WindowsSetupNeed.Sandbox, WindowsSetupNeed.LogonService],
+    );
+    // Turned on, a service that is not there (Set up cannot turn that on), or one srt-win cannot read.
+    for (const seclogon of ["ok", "missing", "cannot-read"]) {
+      const user = { ...set, seclogon };
+      assert.deepEqual(setupGaps({ user, wfp: installed, logonService: null }), [], seclogon);
+    }
+  });
+
   it("asks srt-win and `sc` together; srt-win's failure is the start's own error, an unread service is no gap", async () => {
     const status = async () => ({ user: set, wfp: { state: "installed" } });
     const off = async () => ServiceStartType.Disabled;
@@ -3529,6 +3790,10 @@ describe("what is not set up yet", () => {
       throw new Error("sc.exe: Access is denied");
     };
     assert.deepEqual(await windowsSetupGaps({ status, logonService: unread }), []);
+    const disabledBySrt = async () => ({ user: { ...set, seclogon: "disabled" }, wfp: { state: "installed" } });
+    assert.deepEqual(needs(await windowsSetupGaps({ status: disabledBySrt, logonService: unread })), [
+      WindowsSetupNeed.LogonService,
+    ]);
     const failing = async () => {
       throw new Error("srt-win missing");
     };

@@ -99,6 +99,9 @@ describe("the connect script in a published page", () => {
         "export const waitForPlayer = async () => ({ user: { id: 'p1' }, guest: true });",
         "export const getColyseusAuth = () => ({ embedToken: 'token-1' });",
         "export const getColyseusUrls = () => ['wss://relay-asia.genex.games'];",
+        "export const getAuthorityUrls = () => ['wss://authority-asia.genex.games'];",
+        "export const getAuthorityRegions = () => [{ region: 'asia', urls: ['wss://authority-asia.genex.games'] }];",
+        "export const getAuthorityHome = () => 'asia';",
       ].join("\n"),
     );
     const connection = {
@@ -127,9 +130,20 @@ describe("the connect script in a published page", () => {
         "the host's environment stays, with the game's project beside it",
       );
       // A Unity WebGL build's Genex package reads the same player through `window.genexEmbed`.
-      const embed = page.window.genexEmbed as { waitForPlayer: () => Promise<unknown>; getColyseusAuth: () => unknown };
+      const embed = page.window.genexEmbed as {
+        waitForPlayer: () => Promise<unknown>;
+        getColyseusAuth: () => unknown;
+        getAuthorityUrls: () => unknown;
+        getAuthorityRegions: () => unknown;
+        getAuthorityHome: () => unknown;
+      };
       assert.deepEqual(await embed.waitForPlayer(), { user: { id: "p1" }, guest: true });
       assert.deepEqual(embed.getColyseusAuth(), { embedToken: "token-1" });
+      // Its server-authoritative rooms are joined at the page's authority servers (GenexGame.AuthorityUrls).
+      assert.deepEqual(embed.getAuthorityUrls(), ["wss://authority-asia.genex.games"]);
+      // It also starts in the player's home region: GenexGame.PageAuthorityRegions and PageAuthorityHome.
+      assert.deepEqual(embed.getAuthorityRegions(), [{ region: "asia", urls: ["wss://authority-asia.genex.games"] }]);
+      assert.equal(embed.getAuthorityHome(), "asia");
     } finally {
       delete page.window;
     }
@@ -140,7 +154,7 @@ describe("the connect script in a published page", () => {
     await mkdir(path.join(dir, "embed-sdk"));
     await writeFile(
       path.join(dir, "embed-sdk/index.js"),
-      "export const initEmbed = (o) => { globalThis.__inited = o.slug; };\nexport const waitForPlayer = () => {};\nexport const getColyseusAuth = () => {};\nexport const getColyseusUrls = () => [];\n",
+      "export const initEmbed = (o) => { globalThis.__inited = o.slug; };\nexport const waitForPlayer = () => {};\nexport const getColyseusAuth = () => {};\nexport const getColyseusUrls = () => [];\nexport const getAuthorityUrls = () => [];\nexport const getAuthorityRegions = () => [];\nexport const getAuthorityHome = () => undefined;\n",
     );
     const connection = {
       slug: "rain-circuit",

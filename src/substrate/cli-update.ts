@@ -15,6 +15,7 @@ const UPDATE_ARGS: Record<CodingProvider, readonly string[]> = {
   [EngineId.Pi]: ["update"],
   [EngineId.Grok]: ["update"],
   [EngineId.Cursor]: ["update"],
+  [EngineId.Antigravity]: ["update"],
 };
 /** Update only the selected installation; never fall back to a different installer. */
 export async function updateCodingCli(

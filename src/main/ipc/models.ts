@@ -27,6 +27,7 @@ const REFRESHABLE: ReadonlySet<string> = new Set([
   EngineId.OpenCode,
   EngineId.Grok,
   EngineId.Cursor,
+  EngineId.Antigravity,
   EngineId.OpenRouter,
   EngineId.LocalServer,
 ]);
@@ -35,6 +36,7 @@ const RECHECKED_BY_MODELS: readonly string[] = [
   EngineId.OpenCode,
   EngineId.Grok,
   EngineId.Cursor,
+  EngineId.Antigravity,
   EngineId.OpenRouter,
   EngineId.LocalServer,
 ];
@@ -64,12 +66,13 @@ const MESSAGE = {
   noKeyEngine: () => t("OpenRouter is unavailable"),
   noLocalServer: () => t("Local servers are unavailable"),
   bonsaiUnavailable: () => t("Bonsai runtime is unavailable"),
-  noModel: "Name the model to delete",
+  noModel: "Name the model",
   cannotRemove: () => t("This model cannot be deleted here"),
+  cannotRaise: () => t("Ollama is unavailable"),
 } as const;
 
 export interface ModelsIpcDeps {
-  core: Pick<StudioCore, "engines">;
+  core: Pick<StudioCore, "engines" | "fastDecisions">;
   subscription(id: string): SubscriptionEngine | null;
   pushUiEvent(event: UiEvent): void;
   /** OpenRouter's browser sign-in, which hands the key it gets to the engine. */
@@ -130,17 +133,7 @@ export function registerModelsIpc(
     const found = await lookupOllamaModel(String(payload?.model ?? ""));
     return found.ok ? { ...found, ...fitFor(found.sizeGb, await detectHardware()) } : found;
   });
-  // Delete: Bonsai ids go to the managed runtime, every other name to Ollama, which lists what it has.
-  handle("studio:models.remove", async (payload) => {
-    const model = payload?.model;
-    if (typeof model !== "string" || !model) throw new Error(MESSAGE.noModel);
-    const id = isBonsaiModelId(model) ? EngineId.Bonsai : EngineId.Ollama;
-    const engine = core.engines.has(id) ? core.engines.get(id) : null;
-    if (!engine?.removeModel) throw new Error(MESSAGE.cannotRemove());
-    await engine.removeModel(model);
-    pushUiEvent({ type: UiEvent.EnginesChanged, payload: { engine: id } });
-    return true;
-  });
+  registerLocalModelIpc(handle, { core, pushUiEvent });
   handle("studio:pull-model", async (payload) => {
     const progressUpdates = modelProgress((progress) =>
       pushUiEvent({ type: UiEvent.ModelPull, payload: { model: payload.model, progress } }),
@@ -183,9 +176,37 @@ export function registerModelsIpc(
   });
 }
 
+/** Local models already on this computer: delete one, or have Ollama copy one with a larger context. */
+function registerLocalModelIpc(
+  handle: IpcHandle,
+  { core, pushUiEvent }: Pick<ModelsIpcDeps, "core" | "pushUiEvent">,
+): void {
+  // Delete: Bonsai ids go to the managed runtime, every other name to Ollama, which lists what it has.
+  handle("studio:models.remove", async (payload) => {
+    const model = payload?.model;
+    if (typeof model !== "string" || !model) throw new Error(MESSAGE.noModel);
+    const id = isBonsaiModelId(model) ? EngineId.Bonsai : EngineId.Ollama;
+    const engine = core.engines.has(id) ? core.engines.get(id) : null;
+    if (!engine?.removeModel) throw new Error(MESSAGE.cannotRemove());
+    await engine.removeModel(model);
+    pushUiEvent({ type: UiEvent.EnginesChanged, payload: { engine: id } });
+    return true;
+  });
+  // Raise context to 16K: Ollama copies a model it lists with a larger context, and the copy is offered at once.
+  handle("studio:models.raise-context", async (payload) => {
+    const model = payload?.model;
+    if (typeof model !== "string" || !model) throw new Error(MESSAGE.noModel);
+    const engine = core.engines.has(EngineId.Ollama) ? core.engines.get(EngineId.Ollama) : null;
+    if (!engine?.raiseContext) throw new Error(MESSAGE.cannotRaise());
+    const copy = await engine.raiseContext(model);
+    pushUiEvent({ type: UiEvent.EnginesChanged, payload: { engine: EngineId.Ollama } });
+    return copy;
+  });
+}
+
 /**
- * The OpenRouter key, pasted or got by the browser sign-in: checked with OpenRouter, kept in the OS
- * secret store, never sent back.
+ * The OpenRouter key, pasted or got by the browser sign-in, and the TypeSafe key pilots' fast
+ * decisions use: each checked with its service, kept in the OS secret store, never sent back.
  */
 function registerApiKeyIpc(
   handle: IpcHandle,
@@ -206,6 +227,9 @@ function registerApiKeyIpc(
     pushUiEvent({ type: UiEvent.EnginesChanged, payload: { engine: EngineId.OpenRouter } });
     return status;
   });
+  handle("studio:typesafe.key.status", async () => core.fastDecisions.status());
+  handle("studio:typesafe.key.save", async (payload) => core.fastDecisions.save(payload?.key));
+  handle("studio:typesafe.key.clear", async () => core.fastDecisions.clear());
   handle("studio:openrouter.signin", async () => {
     const engine = keyEngine();
     const result = await openRouterLogin.start((key) => engine.saveKey(key));

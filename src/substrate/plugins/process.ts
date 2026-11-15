@@ -1,6 +1,6 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { outlivesHarness } from "../../shared/plugin-hooks.ts";
-import { CallCutOff, type PluginBinding, PluginFailure } from "../../shared/plugins.ts";
+import { CallCutOff, type PluginBinding, PluginFailure, pluginErrorCode } from "../../shared/plugins.ts";
 import { errorMessage } from "../../shared/errors.ts";
 import { activeCatalog, currentLocale } from "../../shared/i18n.ts";
 import type { Locale } from "../../shared/locale.ts";
@@ -27,6 +27,8 @@ interface BackendMessage {
   args?: unknown;
   result?: unknown;
   error?: string;
+  /** The `code` of the error a call's handler threw, when it had a string one. */
+  code?: string;
 }
 const NO_INVOCATION = "No active authorized invocation";
 const STOPPED_BEFORE = "Stopped before plugin invocation";
@@ -65,6 +67,33 @@ export class PluginCallCutOff extends Error {
 export class PluginCallNotSent extends Error {
   constructor() {
     super(STOPPED_BEFORE);
+  }
+}
+
+/**
+ * A call's failure as its plugin's backend answered it, with the plugin's own error code when it
+ * gave one shaped like a code (`pluginErrorCode`). It keeps Error's own name, so its text is the
+ * one a backend's failure always read; `pluginCode`, not `code`, so the IPC edge never takes a
+ * plugin's code for one of the app's (`shared/errors.ts`).
+ */
+export class PluginBackendError extends Error {
+  readonly pluginCode: string | null;
+  constructor(message: string, code: unknown) {
+    super(message);
+    this.pluginCode = pluginErrorCode(code);
+  }
+}
+
+/**
+ * A call refused while its plugin's backend waits out its pause after ending again and again
+ * (`restart-pause.ts`): it never ran, and no backend was started for it. `retryInMs` says when
+ * the backend may start again.
+ */
+export class PluginRestartPaused extends Error {
+  readonly retryInMs: number;
+  constructor(message: string, retryInMs: number) {
+    super(message);
+    this.retryInMs = retryInMs;
   }
 }
 
@@ -180,6 +209,53 @@ export interface PluginInvocation {
   name: string;
   signal: AbortSignal;
   confirmed?: true;
+  /** Runs `answer`, a wait on the person (a card the host shows), with the call's own deadline stood still meanwhile. */
+  personAnswers: PersonWait;
+}
+
+/** Runs `answer`, a wait on the person, outside the time its call may take; answers what it answers. */
+export type PersonWait = <T>(answer: () => Promise<T>) => Promise<T>;
+
+/**
+ * One call's local deadline: `end` runs once `ms` of the call's own time passed. While the person
+ * answers a card the call asked for (`hold`, until its release) the time stands still: a person
+ * reading a file list is no plugin work, and the time before and after the card still counts.
+ */
+interface CallDeadline {
+  hold(): () => void;
+  clear(): void;
+}
+
+function callDeadline(ms: number, end: () => void, now: () => number = () => performance.now()): CallDeadline {
+  let left = ms;
+  let since = now();
+  let holds = 0;
+  let cleared = false;
+  let timer: NodeJS.Timeout | undefined = setTimeout(end, left);
+  const run = () => {
+    since = now();
+    timer = setTimeout(end, Math.max(0, left));
+  };
+  const pause = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    left -= now() - since;
+  };
+  return {
+    hold() {
+      if (holds++ === 0 && !cleared) pause();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (--holds === 0 && !cleared) run();
+      };
+    },
+    clear() {
+      cleared = true;
+      clearTimeout(timer);
+    },
+  };
 }
 
 /** How one call is made beyond its name and arguments. */
@@ -205,6 +281,7 @@ export class PluginProcess {
       name: string;
       controller: AbortController;
       confirmed: boolean;
+      deadline: CallDeadline;
     }
   >();
   readonly bootstrap: string;
@@ -261,7 +338,7 @@ export class PluginProcess {
     if (!p) return;
     this.#pending.delete(m.id);
     p.cleanup();
-    if (m.error) p.reject(new Error(m.error));
+    if (m.error) p.reject(new PluginBackendError(m.error, m.code));
     else p.resolve(m.result);
   }
   /** Answer a backend's host-service request, but only on behalf of a call still in flight. */
@@ -280,6 +357,14 @@ export class PluginProcess {
         name: p.name,
         signal: p.controller.signal,
         ...(p.confirmed ? { confirmed: true as const } : {}),
+        personAnswers: async (answer) => {
+          const release = p.deadline.hold();
+          try {
+            return await answer();
+          } finally {
+            release();
+          }
+        },
       });
       reply({ result });
     } catch (e) {
@@ -361,7 +446,7 @@ export class PluginProcess {
           new Error("Stopped local plugin wait; accepted remote jobs may continue. Do not repeat unresolved creation."),
         );
       };
-      const timer = setTimeout(cancel, timeoutMs);
+      const deadline = callDeadline(timeoutMs, cancel);
       this.#pending.set(id, {
         resolve,
         reject,
@@ -370,9 +455,10 @@ export class PluginProcess {
         name,
         controller,
         confirmed: options.confirmed === true,
+        deadline,
         cleanup: () => {
           controller.abort();
-          clearTimeout(timer);
+          deadline.clear();
           signal?.removeEventListener("abort", cancel);
         },
       });

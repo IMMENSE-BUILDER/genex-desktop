@@ -290,19 +290,36 @@ const inEngineWebFolder = (fact: FactRef): boolean => isEngineWebFolder(fact.pat
 /** The kinds whose engine exports the game for the web into `ENGINE_WEB_FOLDER`. */
 const WEB_EXPORTING: ReadonlySet<string> = new Set<string>([CoreFact.UnityProject, CoreFact.GodotProject]);
 
+/** The file Unreal writes at the root of every web build it stages: what tells one from any other page. */
+export const UNREAL_WEB_BUILD_MARKER = "wasm-manifest.json";
+/** The fact the Unreal plugin's `detect` gives a folder that holds such a build. */
+export const UNREAL_WEB_BUILD_FACT = "unreal-web-build";
+
 /**
- * The folder of a Unity or Godot game's web version (`withEngineWebVersion`), the build its engine
- * makes again from the project; null for any other game, and for one whose root page is its own.
+ * Whether a game with these facts keeps its engine's web build in `ENGINE_WEB_FOLDER`: a Unity or
+ * Godot game always; an Unreal game only while that folder holds a build Unreal staged for the web
+ * (`UNREAL_WEB_BUILD_FACT`), since any other page in an Unreal game is someone's mockup.
  */
-export function engineWebFolderOf(game: GameKind): string | null {
-  const exports = game.facts.some((fact) => WEB_EXPORTING.has(fact.id));
-  const webVersion = game.facts.find((fact) => fact.id === CoreFact.WebGame && inEngineWebFolder(fact));
-  return exports && webVersion ? webVersion.path : null;
+function exportsToWebFolder(kinds: readonly FactRef[], files: readonly FactRef[] = kinds): boolean {
+  if (kinds.some((fact) => WEB_EXPORTING.has(fact.id))) return true;
+  const unreal = kinds.some((fact) => fact.id === CoreFact.UnrealProject);
+  return unreal && files.some((fact) => fact.id === UNREAL_WEB_BUILD_FACT && inEngineWebFolder(fact));
 }
 
 /**
- * A game as its skills read it: a Unity or Godot game's web version left out, since it is the build
- * its engine exports and no web game's know-how fits it. Any other game is as it is.
+ * The folder of an engine game's web version (`withEngineWebVersion`), the build its engine makes
+ * again from the project: a Unity or Godot game's, and an Unreal game's own web build; null for any
+ * other game, and for one whose root page is its own.
+ */
+export function engineWebFolderOf(game: GameKind): string | null {
+  const webVersion = game.facts.find((fact) => fact.id === CoreFact.WebGame && inEngineWebFolder(fact));
+  return webVersion && exportsToWebFolder(game.facts) ? webVersion.path : null;
+}
+
+/**
+ * A game as its plugins' tools and skills read it: a Unity or Godot game's web version left out,
+ * since it is the build its engine exports and no web game's tool or know-how fits it. Any other
+ * game is as it is.
  */
 export function withoutEngineWebVersion(game: GameKind): GameKind {
   const web = engineWebFolderOf(game);
@@ -311,20 +328,22 @@ export function withoutEngineWebVersion(game: GameKind): GameKind {
 }
 
 /**
- * A Unity or Godot game's web version among `found` (the folder's facts before settling, which drops
- * a web game below another): its web game in `ENGINE_WEB_FOLDER`; null for any other game.
+ * An engine game's web version among `found` (the folder's facts before settling, which drops a web
+ * game below another): its web game in `ENGINE_WEB_FOLDER`, for a Unity or Godot game and for an
+ * Unreal game whose folder holds its own web build; null for any other game.
  */
 export function engineWebVersion(listed: readonly FactRef[], found: readonly ProjectFact[]): ProjectFact | null {
-  if (!listed.some((fact) => WEB_EXPORTING.has(fact.id))) return null;
+  if (!exportsToWebFolder(listed, found)) return null;
   return found.find((fact) => fact.id === CoreFact.WebGame && inEngineWebFolder(fact)) ?? null;
 }
 
 /**
- * A Unity or Godot game's listed facts with its web version (`engineWebVersion`) as its web game. A
- * web game at the root beside it is left out when it is Genex's web starter page nobody built on
- * (`starterAtRoot`), whether or not the game's port was recorded; a root page of the folder's own,
- * or a web game built from the starter, keeps its place and the facts are returned as they are, as
- * are any other game's.
+ * An engine game's listed facts with its web version (`engineWebVersion`) as its web game. A web
+ * game at the root beside it is left out when it is Genex's web starter nobody built on
+ * (`starterAtRoot`: the starter's page as it was made, or only the starter's record with the page
+ * gone), whether or not the game's port was recorded; a root page of the folder's own, or a web game
+ * built from the starter, keeps its place and the facts are returned as they are, as are any other
+ * game's.
  */
 export function withEngineWebVersion(
   listed: readonly ProjectFact[],
@@ -413,24 +432,12 @@ export function servedFacts(game: GameKind): FactRef[] {
 export const servedAsWebGame = (game: GameKind): boolean => hasFact(servedFacts(game), CoreFact.WebGame, ROOT);
 
 /**
- * How a Loop works on a project: the web method (an integration copy, builders, judges, landing) or
- * in place. Persisted in `autopilot_started.profile`: never rename a value.
+ * How a Loop worked on its project: in place (`open`, as every Loop does now), or in an integration
+ * copy (`web`, a web game's Loop an earlier Genex ran, read for history). Persisted in
+ * `autopilot_started.profile`: never rename a value.
  */
 export const LoopProfile = { Web: "web", Open: "open" } as const;
 export type LoopProfile = (typeof LoopProfile)[keyof typeof LoopProfile];
-
-/** The facts a web Loop's folder may hold beside its page. */
-export const WEB_LOOP_FACTS: ReadonlySet<string> = new Set<string>([CoreFact.WebGame, CoreFact.BlenderAssets]);
-
-/**
- * The profile a Loop on a game takes: web when a web game is served at its root (one with no kind
- * yet is) and every fact it is served by is one a web Loop's folder may hold; open otherwise (an
- * engine's project or plugin anywhere, a plugin's kind, or no web game at the root).
- */
-export function loopProfileOf(game: GameKind): LoopProfile {
-  const webOnly = servedFacts(game).every((fact) => WEB_LOOP_FACTS.has(fact.id));
-  return servedAsWebGame(game) && webOnly ? LoopProfile.Web : LoopProfile.Open;
-}
 
 /**
  * A game as a scope reads it: one given by its facts alone (`[]`: no kind yet), by its facts and

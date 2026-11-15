@@ -8,7 +8,7 @@ import path from "node:path";
 import type { BuildProblem } from "../../shared/build-problem.ts";
 import type { AgentScreen, AgentScreenFrame } from "../../shared/agent-screen.ts";
 import type { PermissionMode } from "../../shared/permissions.ts";
-import type { PluginAppliedSet, PluginBinding } from "../../shared/plugins.ts";
+import type { PluginBinding } from "../../shared/plugins.ts";
 import type { LiveToolResult } from "../../substrate/engines/types.ts";
 import type { GameProject } from "../../substrate/game-workspace.ts";
 import type { SecretPort } from "../../substrate/mcp/store.ts";
@@ -23,10 +23,8 @@ import type { AssetCall } from "./asset-calls.ts";
 import type { AssetService } from "./assets.ts";
 import type { ChatPermissionService } from "./chat-permissions.ts";
 import type { SteerDoor } from "./chat-steer.ts";
-import type { CapabilityAudience } from "../planning-capabilities.ts";
 import type { ConversationService } from "./conversation.ts";
 import type { CutOffCall } from "./cut-off-calls.ts";
-import type { UnsavedFile } from "./unsaved-files.ts";
 import type { DelegationService } from "./delegation.ts";
 import type { StudioSettings } from "./settings.ts";
 import type { ObserverService } from "./observers.ts";
@@ -134,11 +132,6 @@ export interface WorkInFlight {
    * made them, until that thread's next delegated session is told of them (`cut-off-calls.ts`).
    */
   readonly cutOffCalls: Map<string, CutOffCall[]>;
-  /**
-   * Files too large to save that a thread's chat said a checkpoint or a rewind left, until that
-   * thread's next delegated session is told of them (`unsaved-files.ts`).
-   */
-  readonly unsavedFiles: Map<string, UnsavedFile[]>;
   /**
    * One contractor per *directory* (live game folder or facet worktree), keyed by resolved cwd.
    * The first live build proved why a dir takes a lock: a crash mid-delegation left the
@@ -263,6 +256,8 @@ export interface CoreViews {
   readonly mcpSecrets: SecretPort | null;
   readonly settings: StudioSettings;
   readonly started: boolean;
+  /** The agents' start in flight (the sandbox, then the harness), settled either way; null when none runs. */
+  readonly agentsStarting: Promise<void> | null;
   readonly toolRegistryRevision: number;
 }
 
@@ -272,18 +267,10 @@ export interface CoreChecks {
   assertNoLinkBelow(base: string, target: string): Promise<void>;
   /** Abort the connector calls in scope: a Stop's (`stop`, the default), or a turn's end (`turn`), which a lead's call outlives. */
   cancelConnectorCalls(binding?: { project?: string; threadId?: string }, by?: "stop" | "turn"): void;
-  capabilityFacts(
-    threadId: string,
-    project: string | null | undefined,
-    audience: CapabilityAudience,
-  ): Promise<{ revision: number; text: string }>;
+  capabilityFacts(threadId: string, project: string | null | undefined): Promise<{ revision: number; text: string }>;
   indexEvent(event: EventEnvelope): void;
   readyProject(project: GameProject): Promise<GameProject>;
   recordToolRevision(threadId: string, engine: string, revision?: number): Promise<void>;
-  /** `engine`'s session `session` answered a brief that handed it `applied` (`ConnectionService.recordDelivered`). */
-  recordDeliveredTools(threadId: string, engine: string, session: string, applied: PluginAppliedSet): Promise<void>;
-  /** The plugins and skills `engine`'s session `session` on this thread was last handed (`ConnectionService.lastApplied`). */
-  lastAppliedTools(threadId: string, engine: string, session: string): Promise<PluginAppliedSet | undefined>;
   setGameCover(
     project: string,
     args: Record<string, unknown>,
@@ -345,7 +332,6 @@ export function idleWork(): WorkInFlight {
     assetCalls: new Map(),
     activeMoments: new Map(),
     cutOffCalls: new Map(),
-    unsavedFiles: new Map(),
     activeDelegations: new Map(),
     gameChanges: new Map(),
     activeRunIds: new Set(),

@@ -10,9 +10,8 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { agentBrief } from "../../src/harness-seed/loop/unreal/agent-prompts.ts";
-import { AgentKind } from "../../src/harness-seed/loop/unreal/lead-contract.ts";
 import { TOOLSET_OF } from "../../src/plugins/unreal/loop-tools.ts";
+import { EnginePlayFindingCode } from "../../src/shared/engine-play.ts";
 import { checkPython, GENEX_NAMES } from "../../src/plugins/unreal/python-check.ts";
 
 const FIXTURES = path.resolve("tests/fixtures/unreal-helper");
@@ -79,36 +78,6 @@ test("every editor tool the Loop sends to the Genex editor helper is one of its 
   for (const [tool, toolset] of routed) assert.ok(names[toolset]?.includes(tool), `${toolset} has no tool ${tool}`);
 });
 
-/** Each import tool's parameters, in order, as the build toolset declares them. */
-const IMPORT_PARAMS = `import inspect, json
-from genex_build.tools import GenexBuildTools
-names = ['import_model', 'import_character', 'import_animation', 'import_sound']
-print(json.dumps({n: list(inspect.signature(getattr(GenexBuildTools, n)).parameters) for n in names}))`;
-
-test("a sub-agent's brief writes every import call with every argument the build tools take", { skip: SKIP }, () => {
-  const run = spawnSync("python3", ["-c", IMPORT_PARAMS], PYTHON);
-  assert.equal(run.status, 0, run.stderr);
-  const params = JSON.parse(run.stdout) as Record<string, string[]>;
-  const brief = agentBrief({
-    kind: AgentKind.BlenderModel,
-    title: "Katana",
-    brief: "A katana.",
-    game: "Night Spire",
-    folder: "assets/agents/blender_model-1",
-    cppFolder: null,
-    inputs: [],
-    engine: "claude-code",
-  });
-  // The manifest's example import call: Unreal's tool schema has no defaults, so it passes them all.
-  const example = /"import_model (\{.*\})"/.exec(brief)?.[1]?.replace(/\\"/g, '"') ?? "{}";
-  assert.deepEqual(Object.keys(JSON.parse(example)), params.import_model);
-  for (const [tool, names] of Object.entries(params))
-    assert.ok(
-      brief.includes(`${tool} {${names.join(", ")}`),
-      `the brief names ${tool}'s arguments: ${names.join(", ")}`,
-    );
-});
-
 /** The public names of the `genex` module `apply_part` hands a part's apply.py. */
 const LIST_GENEX = `import json
 from genex_loop import part_api
@@ -122,25 +91,54 @@ test("apply.py's check knows exactly the names of the helper's genex module", { 
   assert.deepEqual(JSON.parse(run.stdout), [...GENEX_NAMES].sort());
 });
 
-/** Unreal 5.8.3's own names for every class the stub models (make_real_names.py). */
-const REAL_NAMES = path.join(FIXTURES, "real-names-5.8.json");
+/** The finding codes the helper's play detectors send. */
+const LIST_FINDING_CODES = `import json
+from genex_play import detect
+print(json.dumps(sorted(detect.CODES)))`;
+
+test("the play's detectors send exactly the app's finding codes", { skip: SKIP }, () => {
+  const run = spawnSync("python3", ["-c", LIST_FINDING_CODES], PYTHON);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout), Object.values(EnginePlayFindingCode).sort());
+});
+
+/**
+ * Each supported Unreal's own names for every class the stub models (make_real_names.py): 5.8.3's,
+ * and 5.9.0's, exported from its Third Person and Vehicle templates.
+ */
+const REAL_NAMES_BY_RELEASE = [
+  ["5.8", "real-names-5.8.json"],
+  ["5.9", "real-names-5.9.json"],
+] as const;
 /** The helper's packages agents call into the editor through; `*_math.py` modules are pure and touch no engine. */
+/** Helper files that call no engine: the pilot's runtime calls the pilot's own methods (look, moves, a move's run). */
+const ENGINE_FREE = new Set(["pilot.py", "pilot_kit.py"]);
 const ENGINE_FACING = ["genex_build", "genex_play"].flatMap((pkg) =>
   readdirSync(path.join(HELPER_PYTHON, pkg))
-    .filter((file) => file.endsWith(".py") && !file.endsWith("_math.py"))
+    .filter((file) => file.endsWith(".py") && !file.endsWith("_math.py") && !ENGINE_FREE.has(file))
     .map((file) => path.join(pkg, file)),
 );
 
-test("python-check finds every Unreal name the build and play tools use among Unreal 5.8's own", {
-  skip: SKIP,
-}, async () => {
-  assert.ok(ENGINE_FACING.includes(path.join("genex_build", "terrain.py")), ENGINE_FACING.join(", "));
-  for (const file of ENGINE_FACING) {
-    const source = readFileSync(path.join(HELPER_PYTHON, file), "utf8");
-    const problems = await checkPython({ python: "python3", names: REAL_NAMES }, source);
-    assert.deepEqual(problems, [], `${file}: ${problems.map((p) => `line ${p.line}: ${p.message}`).join("; ")}`);
-  }
-});
+for (const [release, file] of REAL_NAMES_BY_RELEASE) {
+  test(`python-check finds every Unreal name the build and play tools use among Unreal ${release}'s own`, {
+    skip: SKIP,
+  }, async () => {
+    assert.ok(ENGINE_FACING.includes(path.join("genex_build", "terrain.py")), ENGINE_FACING.join(", "));
+    for (const module of ENGINE_FACING) {
+      const source = readFileSync(path.join(HELPER_PYTHON, module), "utf8");
+      const problems = await checkPython({ python: "python3", names: path.join(FIXTURES, file) }, source);
+      assert.deepEqual(problems, [], `${module}: ${problems.map((p) => `line ${p.line}: ${p.message}`).join("; ")}`);
+    }
+  });
+
+  test(`the stub the helper's tests run against offers only what Unreal ${release}'s Python has`, {
+    skip: SKIP,
+  }, () => {
+    const env = { ...PYTHON.env, GENEX_REAL_NAMES: file };
+    const run = spawnSync("python3", ["-m", "unittest", "test_stub_matches_unreal"], { ...PYTHON, env });
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  });
+}
 
 for (const name of modules) {
   test(`Genex editor helper Python: ${name}`, { skip: SKIP }, () => {

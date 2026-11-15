@@ -160,7 +160,7 @@ export interface PluginTool {
  * A program Studio itself runs for a manifest tool instead of your backend. Reserved for the
  * bundled Genex plugin on API 3; any other plugin that names one is refused.
  */
-export type PluginHostTool = "genex-cli" | "genex-cli-paid" | "genex-package";
+export type PluginHostTool = "genex-cli" | "genex-cli-paid" | "genex-package" | "genex-room";
 
 /**
  * Who may call a tool (API 3): `agents`, the default, or `harness`: only Genex's own harness loop
@@ -431,7 +431,8 @@ export interface PluginManifest {
   capabilities: string[];
   tools: PluginManifestTool[];
   skills: PluginSkill[];
-  panels: Array<{ id: string; title: string; file: string; placement: "settings" | "project" }>;
+  /** `width: "narrow"`: the panel is one short list, so the dialog that opens it from the stage strip is Studio's narrow one. */
+  panels: Array<{ id: string; title: string; file: string; placement: "settings" | "project"; width?: "narrow" }>;
   settings: Array<{
     key: string;
     label: string;
@@ -611,6 +612,8 @@ export interface PluginHostCall {
   (method: "project.write", args: { path: string; text: string }): Promise<{ file: string }>;
   (method: "assets.deliver", args: { output: string; jobId: string }): Promise<string[]>;
   (method: "export.stage"): Promise<PluginExportResult>;
+  /** The bound game's room module alone, staged beside where its public copy would go, with no web export. */
+  (method: "export.room"): Promise<Pick<PluginExportResult, "genex">>;
   (method: "jobs.read", args: { id: string }): Promise<unknown>;
   (method: "jobs.write", args: { id: string; value: unknown }): Promise<true>;
   (method: "events.emit", args: PluginEvent): Promise<true>;
@@ -696,6 +699,14 @@ export interface PluginHostCall {
    */
   (method: "game.engine.canAssist"): Promise<boolean>;
   /**
+   * `game-engine`: computer control for the bound game's chat, for an agent that must click in an app
+   * (a game's own menus during a playtest): when it is off, Genex asks the person on its card to turn
+   * it on (then macOS's own grants) and starts the chat's next turn with `task`; when it is on, it
+   * answers `already-on` and posts nothing. It grants no app: each still asks on its own card. A
+   * plugin that did not come with Genex reaches it only on the person's own call.
+   */
+  (method: "game.computer.control", args: PluginEngineAssistArgs): Promise<PluginEngineAssistAnswer>;
+  /**
    * `game-engine`: whether the bound game's chat still runs the turn your Do it for me started:
    * false once that turn has ended (answered, failed or taken back), or after 20 minutes. Use it to
    * end a progress display the agent never ended. Throws where the host has no assists.
@@ -709,7 +720,14 @@ export interface PluginEngineAssistArgs {
 }
 
 /** Why `game.engine.assist` started nothing. */
-export type PluginEngineAssistRefusal = "unavailable" | "declined" | "no-chat" | "not-person" | "no-apps" | "in-assist";
+export type PluginEngineAssistRefusal =
+  | "unavailable"
+  | "declined"
+  | "no-chat"
+  | "not-person"
+  | "no-apps"
+  | "in-assist"
+  | "already-on";
 
 /** `game.engine.assist`'s answer: whether the chat's turn started, and why not. */
 export interface PluginEngineAssistAnswer {
@@ -844,6 +862,8 @@ export type Activate = (host: PluginHost) => PluginActivation | Promise<PluginAc
 /** What `studioPlugin.call('context')` answers inside a panel frame. */
 export interface PluginPanelContext {
   project: string | null;
+  /** The open game's title as Genex shows it; null with no game, absent from older hosts. */
+  title?: string | null;
   apiVersion: PluginApiVersion;
   theme: {
     background: string;

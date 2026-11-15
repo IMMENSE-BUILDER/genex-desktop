@@ -900,6 +900,70 @@ it("targeted edits refuse ambiguous matches and preserve the remainder of a file
   }
 });
 
+it("targeted edits match CRLF file content when model sends LF text and preserves CRLF endings", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "bonsai-edit-crlf-"));
+  const cwd = path.join(root, "game");
+  await mkdir(cwd);
+  await writeFile(path.join(cwd, "main.js"), "line1\r\nline2\r\nline3\r\n");
+  let n = 0;
+  const session = new LocalSessions({
+    root: path.join(root, "sessions"),
+    protectedPaths: [],
+    contextWindow: 16384,
+    complete: async () => {
+      n++;
+      if (n === 1)
+        return reply("", [
+          {
+            id: "crlf-edit",
+            name: "edit_file",
+            arguments: { path: "main.js", oldText: "line2\n", newText: "line2_modified\n" },
+          },
+        ]);
+      return reply("Done");
+    },
+  });
+  try {
+    assert.equal((await session.run({ cwd, prompt: "edit" }, model)).ok, true);
+    const result = await readFile(path.join(cwd, "main.js"), "utf8");
+    assert.equal(result, "line1\r\nline2_modified\r\nline3\r\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("targeted edits convert multiline LF replacement to CRLF when matching as-is in a CRLF file", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "bonsai-edit-crlf-multiline-"));
+  const cwd = path.join(root, "game");
+  await mkdir(cwd);
+  await writeFile(path.join(cwd, "main.js"), "line1\r\nline2\r\nline3\r\n");
+  let n = 0;
+  const session = new LocalSessions({
+    root: path.join(root, "sessions"),
+    protectedPaths: [],
+    contextWindow: 16384,
+    complete: async () => {
+      n++;
+      if (n === 1)
+        return reply("", [
+          {
+            id: "crlf-multiline-edit",
+            name: "edit_file",
+            arguments: { path: "main.js", oldText: "line2", newText: "line2a\nline2b" },
+          },
+        ]);
+      return reply("Done");
+    },
+  });
+  try {
+    assert.equal((await session.run({ cwd, prompt: "edit" }, model)).ok, true);
+    const result = await readFile(path.join(cwd, "main.js"), "utf8");
+    assert.equal(result, "line1\r\nline2a\r\nline2b\r\nline3\r\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("context capacity follows host memory without restricting 32 GiB Macs to 16K", () => {
   assert.equal(bonsaiContextWindow(32 * 1024 ** 3), 102400);
   assert.equal(bonsaiContextWindow(64 * 1024 ** 3), 102400);
@@ -1321,34 +1385,8 @@ it("a local Loop chat keeps its contractor tools and records a launch for Studio
     await rm(root, { recursive: true, force: true });
   }
 });
-it("a local Loop chat that keeps reading is told to finish or launch, not to implement", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "bonsai-loop-idle-"));
-  const cwd = path.join(root, "game");
-  await mkdir(cwd);
-  await writeFile(path.join(cwd, "main.js"), "// existing");
-  let turns = 0;
-  const seen: string[] = [];
-  const sessions = new LocalSessions({
-    root: path.join(root, "sessions"),
-    protectedPaths: [],
-    contextWindow: 16384,
-    complete: async (r) => {
-      seen.push(r.messages.map((m) => m.content).join("\n"));
-      return reply("", [{ id: `r${turns++}`, name: "read_file", arguments: { path: "main.js" } }]);
-    },
-  });
-  try {
-    await sessions.run({ cwd, prompt: "What engine should this use?", interviewTools: [launchTool] }, model);
-    const nudge = seen.find((s) => s.includes("Progress check: 6")) ?? "";
-    // Flipped (phase 5): no "Finish now" hurry; the chat is told which tool starts the build, as a fact.
-    assert.match(nudge, /go on, or reply with what you found or what you need\. start_autopilot starts the build\./);
-    assert.doesNotMatch(nudge, /Finish now/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
 
-it("a local Auto chat that keeps reading is never nudged to start the Loop it may start only when asked", async () => {
+it("a local chat handed a Loop's start that keeps reading is nudged to go on, never told which tool starts a build", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "bonsai-auto-idle-"));
   const cwd = path.join(root, "game");
   await mkdir(cwd);
@@ -1365,8 +1403,7 @@ it("a local Auto chat that keeps reading is never nudged to start the Loop it ma
     },
   });
   try {
-    const autoLaunch = { ...launchTool, onlyWhenAsked: true };
-    await sessions.run({ cwd, prompt: "Make the sky darker", interviewTools: [autoLaunch] }, model);
+    await sessions.run({ cwd, prompt: "Make the sky darker", interviewTools: [launchTool] }, model);
     const nudge = seen.find((s) => s.includes("Progress check: 6")) ?? "";
     assert.match(nudge, /go on, or reply with what you found or what you need/);
     assert.doesNotMatch(nudge, /start_autopilot/);

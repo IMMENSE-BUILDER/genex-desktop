@@ -143,7 +143,8 @@ try {
   });
   await check("Studio shows its own chat beside Activity and preserves unsent game text", async () => {
     await op(i, "type", { selector: '[aria-label="Prompt"]', text: "Unsent game idea", replace: true });
-    await op(i, "click", { selector: 'nav [data-thread="studio"]' });
+    // ⌘2 opens Harness: its sidebar row is hidden for now (#654).
+    await op(i, "key", { surface: "desktop", key: "2", code: "Digit2", modifiers: ["Meta"] });
     await until(
       async () => (await snap(i)).state.room === "studio" && (await snap(i)).controls.some((c) => c.label === "Prompt"),
       "Studio chat",
@@ -306,7 +307,7 @@ try {
     }, "scroll reset");
   });
   await capture(i, "build");
-  await op(i, "click", { selector: 'nav [data-thread="studio"]' });
+  await op(i, "key", { surface: "desktop", key: "2", code: "Digit2", modifiers: ["Meta"] });
   await until(async () => (await snap(i)).state.room === "studio", "Review");
   await check("an empty Activity says what Harness is and leads back to the game", async () => {
     // Activity loads after the room opens; the empty state is what it settles on.
@@ -339,7 +340,7 @@ try {
   const history = await start("history", "build-history");
   await pressStageView((selector) => op(history, "click", { selector }), "builds");
   await until(async () => (await snap(history)).stage.stageView === "builds", "Builds");
-  await check("build revision details open and close independently", async () => {
+  await check("the build's card opens without developer details", async () => {
     await until(async () => {
       try {
         await op(history, "click", { scope: "[data-stage-view]", selector: '[data-graph-node="final"]' });
@@ -348,20 +349,8 @@ try {
         return false;
       }
     }, "the build node loaded");
-    const details = '[data-graph-panel="final"] [data-panel-row="technical-details"]';
-    await op(history, "click", { scope: "[data-stage-view]", selector: details });
-    const detail = await snap(history, '[data-stage-view] [data-testid="build-details"]');
-    assert.match(detail.text, /Available revision:/);
-    assert.match(detail.text, /recorded integration/);
-    await op(history, "click", { scope: "[data-stage-view]", selector: details });
-    await until(async () => {
-      try {
-        await snap(history, '[data-stage-view] [data-testid="build-details"]');
-        return false;
-      } catch {
-        return true;
-      }
-    }, "technical details closed");
+    const card = await snap(history, '[data-stage-view] [data-graph-panel="final"]');
+    assert.doesNotMatch(card.text, /Technical details|recorded integration/);
     await op(history, "click", {
       scope: "[data-stage-view]",
       selector: '[data-graph-panel="final"] button[aria-label="Close (Esc)"]',
@@ -370,7 +359,7 @@ try {
   await check("Studio round trip preserves the selected build history", async () => {
     await openBuildFromChat(history, "fixture-build-1");
     const selected = (await snap(history)).stage.selectedRun;
-    await op(history, "click", { selector: 'nav [data-thread="studio"]' });
+    await op(history, "key", { surface: "desktop", key: "2", code: "Digit2", modifiers: ["Meta"] });
     await until(async () => (await snap(history)).state.room === "studio", "Studio");
     await op(history, "key", { surface: "desktop", key: "1", code: "Digit1", modifiers: ["Meta"] });
     await until(async () => (await snap(history)).state.room === "build", "game workspace");

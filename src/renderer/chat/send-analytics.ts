@@ -4,7 +4,13 @@
  * the words are measured and compared, never sent.
  */
 import { chatMemory, takeComposedFiles } from "../analytics/chat-memory.ts";
-import { forgetSend, noteMessageSent, type SendFacts, sendBlockedProperties } from "../analytics/chat-properties.ts";
+import {
+  forgetSend,
+  noteMessageSent,
+  noteSendWent,
+  type SendFacts,
+  sendBlockedProperties,
+} from "../analytics/chat-properties.ts";
 import {
   ComposerRoom,
   type SendBlock,
@@ -17,7 +23,6 @@ import { AnalyticsEvent } from "../analytics/events.ts";
 import { elapsedMs } from "../analytics/properties.ts";
 import { SendFailure } from "../../shared/composer.ts";
 import { errorCodeIn } from "../../shared/errors.ts";
-import { loopCommissions } from "../loop-setting.ts";
 import { parseModelKey } from "../model-key.ts";
 import type { ComposerExtras } from "../ui/PromptBar.tsx";
 import type { ChatPanelProps } from "./chat-panel-props.ts";
@@ -47,18 +52,9 @@ export interface RoutedSend {
   clientId?: string | undefined;
 }
 
-/** Who a send came from when its caller does not say: Keep building's own, else the composer. */
-export const sourceOf = (extras: ComposerExtras | undefined): SendSource =>
-  extras?.autopilot?.keepBuilding ? SendSource.KeepBuilding : SendSource.Composer;
-
 /** The room a chat's composer sits in. */
 export const chatRoom = (chat: Pick<ChatThread, "isStudioThread">): ComposerRoom =>
   chat.isStudioThread ? ComposerRoom.Studio : ComposerRoom.Game;
-
-/** The pictures a send carries: the composer's, else the Loop's mood board. */
-function pictures(extras: ComposerExtras | undefined): number {
-  return extras?.frames?.length || extras?.autopilot?.frames.length || 0;
-}
 
 /** What `message_sent` is built from. */
 export function sendFacts(parts: SendParts, send: RoutedSend): SendFacts | null {
@@ -66,7 +62,6 @@ export function sendFacts(parts: SendParts, send: RoutedSend): SendFacts | null 
   const thread = chat.threadId;
   if (!thread) return null;
   const engine = parseModelKey(send.key).engine;
-  const autopilot = send.extras?.autopilot;
   return {
     thread,
     clientId: send.clientId,
@@ -78,9 +73,8 @@ export function sendFacts(parts: SendParts, send: RoutedSend): SendFacts | null 
     key: send.key,
     engineKind: props.engines.find((candidate) => candidate.id === engine)?.kind,
     effort: composer.model.plannerEffort,
-    loop: { on: Boolean(autopilot), hours: autopilot?.hours ?? null },
-    planReview: Boolean(send.extras?.reviewPlan || autopilot?.reviewPlan),
-    pictures: pictures(send.extras),
+    planReview: Boolean(send.extras?.reviewPlan),
+    pictures: send.extras?.frames?.length ?? 0,
     files: takeComposedFiles(chatMemory, thread),
     mentions: send.extras?.mentions?.length ?? 0,
     text: send.text,
@@ -89,11 +83,16 @@ export function sendFacts(parts: SendParts, send: RoutedSend): SendFacts | null 
   };
 }
 
-/** Send went nowhere: why, in which chat, and on which engine. */
-export function trackSendBlocked(parts: Pick<SendParts, "chat">, reason: SendBlock, key: string | null): void {
+/** Send went nowhere: why, in which chat, on which engine, and what a Genex model still needs. */
+export function trackSendBlocked(
+  parts: Pick<SendParts, "chat" | "composer">,
+  reason: SendBlock,
+  key: string | null,
+): void {
+  const genexNeed = parts.composer.gate.genex?.need ?? null;
   track(
     AnalyticsEvent.MessageSendBlocked,
-    sendBlockedProperties(chatMemory, { reason, room: chatRoom(parts.chat), key }),
+    sendBlockedProperties(chatMemory, { reason, room: chatRoom(parts.chat), key, genexNeed }),
   );
 }
 
@@ -124,11 +123,13 @@ function tracking(parts: SendParts, send: RoutedSend): SendTracking {
   const at = Date.now();
   const properties = noteMessageSent(chatMemory, facts, at);
   return {
-    sent: () => track(AnalyticsEvent.MessageSent, properties),
+    sent: () => {
+      noteSendWent(chatMemory);
+      track(AnalyticsEvent.MessageSent, properties);
+    },
     failed: (error) => {
       forgetSend(chatMemory, facts.thread, send.clientId);
-      const input = { autopilot: loopCommissions(parts.chat.run), ...(send.extras ? { extras: send.extras } : {}) };
-      const block = sendBlockOf(parts.composer.model, send.key, input);
+      const block = sendBlockOf(parts.composer.model, send.key);
       if (block) {
         trackSendBlocked(parts, block, send.key);
         return;

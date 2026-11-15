@@ -7,6 +7,7 @@
  * (`game-bridge-target.ts`), or, for a game played in its engine's editor, the engine plugin's
  * play tools (`editor-play-target.ts`).
  */
+import type { FastDecider } from "../../shared/fast-decisions.ts";
 import { type AgentScreen, type AgentScreenRole, ScreenDeed } from "../../shared/agent-screen.ts";
 import {
   BROWSER_CAPABILITIES,
@@ -32,7 +33,7 @@ import {
   type TargetSource,
 } from "./computer-session.ts";
 import { type EngineLauncher, gameBridgeSource } from "./game-bridge-target.ts";
-import { type EnginePlayCall, editorPlaySource } from "./editor-play-target.ts";
+import { type EnginePlayCall, editorPlaySource, type ShrinkShot } from "./editor-play-target.ts";
 import type { FramePort, PreviewService } from "./previews.ts";
 import { iterationDir } from "./run-shots.ts";
 import type { SessionPort } from "./session-port.ts";
@@ -40,7 +41,6 @@ import type { SessionPort } from "./session-port.ts";
 /** The tool's own wording for each screen role. */
 const TOOL_ROLE: Record<AgentScreenRole, ComputerToolRole> = {
   builder: "builder",
-  director: "director",
   operator: "operator",
 };
 
@@ -62,9 +62,6 @@ export interface ComputerTools {
   onLiveTool: NonNullable<DelegateRequest["onLiveTool"]>;
   ensureLoaded: (force?: boolean) => Promise<ComputerLoad>;
   screen: () => AgentScreen;
-  /** The build the window shows; the director's `look` moves it. */
-  root: () => string;
-  retarget: (root: string) => void;
   /** What the session's trace adds up to so far. */
   trace: () => ComputerTraceSummary;
   /** How the game runs: the browser window, or its own Play Protocol process. */
@@ -112,6 +109,10 @@ export interface ComputerToolsOptions {
     call: EnginePlayCall;
     caps?: TargetCapabilities;
     afterOpen?: (opened: unknown) => Promise<void>;
+    /** Re-encodes a play shot too large to show (Electron's JPEG codec). */
+    shrink?: ShrinkShot;
+    /** The fast decision model a pilot's asks go to, when one is set up in Settings (optional). */
+    decider?: () => Promise<FastDecider | null>;
   };
 }
 
@@ -139,8 +140,6 @@ function toolsOver<T extends ComputerTarget>(
       return { port: parts.portOf(loaded.target), problem: loaded.problem, note: loaded.note };
     },
     screen: parts.screen,
-    root: () => session.root(),
-    retarget: (next: string) => session.retarget(next),
     trace: () => session.trace(),
     runtime: parts.caps.runtime,
     release: parts.release,

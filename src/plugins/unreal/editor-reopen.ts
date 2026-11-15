@@ -1,10 +1,13 @@
 /**
- * Reopening Unreal after it crashed, for the Unreal Loop (a C++ crash can leave the crash reporter
- * open, and a hot reload can point the project's `UnrealEditor.modules` at a library the restored
- * Source no longer matches). `reopen-editor` starts a background job, one per project: it ends what
- * is left of this project's editor and its crash reporter, builds the game's C++ module with
- * UnrealBuildTool when it has one, opens the project (the panel's Open, which waits for a free
- * port) and waits until it answers. `editor-state` says whether the game's Unreal answers, whether
+ * Reopening Unreal after a restore, and when an agent opens it (a C++ crash can leave the crash
+ * reporter open, and a hot reload can point the project's `UnrealEditor.modules` at a library the
+ * restored Source no longer matches). `reopen-editor` (a restore's after step) and the agent's
+ * `open-editor` start a background job, one per project: it ends what is left of this project's
+ * editor and its crash reporter, updates an outdated Genex editor helper while Unreal is closed,
+ * builds the game's C++ module with UnrealBuildTool when it has one (an agent's Open only when it
+ * asks, or while the last build failed; on a Mac with Xcode, or on Windows with Microsoft's C++
+ * tools, where without them Unreal opens on its last build), opens the project (the panel's Open, which waits for a
+ * free port) and waits until it answers. `editor-state` says whether the game's Unreal answers, whether
  * this project's editor process runs (an editor busy on its game thread answers nothing for a
  * while, yet hasn't crashed), how reopening goes and where the project's Genex editor helper stands
  * against the plugin's. `end-editor` ends this project's editor and its crash reporter the same way
@@ -46,7 +49,8 @@ import {
   runJob,
 } from "./editor-restart.ts";
 import { HelperState, inspectProject, type SetupOptions, updateHelper } from "./setup.ts";
-import { type CompileOptions, type CompileResult, canCompileCpp, compileEditor } from "./ubt.ts";
+import { type CompileOptions, type CompileResult, canCompileCpp, compileEditor, cppToolsState } from "./ubt.ts";
+import type { VisualStudioStatus } from "./visual-studio.ts";
 import type { XcodeStatus } from "./xcode.ts";
 
 /** Where reopening a game's Unreal stands: wire values the Loop's runner reads (its `ReopenState`). */
@@ -84,9 +88,12 @@ export type ProcessEnv = {
 /** What reopening needs from the computer, the editor and the clock. */
 export type ReopenDeps = RestartDeps & {
   platform: NodeJS.Platform;
-  engine(): Promise<{ version: string; directory: string } | undefined>;
+  /** The installed engine `game`'s tools run with: its project's own, else the newest supported one. */
+  engine(storage: string, game: string): Promise<{ version: string; directory: string } | undefined>;
   project(storage: string, game: string): Promise<string | undefined>;
   xcode(engineDir: string | undefined): Promise<Pick<XcodeStatus, "state"> & Partial<Pick<XcodeStatus, "app">>>;
+  /** Where Microsoft's C++ tools stand on Windows, which build the module there; none off Windows. */
+  visualStudio?(engineDir: string | undefined): Promise<Pick<VisualStudioStatus, "state">>;
   /** Builds the project's editor target; UnrealBuildTool's own unless a test stands in. */
   compile?(options: CompileOptions): Promise<CompileResult>;
   /** This computer's processes; without them, nothing is ended. */
@@ -119,6 +126,8 @@ const CRASH_FOLDER_REST = /^-pid-\d{1,10}-[0-9A-Fa-f]{8,64}$/;
 const FOLDER_ARGUMENT = /^([^\s"/]*)\/?(?=$|[\s"])/;
 const BEFORE_ARGUMENT = /[\s"]/;
 const MAC = "darwin";
+/** The computers Genex builds a game's C++ module on before it opens Unreal: a Mac (Xcode) and Windows (Microsoft's tools). */
+const BUILDS_MODULE: ReadonlySet<NodeJS.Platform> = new Set<NodeJS.Platform>([MAC, StudioPlatform.Windows]);
 const PS = "/bin/ps";
 export const PS_TIMEOUT_MS = 10 * SECOND_MS;
 const PS_MAX_BYTES = 16 * 1024 * 1024;
@@ -129,8 +138,8 @@ const REOPEN_STATES = { running: ReopenState.Reopening, done: ReopenState.Done, 
 const MESSAGE = {
   NoProject: "This game isn't linked to an Unreal project, so there is no Unreal to reopen.",
   NoEngine: "No supported Unreal is installed, so Genex can't build the game's C++ module and didn't reopen Unreal.",
-  CannotCompile: (xcode: string) =>
-    `This Mac can't build the game's C++ module (Xcode: ${xcode}), so Genex didn't reopen Unreal on modules that may not match the game's code.`,
+  CannotCompile: (tools: string) =>
+    `This computer can't build the game's C++ module (${tools}), so Genex didn't reopen Unreal on modules that may not match the game's code.`,
   NotEnded:
     "Unreal's crashed editor or its crash reporter for this game didn't end even when killed, so Genex didn't reopen it. Ask the user to force-quit it (Option-Command-Esc), then call unreal__open-editor.",
   EditorNotEnded:
@@ -146,7 +155,7 @@ const MESSAGE = {
 /** The project's name, as Unreal names its log and its crash folders. */
 const projectName = (project: string) => path.parse(project).name;
 
-/** The folders Unreal writes this project's crash reports in: the installed engine's, and the project's own. */
+/** The folders Unreal writes this project's crash reports in: its engine's (by `version`), and the project's own. */
 function crashFolders(home: string, version: string | undefined, project: string): string[] {
   const own = path.join(path.dirname(project), "Saved", "Crashes");
   if (version === undefined) return [own];
@@ -218,8 +227,8 @@ function send(env: ProcessEnv, pid: number, signal: NodeJS.Signals) {
 /**
  * One reopen job's game, the engine whose crash folder may hold its reports, whether it brings an
  * outdated Genex editor helper up to the plugin's while Unreal is closed, and whether it builds the
- * game's C++ module first (the Loop's reopen after a crash; an agent's Open leaves that to Unreal's
- * own Open, which builds a hot-reloaded module).
+ * game's C++ module first (a restore's reopen; an agent's Open only when it asks or the last build
+ * failed, else leaving that to Unreal's own Open, which builds a hot-reloaded module).
  */
 type ReopenTarget = RestartTarget & {
   engine: { version: string; directory: string } | undefined;
@@ -258,29 +267,50 @@ async function endOwn(deps: ReopenDeps, target: ReopenTarget, notEnded: string):
 
 /**
  * Builds the game's C++ module with Unreal closed, so the project's module list and library match
- * its Source again; a Blueprint project has nothing to build, and off a Mac Unreal builds it itself.
+ * its Source again; a Blueprint project has nothing to build, and on a computer that builds no C++
+ * (Linux) Unreal builds it itself. A Mac without a ready Xcode is refused; Windows without
+ * Microsoft's C++ tools opens Unreal on the module its last build left, as it did before Genex built
+ * C++ there.
  */
-async function buildModule(deps: ReopenDeps, target: ReopenTarget): Promise<void> {
+async function buildModule(deps: ReopenDeps, target: ReopenTarget, unbuilt: Unbuilt): Promise<void> {
   const module = await projectModule(target.project);
-  if (!module || deps.platform !== MAC) return;
+  if (!module || !BUILDS_MODULE.has(deps.platform)) return;
   const { engine } = target;
   if (!engine) throw new Error(MESSAGE.NoEngine);
   const xcode = await deps.xcode(engine.directory);
-  if (!canCompileCpp(xcode, deps.platform)) throw new Error(MESSAGE.CannotCompile(xcode.state));
+  const visualStudio = await deps.visualStudio?.(engine.directory).catch(() => undefined);
+  const tools = { xcode, visualStudio };
+  if (canCompileCpp(tools, deps.platform)) return compileModule(deps, target, { module, engine, xcode }, unbuilt);
+  if (deps.platform === MAC) throw new Error(MESSAGE.CannotCompile(cppToolsState(tools, deps.platform)));
+}
+
+/** Builds the module with the engine and Xcode found; a failure keeps the project in `unbuilt`. */
+async function compileModule(
+  deps: ReopenDeps,
+  target: ReopenTarget,
+  found: { module: string; engine: { directory: string }; xcode: Partial<Pick<XcodeStatus, "app">> },
+  unbuilt: Unbuilt,
+): Promise<void> {
+  const { module, engine, xcode } = found;
   const compile = deps.compile ?? compileEditor;
   const options = { engineDir: engine.directory, projectFile: target.project, module, xcodeApp: xcode.app ?? null };
   const result = await compile(options);
-  if (!result.ok) throw new Error(MESSAGE.NotBuilt(`${result.summary}${buildErrors(result)}`));
+  if (result.ok) {
+    unbuilt.delete(target.project);
+    return;
+  }
+  unbuilt.add(target.project);
+  throw new Error(MESSAGE.NotBuilt(`${result.summary}${buildErrors(result)}`));
 }
 
 /**
  * The reopen job: end what is left, build the module, open the project and wait until it answers.
  * The crashed editor never answered again, so Genex's record that it was opening it goes first.
  */
-async function reopenNow(deps: ReopenDeps, target: ReopenTarget): Promise<void> {
+async function reopenNow(deps: ReopenDeps, target: ReopenTarget, unbuilt: Unbuilt): Promise<void> {
   await endOwn(deps, target, MESSAGE.NotEnded);
   if (target.helper) await updateOutdated(deps, target);
-  if (target.build !== false) await buildModule(deps, target);
+  if (target.build !== false) await buildModule(deps, target, unbuilt);
   await deps.restart.forget?.(target.storage, target.project);
   await openAndWait(deps, target, MESSAGE.NotAnswering);
 }
@@ -297,6 +327,9 @@ async function updateOutdated(deps: ReopenDeps, target: ReopenTarget): Promise<v
 /** Where reopening stands for each project, by its .uproject. */
 type Jobs = Map<string, Reopening>;
 
+/** The projects whose C++ module the last build left failing, by .uproject: an agent's Open builds them first. */
+type Unbuilt = Set<string>;
+
 /** Whether Genex itself is restarting a project's Unreal now (adding its C++ module), by its .uproject. */
 type Restarting = (project: string) => boolean;
 
@@ -311,25 +344,31 @@ type ReopenAsk = { storage: string; game: string; helper: boolean; build: boolea
 
 /**
  * Starts reopening the game's Unreal unless it already answers or a job already reopens it; with
- * `helper`, an outdated Genex editor helper is updated while Unreal is closed.
+ * `helper`, an outdated Genex editor helper is updated while Unreal is closed, and with `build` the
+ * game's C++ module is built first. An agent's Open while the last build of the module failed
+ * builds it too, asked or not: the agent may just have fixed that code, and Unreal's own Open would
+ * load the library the last good build left. A reopen that failed for anything else (Xcode not
+ * ready, an editor that wouldn't end) leaves the agent's Open as it asked.
  */
 async function startReopen(
   deps: ReopenDeps,
   jobs: Jobs,
   ask: ReopenAsk,
   restarting: Restarting,
+  unbuilt: Unbuilt,
 ): Promise<ReopenAnswer> {
-  const { storage, game, helper, build } = ask;
+  const { storage, game, helper } = ask;
   const project = await deps.project(storage, game);
   if (!project) throw new Error(MESSAGE.NoProject);
+  const build = ask.build || unbuilt.has(project);
   // Genex's own restart (adding the C++ module) opens Unreal again itself: no second editor, no second build.
   if (jobs.get(project)?.state === ReopenState.Reopening || restarting(project)) return { started: true };
   if (await answering(deps, { storage, game }).catch(() => false)) return { answering: true };
   // Another call may have started the job while this one asked.
   if (jobs.get(project)?.state === ReopenState.Reopening) return { started: true };
-  const engine = await deps.engine();
+  const engine = await deps.engine(storage, game);
   const target = { storage, game, project, engine, helper, build };
-  runJob(jobs, project, REOPEN_STATES, deps.now, () => reopenNow(deps, target));
+  runJob(jobs, project, REOPEN_STATES, deps.now, () => reopenNow(deps, target, unbuilt));
   return { started: true };
 }
 
@@ -391,29 +430,33 @@ async function endEditor(
   const project = await deps.project(storage, game);
   if (!project) throw new Error(MESSAGE.NoProjectToEnd);
   if (reopeningOf(jobs, project, restarting).state === ReopenState.Reopening) throw new Error(MESSAGE.Reopening);
-  const engine = await deps.engine();
+  const engine = await deps.engine(storage, game);
   const ended = await endOwn(deps, { storage, game, project, engine }, MESSAGE.EditorNotEnded);
   if (!(await silent(deps, storage, game))) throw new Error(MESSAGE.StillAnswers);
   return { ended };
 }
 
 /**
- * The runner's `reopen-editor`, `editor-state` and `end-editor` and the agent's `open-editor` over one set of reopen jobs, and
+ * The harness's `reopen-editor`, `editor-state` and `end-editor` and the agent's `open-editor` over one set of reopen jobs, and
  * whether the game's editor process runs (null: can't tell, or no linked project). While Genex
  * itself restarts a project's Unreal (`restarting`: adding its C++ module), it reads as reopening:
- * health waits for it, a crash step starts nothing, and nothing ends it.
+ * health is pending, no reopen starts a second editor or build, and nothing ends it.
  */
 export function createReopenTools(deps: ReopenDeps, restarting: Restarting = () => false) {
   const jobs: Jobs = new Map();
+  const unbuilt: Unbuilt = new Set();
   return {
     reopen: (storage: string, game: string, helper = false) =>
-      startReopen(deps, jobs, { storage, game, helper, build: true }, restarting),
+      startReopen(deps, jobs, { storage, game, helper, build: true }, restarting, unbuilt),
     /**
      * An agent's Open as a reopen job: what is left of the project's editor and crash reporter
-     * ended, then the project opened (Unreal's own Open builds a hot-reloaded module) and waited for.
+     * ended, an outdated helper updated while Unreal is closed (as the panel's Open does), then the
+     * project opened (Unreal's own Open builds a hot-reloaded module; with `build`, or while the last
+     * build of the module failed, the job builds it first, and a build that fails leaves Unreal
+     * closed with its errors) and waited for.
      */
-    open: (storage: string, game: string) =>
-      startReopen(deps, jobs, { storage, game, helper: false, build: false }, restarting),
+    open: (storage: string, game: string, build = false) =>
+      startReopen(deps, jobs, { storage, game, helper: true, build }, restarting, unbuilt),
     state: (storage: string, game: string) => editorState(deps, jobs, { storage, game }, restarting),
     end: (storage: string, game: string) => endEditor(deps, jobs, { storage, game }, restarting),
     running: async (storage: string, game: string) => {

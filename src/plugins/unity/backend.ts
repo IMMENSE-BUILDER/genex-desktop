@@ -14,10 +14,11 @@
  * - `open-editor`, `quit-editor` and `restart-editor`: open the game's project in the Unity it was
  *   saved with (`editor-open.ts`), save its editor's work and quit it (`editor-quit.ts`), or end a
  *   stalled editor first, saving what an answering one can; the person confirms a restart.
- * - `save-all`, `end-editor`, `reopen-editor`, `editor-state`, `open-for-run`, `after-run`,
- *   `scene-shots` and `editor-activity`: the steps at Genex's moments and the editor lock's probe
- *   (`editor-moments.ts`). Once a run ended, the backend looks every half minute for an editor Genex
- *   opened for a run that nobody uses any more, and closes it (`editor-idle.ts`).
+ * - `save-all`, `end-editor`, `reopen-editor`, `editor-state`, `after-run`, `scene-shots` and
+ *   `editor-activity`: the steps at Genex's moments and the editor lock's probe
+ *   (`editor-moments.ts`). None opens the editor: a run's lead opens it with `open-editor`. Once a
+ *   run ended, the backend looks every half minute for an editor Genex's agent opened that nobody
+ *   uses any more, and closes it (`editor-idle.ts`).
  *
  * The person reaches the same project through the plugin's panel and its toolbar button, whose
  * actions answer in codes the panel words itself: `status` and `toolbar-status` only look
@@ -42,7 +43,14 @@ import { getUnityLaunch, systemOpener, UnitySource } from "./editor-launch.ts";
 import { createComputerPlay } from "./computer-play.ts";
 import { endEditor, firstSetup } from "./editor-life.ts";
 import { quitEditor } from "./editor-quit.ts";
-import { CLOSE_IDLE_SETTING, closeIdleEditors, IDLE_LOOK_MS } from "./editor-idle.ts";
+import {
+  CLOSE_IDLE_SETTING,
+  closeIdleEditors,
+  IDLE_LOOK_MS,
+  rememberLaunch,
+  runGoesOn,
+  runMarksOnce,
+} from "./editor-idle.ts";
 import {
   afterRun,
   editorActivity,
@@ -50,7 +58,6 @@ import {
   endForRestore,
   type Moment,
   type MomentDeps,
-  openForRun,
   reopenEditor,
   saveAll,
   sceneShots,
@@ -102,7 +109,6 @@ export const UnityTool = {
   EndEditor: "end-editor",
   ReopenEditor: "reopen-editor",
   EditorState: "editor-state",
-  OpenForRun: "open-for-run",
   AfterRun: "after-run",
   SceneShots: "scene-shots",
   EditorActivity: "editor-activity",
@@ -210,6 +216,7 @@ const MESSAGE = {
         : `It has no Genex project yet, and builds don't need one: GenexGame.Slug (Assets/Genex/GenexGame.cs) takes it from Genex's Play and from the published web page, so the copies a publish sends join their rooms with no second build. To test online in the editor or in a build you start yourself, publish first, then call unity__multiplayer again with slug (genex__publish-status names it).`,
       kept.length ? `Kept your changed ${kept.join(", ")} beside the new ones as .mine~.` : "",
       "Write the game's online play now, as the unity-multiplayer skill says (unity__skill): GenexMultiplayer.Connect or GenexMatchmaker with GameId = GenexGame.Slug (never a slug read from GenexSettings.json alone), WebGL identity from the page and native identity through GenexNativeIdentity(GenexGame.ApiUrl, slug); then check it compiles in the editor.",
+      "For competitive play, write a server-authoritative room instead, as the skill's section 5 says: server/room.ts, its authority block in genex.json, GenexAuthority.Connect, and genex__room to validate and play it with bots; never mix it with the relay.",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -243,7 +250,7 @@ const MESSAGE = {
   NothingToUndo:
     "Genex added nothing to this project's manifest that is still as it wrote it, so nothing was taken back.",
   LoadsWhenForward:
-    "Unity has this project open: bring Unity to the front so it loads the package (ask the user to), then call unity-editor__list_commands.",
+    "Unity has this project open: bring Unity to the front so it loads the package (the desktop tool's bring_to_front; without it, ask the user to), then call unity-editor__list_commands.",
   NotEnded:
     "Unity could not be ended, so it was not opened again: ask the user to quit Unity, then call unity__open-editor.",
   OpenedForManifest: (version: string) =>
@@ -302,7 +309,7 @@ const PANEL_MESSAGE = {
 const OPENING: Record<Opened, (opening: Opening) => string> = {
   [Opened.Answers]: () => "It is already open in Unity and answers.",
   [Opened.SeemsOpen]: () =>
-    "Unity has this project open, but its Pipeline server does not answer yet: it is still starting, or it has not loaded the package. Call again in a moment; if it stays so, ask the user to bring Unity to the front.",
+    "Unity has this project open, but its Pipeline server does not answer yet: it is still starting, or it has not loaded the package. Call again in a moment; if it stays so, bring Unity to the front with the desktop tool's bring_to_front (without it, ask the user to).",
   [Opened.Ready]: () => "the editor answers now. Build through the unity-editor tools, list_commands first.",
   [Opened.NotYet]: () =>
     "Unity is not ready yet (a first start imports the project and downloads its packages): when a unity-editor call says the project is not open or Unity is busy, call again in a moment.",
@@ -319,15 +326,19 @@ const storageOf = (context: PluginContext): Promise<string> => context.host(Host
 
 /**
  * Finds the bound game's Unity project and keeps it for the editor connector, or forgets the one
- * kept when the folder holds none. It answers at Genex's moments too, where a thrown error would
- * hold a turn: trouble is a note, never a block.
+ * kept when the folder holds none. At a run's moments (its start and its lead's turns) it also tells
+ * the idle close that the run is under way, so an editor Genex opened for an earlier run is in use
+ * again. It answers at Genex's moments too, where a thrown error would hold a turn: trouble is a
+ * note, never a block.
  */
 async function findProject(deps: UnityBackendDeps, context: PluginContext): Promise<FindProjectAnswer> {
   const { project: game, directory } = context;
   if (!game || !directory) return { found: false };
   try {
     const project = await findUnityProject(directory);
-    await rememberProject(await storageOf(context), game, project, deps.now);
+    const storage = await storageOf(context);
+    await rememberProject(storage, game, project, deps.now);
+    if (project && context.hook?.runId !== undefined) await runGoesOn(storage, game, project.root);
     return project ? { found: true, folder: folderInGame(project) } : { found: false };
   } catch (error) {
     return { found: false, note: MESSAGE.NotKept(errorMessage(error)) };
@@ -515,11 +526,17 @@ function openedWords(opening: Opening, did: string): string {
   return `${said}${setAsideWords(opening)}`;
 }
 
-/** The agent's `open-editor`: the game's project open in its own Unity, once it has the Pipeline package. */
+/**
+ * The agent's `open-editor`: the game's project open in its own Unity, once it has the Pipeline
+ * package. An editor it launched while a run is under way on the game is remembered as Genex's own,
+ * so once that run ends the idle close may close it (`editor-idle.ts`); one it launched with no run
+ * under way, or one already open, stays the person's.
+ */
 async function openEditor(deps: UnityBackendDeps, context: PluginContext): Promise<string> {
   const { id, project } = await projectOf(deps, context);
   if (!(await pipelineVersionOf(project.root).catch(() => undefined))) return MESSAGE.NoPipeline;
   const opening = await openProject(deps, project, await openingOf(deps, context, id));
+  if (launched(opening)) await rememberLaunch(await storageOf(context), id, project.root);
   return openedWords(opening, "Opened this game's Unity project");
 }
 
@@ -622,30 +639,37 @@ export function createUnityBackend(deps: UnityBackendDeps): PluginActivation {
     return installing;
   };
   const watchIdle = idleWatch(deps);
+  const forgetOldMarks = runMarksOnce();
+  /** A tool that reads or writes a run mark, after this backend forgot the ones an earlier one left. */
+  const withFreshMarks =
+    <T>(handler: (context: PluginContext) => Promise<T>) =>
+    async (context: PluginContext) => {
+      await forgetOldMarks(await storageOf(context));
+      return handler(context);
+    };
   const atMoment =
     <T>(handler: (moment: Moment, momentDeps: MomentDeps) => Promise<T>) =>
     async (context: PluginContext) =>
       handler(await momentOf(context), deps);
   const tools: Record<UnityTool, (context: PluginContext, args: Record<string, unknown>) => Promise<unknown>> = {
-    [UnityTool.FindProject]: (context) => findProject(deps, context),
+    [UnityTool.FindProject]: withFreshMarks((context) => findProject(deps, context)),
     [UnityTool.EngineStatus]: async () => readinessOf(await findEditors(deps.editors)),
     [UnityTool.NewGame]: (context) => newGame(deps, context),
     [UnityTool.Setup]: (context) => setup(deps, context),
     [UnityTool.UndoSetup]: (context) => undo(deps, context),
-    [UnityTool.OpenEditor]: (context) => openEditor(deps, context),
+    [UnityTool.OpenEditor]: withFreshMarks((context) => openEditor(deps, context)),
     [UnityTool.RestartEditor]: (context) => restartEditor(deps, context),
     [UnityTool.QuitEditor]: atMoment(quitEditor),
     [UnityTool.SaveAll]: atMoment(saveAll),
     [UnityTool.EndEditor]: atMoment(endForRestore),
     [UnityTool.ReopenEditor]: atMoment(reopenEditor),
     [UnityTool.EditorState]: atMoment(editorState),
-    [UnityTool.OpenForRun]: atMoment(openForRun),
-    [UnityTool.AfterRun]: async (context) => {
+    [UnityTool.AfterRun]: withFreshMarks(async (context) => {
       const moment = await momentOf(context);
       const answer = await afterRun(moment, deps, await closeIdleOn(context));
       watchIdle(moment.storage);
       return answer;
-    },
+    }),
     [UnityTool.SceneShots]: atMoment(sceneShots),
     [UnityTool.EditorActivity]: atMoment(editorActivity),
     [UnityTool.ShowSteps]: async (context) => showSteps(deps, await installerOf(context), context),

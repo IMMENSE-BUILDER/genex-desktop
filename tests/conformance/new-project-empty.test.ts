@@ -263,6 +263,28 @@ describe("new projects start empty", () => {
     assert.equal((await listed(bundled.name)).holds, FolderHolds.OwnFiles);
   });
 
+  it("the design a new game gets before it is built keeps it without a kind: asked, designed, then built as a web game", async () => {
+    const designed = await lite.core.createGame("Kite Designed");
+    await mkdir(path.join(designed.dir, "docs", "design", "world"), { recursive: true });
+    await writeFile(path.join(designed.dir, "docs", "design", "01-pitch.html"), "<h1>Kite</h1>");
+    await writeFile(path.join(designed.dir, "docs", "design", "world", "hill.png"), "PNG");
+    const dropped = await lite.core.createGame("Kite Dropped");
+    await mkdir(path.join(dropped.dir, "docs", "design", "from-you"), { recursive: true });
+    await writeFile(path.join(dropped.dir, "docs", "design", "from-you", "sky.jpg"), "JPEG");
+    for (const game of [designed, dropped]) {
+      const now = await listed(game.name);
+      assert.deepEqual(now.facts, [], `${game.name}: no facts`);
+      assert.equal(now.holds, FolderHolds.Nothing, `${game.name}: its design board is not the folder's own files`);
+      assert.equal(kindPendingGame(now), true, `${game.name}: Live's first-idea state`);
+    }
+    await api()[HostMethod.GameStart]({ project: designed.name, starter: ProjectStarter.Web });
+    assert.equal(await has(designed.dir, "index.html"), true, "a designed game takes the starter when it is built");
+    assert.equal(await has(path.join(designed.dir, "docs", "design"), "01-pitch.html"), true, "and keeps its design");
+    // A docs/ folder with pages of the person's own beside the board is theirs.
+    await writeFile(path.join(dropped.dir, "docs", "manual.html"), "<h1>Manual</h1>");
+    assert.equal((await listed(dropped.name)).holds, FolderHolds.OwnFiles);
+  });
+
   it("a game folder that can't be read, or is gone, has no kind pending", async () => {
     const locked = await lite.core.createGame("Kite Locked");
     await lite.core.games.start(locked.name, ProjectStarter.Web);
@@ -455,7 +477,9 @@ describe("new projects start empty", () => {
       };
       await handleRunStart(studioOf(run.ctx) as never, { type: "run_start", threadId: "t-2", run: run2 } as never);
       const started = run.sequence((method) => method === HostMethod.GameStart || method === HostMethod.GameScaffold);
-      assert.deepEqual(started, starts ? [HostMethod.GameStart, HostMethod.GameScaffold] : [HostMethod.GameScaffold]);
+      // Flipped (one Loop): the web Loop scaffolded its game again before building in a copy; the one
+      // Loop builds in the game folder the start wrote, so nothing is scaffolded.
+      assert.deepEqual(started, starts ? [HostMethod.GameStart] : []);
       if (starts) assert.deepEqual(run.paramsOf(HostMethod.GameStart)[0], { project: "moth", starter: "web" });
     }
   });
@@ -619,7 +643,6 @@ function studioOf(ctx: ReturnType<typeof ctxRecorder>["ctx"]) {
   return {
     host: { ...ctx.host, heartbeat: () => {} },
     cancels: new Set<string>(),
-    attachedPictures: new Map(),
     activeRuns: new Map(),
     startingRuns: new Map(),
     orphanRuns: new Map(),

@@ -13,6 +13,7 @@ import type { CodexLoginController } from "../codex-login.ts";
 import type { CliLogin, OpenCodeLogin, PiLogin, SubscriptionEngine } from "../login-controllers.ts";
 import type { IpcHandle } from "./registrar.ts";
 import { EngineId } from "../../shared/providers.ts";
+import { CodexLoginProblem } from "../../shared/codex-login.ts";
 import { LoginSource } from "../../shared/engine-descriptor.ts";
 import { SECOND_MS } from "../../shared/duration.ts";
 import { NEW_ACCOUNT, type SubscriptionAccountView } from "../../shared/subscription-accounts.ts";
@@ -51,6 +52,7 @@ export interface LoginIpcDeps {
   piLogin: PiLogin;
   grokLogin: CliLogin;
   cursorLogin: CliLogin;
+  antigravityLogin: CliLogin;
   /** The Cursor engine, to sign it out; null while none is registered. */
   cursor(): CursorAccount | null;
   subscription(id: string): SubscriptionEngine | null;
@@ -70,6 +72,7 @@ export function registerLoginIpc(
     piLogin,
     grokLogin,
     cursorLogin,
+    antigravityLogin,
     cursor,
     subscription,
     busy,
@@ -102,7 +105,8 @@ export function registerLoginIpc(
     if (id === EngineId.Codex) {
       return changeCodexAccount(async () => {
         const state = await codexLogin.start(await codexSignInHome(engine, payload?.account));
-        return { started: state.phase !== "failed", error: state.error };
+        const missingCli = state.problem === CodexLoginProblem.MissingCli;
+        return { started: state.phase !== "failed", error: state.error, ...(missingCli ? { missingCli } : {}) };
       });
     }
     // The Terminal login signs in where the CLI keeps its own: no config folder named.
@@ -143,6 +147,9 @@ export function registerLoginIpc(
     pushUiEvent({ type: UiEvent.EnginesChanged, payload: { engine: EngineId.Cursor } });
     return engine.status();
   });
+
+  // Antigravity's own Google sign-in in its Settings row's terminal: the next session asks the CLI again.
+  handle("studio:antigravity.signin", async () => antigravityLogin.start());
 
   handle("studio:codex-login.state", async () => codexLogin.snapshot());
   handle("studio:codex-login.cancel", async () => {

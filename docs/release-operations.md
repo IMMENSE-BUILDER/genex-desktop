@@ -24,7 +24,7 @@ license. Keep provenance for copied sources and runtime downloads.
 ## Package and authorize
 
 `npm run package` creates a local app; `npm run make` creates installers: dmg and zip on macOS;
-deb, rpm and zip on Linux, which needs `rpm` installed; a Squirrel `Setup.exe` on Windows. Use a
+deb, rpm and zip on Linux, which needs `rpm` installed (the rpm skips rpmbuild's strip step, which fails on a Windows library the app ships: `scripts/package-rpm-spec.cjs`); a Squirrel `Setup.exe` on Windows. Use a
 checkout with its own `node_modules` (a symlinked one is refused). Check free disk first. Run `npm run test:packaged` against the exact app.
 An ad-hoc macOS package is not Developer ID/notarization acceptance. The release workflow has
 separate macOS and Windows signing paths; an unsigned artifact must be labelled unsigned.
@@ -195,6 +195,15 @@ place there. The exception is a `.deb` or `.rpm` installed since the Genex packa
 its maintainer scripts (`build/linux/postinst`, `rpm-post`) add packages.genex.games with the
 key the package carries (`build/linux/genex-archive-keyring.asc`), and the system's updates bring
 the next version, so the app asks nothing (`UpdateMode.System`).
+
+When a check fails, Genex asks the same feed address itself (`probeFeed`), so the failure says
+whether the feed is out of reach (`ERR_NAME_NOT_RESOLVED` where a network blocks
+update.electronjs.org), refused, or answered while Squirrel failed (a download that never ends, after
+which every hourly check is refused as already running). From the second failure in a row
+(`OFFER_DOWNLOAD_AFTER_FAILURES`) it asks GitHub's `releases/latest` and offers a newer release's page
+as a download, as on Linux, so a copy no installer reaches still gets the fix; a downloaded update
+replaces that offer. A Windows copy without Squirrel's `Update.exe` beside it (run from a copied or
+unpacked folder), where Electron answers every check "Can not find Squirrel", asks GitHub only.
 
 The first check runs at launch, before the core starts (10 s later on a fresh Windows install's
 first launch, while Squirrel holds its lock), so a start that fails, waits on Set up or hangs still

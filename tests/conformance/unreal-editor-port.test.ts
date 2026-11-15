@@ -165,6 +165,25 @@ const EPIC_INITIALIZE = {
   serverInfo: { name: "", title: "", version: "" },
 };
 
+/**
+ * Epic's initialize answer as UE 5.9 builds it: the server names itself and says which editor it is
+ * (`ModelContextProtocolServer.cpp`, `ModelContextProtocolUtils.cpp`).
+ */
+const EPIC_NAMED_INITIALIZE = {
+  protocolVersion: "2025-06-18",
+  capabilities: { resources: {}, tools: { listChanged: true } },
+  serverInfo: { name: "unreal-mcp", version: "5.9.0-60351404" },
+  _meta: {
+    "com.epicgames.unrealengine/instance": {
+      instanceId: "0b6a4a52-9d3c-4f0e-8a51-6f1f4f8f2d10",
+      processId: 4242,
+      engineVersion: "5.9.0-60351404",
+      projectName: "Lantern",
+      projectFile: "/games/Lantern/Lantern.uproject",
+    },
+  },
+};
+
 /** A JSON-RPC answer to an MCP request, the way Epic's server sends it. */
 function rpc(response: ServerResponse, body: string, result: unknown, session?: string) {
   const { id } = JSON.parse(body);
@@ -275,7 +294,17 @@ const answering: Array<{ name: string; serve: (elsewhere: Served) => Promise<Ser
     answers: false,
   },
   { name: "a server that accepts and never answers", serve: silentServer, answers: false },
+  {
+    name: "a server that takes Epic's name and offers no resources",
+    serve: () => mcpServer({ ...EPIC_NAMED_INITIALIZE, capabilities: { tools: { listChanged: true } } }),
+    answers: false,
+  },
   { name: "Epic's Unreal MCP", serve: epicMcp, answers: true },
+  {
+    name: "Epic's Unreal MCP naming itself, as 5.9 does",
+    serve: () => mcpServer(EPIC_NAMED_INITIALIZE),
+    answers: true,
+  },
 ];
 
 describe("Unreal is answering", () => {
@@ -718,6 +747,21 @@ describe("remembering a project's last good answer", () => {
     const quick = await Promise.race([answers(PORT, GAME), delay(200).then(() => "waited")]);
     assert.equal(quick, true);
     assert.equal(editor.asks.length, 2, "the editor is asked again in the background");
+  });
+
+  it("within 2 s of a good answer, a check says yes without asking the editor again", async () => {
+    // Every call to the editor checks first: at a few calls a second, a check per call doubled the
+    // editor's work, each request waiting for one of its frames.
+    const editor = standInCheck();
+    let clock = 0;
+    const answers = rememberAnswers(editor.check, () => clock);
+    assert.equal(await answers(PORT, GAME), true);
+    clock += 1_500;
+    assert.equal(await answers(PORT, GAME), true);
+    assert.equal(editor.asks.length, 1, "no ask while the answer is this fresh");
+    clock += 1_000;
+    assert.equal(await answers(PORT, GAME), true);
+    assert.equal(editor.asks.length, 2, "asked again in the background once it is older");
   });
 
   it("one failed ask after a good one doesn't flip the answer; the next call asks and believes it", async () => {

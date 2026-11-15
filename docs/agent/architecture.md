@@ -19,6 +19,7 @@ bundled plugin ([plugins](../plugins.md#the-bundled-unity-plugin)).
 | Harness child | [`src/harness-seed/`](../../src/harness-seed/), booted by [`src/harness-boot/bootstrap.mjs`](../../src/harness-boot/bootstrap.mjs) | Untrusted: the in-app agent rewrites it. Plain Node under `ProcessSandbox`. |
 | Contractors (coding CLIs) | [`src/substrate/engines/`](../../src/substrate/engines/) | Vendor harnesses briefed by the studio; see [Residual risks](#residual-risks). |
 | Game pages | [`src/main/preview.ts`](../../src/main/preview.ts), [`src/page/`](../../src/page/) | Untrusted web content in a closed partition. |
+| Design pages | [`src/main/design-pages.ts`](../../src/main/design-pages.ts), [`src/renderer/panels/design/`](../../src/renderer/panels/design/) | Untrusted agent-written HTML in closed frames of the main window: no script of its own, no network ([design board](../design-board.md#what-a-page-may-do)). |
 | Plugin backends, MCP servers | [`src/substrate/plugins/`](../../src/substrate/plugins/), [`src/substrate/mcp/`](../../src/substrate/mcp/) | Trusted native code the user approved; a process is crash isolation, not a sandbox. |
 | Terminal hosts | [`src/main/terminal-host.ts`](../../src/main/terminal-host.ts) | One Electron utility process per node-pty session, as the user. |
 | CLI installers | [`src/substrate/cli-installer.ts`](../../src/substrate/cli-installer.ts) | Vendor installers, unsandboxed. |
@@ -54,8 +55,7 @@ host for arrives over the harness RPC, which is therefore an untrusted surface:
   `engine.interrupt` are unchecked on purpose: their `cwd` is only a key into running delegations.
 - Adoption, which widens the sandbox, is not on the RPC: only user-consented host flows call
   `sandbox.allowWrite`.
-- Only whoever answers the person in a game chat asks them: its own Claude session, or a build's
-  lead or the run's coordinator, in the chat's mode
+- Only whoever answers the person in a game chat asks them: its own Claude session, or a build's lead, in the chat's mode
   ([tool permissions](../tool-permissions.md)), decided from the host's records. The harness makes no threads; `events.append` and
   `turn.append` refuse `tool_permission` and `plugin_consent` rows. No agent process writes a
   game's `.claude` folder; no landing or promotion brings one.
@@ -222,7 +222,7 @@ or `as never`.
 
 **Seed contracts.** The app never loads [`src/harness-seed/`](../../src/harness-seed/), and nothing
 under `src/shared` resolves where the seed runs. A rule both apply has a typed host copy in
-`src/shared` — the coordinator's tools and run reading (`coordinator.ts`), the follow-up queue
+`src/shared` — the chat's run controls and run reading (`chat-run.ts`), the follow-up queue
 (`message-queue.ts`) and the model-role tables and presets (`model-roles.ts`) — and the seed keeps
 its own. `tests/conformance/seed-contracts.test.ts`
 and `tests/conformance/providers.test.ts` replay the same inputs through both copies. Another
@@ -248,8 +248,8 @@ drives the stores with `tests/helpers/fake-studio-api.ts`. See the
 [store recipe](recipes.md#zustand-store).
 
 **Layout.** A large panel is a folder of its parts beside its entry component:
-`panels/inspector/` (`RunInspector.tsx`'s sheets), `panels/run-graph/` (`RunGraph.tsx`'s nodes,
-gates and camera), `panels/stage/` (`PreviewPanel.tsx`'s body and strip), `panels/plugins/` and
+`panels/inspector/` (`RunInspector.tsx`'s sheets), `panels/run-graph/` (`RunGraph.tsx`'s list,
+its rows and status bar), `panels/stage/` (`PreviewPanel.tsx`'s body and strip), `panels/plugins/` and
 `panels/connectors/`. `panels/ChatPanel.tsx` keeps its parts in `chat/`: its hooks are
 `chat/use-*.ts` (wired by `use-chat-panel.ts`), sending routes in `send-route.ts`, the
 conversation in `ChatConversation.tsx`. First launch is `onboarding/` (pure
@@ -285,10 +285,10 @@ the [feature map](feature-map.md). A file a chat names links once main confirms 
 (`renderer/chat-files.ts`, `main/chat-files.ts`); programs are only shown.
 
 **Composer.** What the composer's controls show is specified in the
-[prompt composer design](design.md#prompt-composer). Each chat keeps its own Loop
-(`storageKeyFor.threadLoop`, [`loop-setting.ts`](../../src/renderer/loop-setting.ts)), pinned on open
-from the last pick (`studio.composer.loop`, `studio.autopilotHours`); Mode around a build is in the
-[feature map](feature-map.md) (∞ is `budgets.untilSatisfied`, its 24 h `wallClockMs` a ceiling). The
+[prompt composer design](design.md#prompt-composer). It has no Loop control: a send carries
+text, pictures, plan review and the message's `roles`, and the chat's agent decides whether to start
+a Loop (`start_autopilot`), which runs with no time limit, or for the time the person named
+([what ends a Loop](../harness-runtime.md#what-ends-a-loop)). The
 permissions pill (`ComposerPermissionMenu`) sets a Claude chat's mode. A
 saved `fast` preference is dropped. One composer effort (`ComposerEffort`,
 `effortScale`/`unifiedEffort` over the orchestrator's levels) is mapped per role by `nearestEffort`
@@ -299,7 +299,7 @@ fresh chats (roles stay per engine, preferences per model); `ComposerSendOptions
 ([plan limits](../connections-and-context.md#plan-limits)), read on open, then each minute. Stop
 (`studio:cancel`) aborts provider work after at most 5 s for a send on its way; the harness gets 5 s
 to acknowledge, then the oldest queued message runs; Escape never cancels a build
-(`composerEscapeIntent`). Wrapping up (`finish_run`, `studio:run.finish`) is not cancel. A fresh game
+(`composerEscapeIntent`). Wrapping up (`studio:run.finish`) is not cancel. A fresh game
 inherits `studio.model.last`; the Studio thread keeps `studio.studioChat.model` and its own keys,
 seeded once and never written back. Studio chat's `ModelMenu` has no `onRoles`.
 
@@ -324,18 +324,15 @@ questions and plan reviews pin above the composer (`chat/ChatQuestion.tsx`); onl
 confirmation calls the consent, permission or plan IPC.
 
 **Questions and Studio chat.** `ask_user` records a durable `interview_question` through both the
-direct tool registry and a Loop chat's delegated bridge; the provider turn ends, the answer arrives
-through the normal message queue and resumes the same session, and a question never launches a
-run by itself. Its commissioning options live in a thread artifact referenced by `intakeId`.
-Explicit Studio messages bypass game coordinators: `loop/studio-chat.ts` calls `engine.complete`
+direct tool registry and the delegated bridge, which hands it to a chat's session only while its
+game has no kind and a plugin on offers one; the provider turn ends, the answer arrives through the
+normal message queue and resumes the same session, and a question never launches a run by itself.
+Explicit Studio messages bypass game chats: `loop/studio-chat.ts` calls `engine.complete`
 with no tools, a bounded window, current attachments and host-owned `studio.context`; it never
 delegates or edits games, settings or harness files, and a blank reply is a durable error.
 
 **Stage, Live's gate and morning card.** During a run the stage stays where the user left
-it, and Live changes only through the user's own loads (the renderer's IPC, and `show_build` /
-`land_build` answering a still unanswered message of the person's, `ChatPermissionService.awaitsAnswer`,
-while Live, holding that game, is out of sight, `PreviewService.liveOutOfSight`; otherwise a show
-is offered by commit, `offerBuild`, and a landing lands and offers the folder). A harness preview call that names no window, or
+it, and Live changes only through the user's own loads (the renderer's IPC). A harness preview call that names no window, or
 the live view, reaches the stand-in (`STAND_IN_HANDLE`, a hidden window outside the lease count,
 opened on first use with what Live shows, closed after two idle minutes); only a build with no
 headless capability still drives Live. What the harness loads there, a checkpoint and a rewind
@@ -347,14 +344,16 @@ loaded it), and the stage reads the whole state on mount (`studio:live.behind`).
 (`stage.ts`, `stage/live-behind.ts`) adds the run's newest healthy build Live does not show and
 a shown build found broken, applies what main holds when Live is not watched, and swaps only the
 empty scaffold's first healthy build by itself. Live preview candidates load in a staging preview
-first; a candidate and a session never borrow Live when the pool is full, and a session never
-takes Live or the stand-in by a harness-named handle: it gets an overflow lease, at most
-`OVERFLOW_WINDOWS_MAX` past the pool's ceiling, and waits for a window beyond that. The morning card (`MorningCard.tsx` over `morning-words.ts`) is specified in
+first, the person's reserved window past the pool's ceiling (`PreviewActor.Person`), never Live. A
+session never takes Live or the stand-in, even by a harness-named handle: it gets an overflow
+lease, at most `OVERFLOW_WINDOWS_MAX` past the ceiling, then waits. The morning card (`MorningCard.tsx` over `morning-words.ts`) is specified in
 the [feature map](feature-map.md).
 
 **Covers.** `GameAvatar` paints every cover with one WebGL context (`ui/cover-animation.ts`,
 `ui/cover-stills.ts`; [feature map](feature-map.md)). Asset cards render thumbnails through a serialized decoder queue
-and dispose their WebGL contexts.
+and dispose their WebGL contexts. A thumbnail fills its frame (`thumbnail-fit.ts`) unless it is a
+model's or texture's render or see-through: main shrinks a picture to a JPEG, or a PNG when a pixel
+is see-through (`resizeStill`), and every reader names the type by the bytes.
 
 **Appearance.** [`src/renderer/appearance/`](../../src/renderer/appearance/) owns the versioned
 palette model, bounded JSON/JSONC interchange and the `studio.appearance.v1` preference; one
@@ -436,13 +435,12 @@ on another ready provider the job may cross to (`crossesTo`, [local models](../l
 [`src/shared/protocol.ts`](../../src/shared/protocol.ts)) and `withRoles` stamps `builderEngine`
 beside `judgeEngine` only when a slot is crossed. The loop never reads `run.engine` for a builder or
 critic: `roleEngine(run, role)` names the engine and `modelOn`/`plannerModel` a model that engine
-knows. The lead and the coordinator (session engines only) stay on the
+knows. The lead (session engines only) stays on the
 orchestrator's engine; workers go to the workers' engine; second opinions and reviewers go to the
 judges' engine. A worker's `usage_limit`/`rate_limit` becomes `state.workerLimit` (never
-`state.limit`, which pauses the run), reported as `workersEngineLimit`. A reopen resolves its
-message's picks with `withRoles`, planned on the session's model; the coordinator's keeps the
-build's (`reopenedRun`). An unready provider's remembered pick is kept; a Loop send with it is
-refused (`requireAvailableRoles`). Stored roles are versioned; another preset table's record is
+`state.limit`, which pauses the run), reported as `workersEngineLimit`. An unready provider's
+remembered pick is kept, and a send carries it in its `roles` without blocking the message: a role
+model that is missing never stops the chat. Stored roles are versioned; another preset table's record is
 replaced once. `tests/conformance/director-cross-engine.test.ts` runs a crossed run end to end.
 
 **One engine voice.** `toolCall(engine, name)` and `toolSyntax(engine)` in the seed's
@@ -470,9 +468,9 @@ checkpoints are specified in [local models](../local-models.md) and
 
 The harness is TypeScript run by type stripping, dependency-free, with `.ts` import specifiers; see
 the [harness runtime guide](../harness-runtime.md) and [src notes](../../src/AGENTS.md#harness-seed).
-The Loop (`loop/director.ts`, its parts in `loop/director/`, an open Loop's in
-`loop/director/open/`, the Unreal runner's in `loop/unreal/`) shares primitives from `loop/git.ts`,
-`health-check.ts`, `build-turn.ts`, `config.ts` and `outcomes.ts`, and its workers are
+The Loop (`loop/director.ts`, its parts in `loop/director/` and `loop/director/open/`) shares
+primitives from `loop/git.ts`,
+`health-check.ts`, `config.ts` and `outcomes.ts`, and its workers are
 `loop/workers/`; model-facing text sits in sibling `*-prompts.ts` modules.
 
 **Seed upgrades.** `applySeed` ([`src/substrate/seed-upgrade.ts`](../../src/substrate/seed-upgrade.ts),
@@ -551,7 +549,7 @@ agent's changes to its own files (`guardian.write_self`).
 
 The harness loop in [`src/harness-seed/loop/`](../../src/harness-seed/loop/). Product behavior is in
 the [builds and live product page](../product/builds-live.md); the chat's lifecycle is
-[the conversation's](../conversation-coordinator.md). Every loop fix gets an incident
+[the conversation's](../conversation-lifecycle.md). Every loop fix gets an incident
 row in `tests/conformance/harness-incidents.test.ts` ([recipe](recipes.md#harness-incident-fix)).
 
 **Plan review.** Composer commissions with Plan mode on are reviewed before execution by
@@ -562,49 +560,54 @@ clock while approval is pending; Cancel/Stop invalidates it; a waiting plan surv
 Approval dispatches the brief with the legacy `reviewPlan` flag cleared.
 
 **The Loop.** Every run is a Loop: its lead's session and the workers it may start
-(`loop/director.ts`, `loop/director/`) — on a web game in the run's integration worktree (at the base
-commit, or the prior integration head on a resume), on any other project in place
+(`loop/director.ts`, `loop/director/`), in the game folder on every project, a web game's too
 (`director/open/`). An engine that keeps no session of its own leads none: the run closes at once
-with `refusal: "needs_session"` (`run-dispatch.ts`). The web lead's tools: `run_status`, the pool's
-`worker_start`, `worker_status`, `worker_steer`, `worker_stop`, `worker_wait` and `worker_mark`,
-`judge` (a second opinion, `loop/second-opinion.ts`), `show`, `note`, `wrap_up` and `finish`. The
-studio forwards each call to the harness (`HarnessHost.dispatch`, `director_tool`). Rules:
+with `refusal: "needs_session"` (`run-dispatch.ts`). The lead's one tool list (`openTools`):
+`note`, `wrap_up`, `run_status`, the pool's `worker_start`, `worker_status`, `worker_steer`,
+`worker_stop`, `worker_wait` and `worker_mark`, `save_point`, `rewind` (and `restart` where a plugin
+restarts the app), `judge` (a second opinion, `loop/second-opinion.ts`), `pause` and `finish`. The
+studio forwards each call to the harness (`HarnessHost.dispatch`, `director_tool`); no lead is lent
+a preview window. Rules:
 
-- Every declared tool but `resolve_root` first syncs the head (`headSynced`) to the integration
-  head, kept on `refs/studio/runs/<runId>/integration`.
-- Workers are Genex's one worker pool (`loop/workers/`): a copy worker forks from the integration
-  head and `worker_mark used` merges its work back, then the one health check runs
-  (`director/integrate.ts` `afterMerge`, `loop/health-check.ts`: the host's `preview.observe` in a
-  window of the run's own). A lock is refused on a web Loop; past the cap, or once finish was asked,
-  no worker starts.
-- The wake loop (`loop/director/wake.ts`, rules `wake-schedule.ts`, words `wake-prompts.ts`): the
-  lead ends its turn and the harness resumes the session with a digest (the user's words verbatim,
-  what happened, where the run stands) when the user speaks or asks to finish, a worker ends or
-  asks, a job ends, the app crashes, a turn reaches its cap or the wrap-up is due; no heartbeat or
-  reminder wakes it, and a lead that ended a turn simply rests until one of those happens (an open Loop's lead
-  whose turn changed something is woken again at once); each wake appends `director_continued`.
+- Workers are Genex's one worker pool (`loop/workers/`): a copy worker forks from a snapshot of the
+  game folder and `worker_mark used` merges its work into it; once finish was asked, no worker
+  starts. A web game's `finish` runs one health check of its page first (`loop/health-check.ts`:
+  the host's `preview.observe` in a window of the run's own).
+- The wake loop (`loop/director/wake.ts`, rules `wake-schedule.ts`, the one channel `news.ts`,
+  Genex's own lines `wake-prompts.ts`): the lead ends its turn and the harness resumes the session
+  with the person's message as they wrote it, or with Genex's one-line facts (a worker or a job
+  ended, the app stopped or came back, the person's Finish, a failed turn), marked as Genex's; no
+  heartbeat, reminder or digest. What comes while a turn works reaches it at its next step. A lead
+  that ended a turn rests while workers or jobs are at work, and a turn that ends with nothing at
+  work closes the Loop; the lead calls `run_status` for where the run stands
+  ([what wakes a Loop's lead](../harness-runtime.md#what-wakes-a-loops-lead)).
 - The full journal (`loop/director/journal.ts`): each save writes the run's record on
-  `journal.director` (clock with `workedMs`, health, recent log, wake state). A Resume gets the
-  working time left (`loopRunClock`, paused time excluded), a reopen (`director/reopen.ts`) a fresh
-  clock, and reads the rest back (`restoreLoopRun`).
-- User steering reaches the lead as USER SAYS once per steer and run.
+  `journal.director` (recent log, wake state, the Loop's own `open` record). A Resume reads it back
+  (`restoreLoopRun`); a web Loop's journal from an earlier Genex is refused at dispatch, naming its
+  ref.
+- The chat's messages reach the lead as written, each with its sender, once: mid-turn one steer
+  each, and as a wake or after a cut the leading messages of one sender joined as written (the
+  person's `from: person`); Genex's own messages and lines go `from: genex` (`MessageFrom`), which
+  each engine shows as not the person's.
 - Live chat (`loop/live-chat.ts`, `director/lead-line.ts`) and one session
-  (`director/lead-session.ts`, `after-loop-run.ts`, `reopen-run.ts`, the host's `#leadRoot`): the
-  lead is the chat's own session, which answers again after the close
-  ([live chat](../conversation-coordinator.md#live-chat-during-a-build),
-  [after the build](../conversation-coordinator.md#after-the-build-the-same-session)).
+  (`director/lead-session.ts`, `after-loop-run.ts`, the host's `#inPlaceRoot`): the
+  lead is the chat's own session, one per chat, which goes on after the close
+  ([live chat](../conversation-lifecycle.md#live-chat-during-a-build),
+  [after the build](../conversation-lifecycle.md#after-the-build-the-same-session)).
 - Each turn of the lead's session ends with a host-written `session_activity` (`completed`,
   `interrupted` or `failed`), never a `turn_ended`, so the chat shows the build between turns.
-- The hours are a soft cap (`loop/time-cap.ts`); both closes are one function (`closeTheLoopRun`).
+- A Loop has no clock but the time a person asks for ([what ends a Loop](../harness-runtime.md#what-ends-a-loop)); every close is
+  one function (`closeInPlace`).
 
 **Refs and the user's repository.** Everything a run must find later lives on the studio's refs:
-`refs/studio/runs/<runId>/integration`, its workers' copies' refs and `refs/studio/snap/<id>`
+its workers' copies' refs (and an earlier Genex's web Loop's `refs/studio/runs/<runId>/integration`)
+and `refs/studio/snap/<id>`
 (`loop/repo.ts`, `snapshots.ts`). One committer signs studio commits (`STUDIO_AS`, `GIT_ENV`). A
 chat keeps the game folder from before and after each answered message the same way, on
 `refs/studio/chat/<thread>/before|after/<message>`, for rewinding
-([conversation lifecycle](../conversation-coordinator.md#sending-and-rewinding)). `.studio/` is
+([conversation lifecycle](../conversation-lifecycle.md#sending-and-rewinding)). `.studio/` is
 gitignored. Adoption writes a real `.gitignore` before
-`git init`. `checkOutNewRepo` fast-imports the installed seed as the first harness repository; `ensureRepo` finishes an interrupted first commit. Snapshots commit to the checked-out branch, hooks off, never during a merge,
+`git init`. `checkOutNewRepo` fast-imports the installed seed as the first harness repository; `ensureRepo` finishes an interrupted first commit. At a start, a game folder whose first commit fails (an earlier start's git still holds its index.lock) is logged and left for its next snapshot; only the harness's own failure stops the start. Snapshots commit to the checked-out branch, hooks off, never during a merge,
 rebase, cherry-pick or revert. `SnapshotEngine.restore` checks everything before any reset and
 refuses (`branch-changed`, `history-changed`, `operation-in-progress`, `rescue-failed`), folder
 untouched; the mandatory rescue snapshot is named on
@@ -614,21 +617,19 @@ untouched; the mandatory rescue snapshot is named on
 **Verdicts.** Every health check and close leaves one record, `verdictRecord()` in `loop/verdict.ts`:
 `{ pass, build, against, observed, measured, seen, decision, because }`, where `because` has no id,
 sha or harness word; the lead's health checks and close append `director_verdict`. The Builds result
-panel shows the staged build's newest record (`headVerdict`). An engine limit is waited out when it
-resets well before the deadline; otherwise the run closes paused, naming the limit.
+panel shows the staged build's newest record (`headVerdict`). An engine limit pauses the run, naming
+the limit; the host's auto-resume resumes it at the limit's reset.
 
-**Landing.** At the close the harness stops workers, syncs the head and lands when the head moved
-beyond the start and passed its health check; it asks no judge. A claim is the lead's word
-(`review=yes` asks a reviewer first, a second opinion). `report.landingResult` records `verified`, a
-`how` token and the morning card's `line`. A landing blocked by commits (`could-not-land`) or by
-uncommitted changes or a merge under way (`uncommitted-changes`) in the game folder waits for
-**Make it live** (`landBuild`); **Play this build** is `showBuild` ([feature map](feature-map.md)).
+**The close.** At the close the harness stops workers and keeps the last work in Genex's checkpoint
+(`open/close.ts`); it lands nothing and asks no judge. A claim is the lead's word (`review=yes` asks
+a reviewer first, a second opinion). A web Loop an earlier Genex ran keeps its `landingResult`;
+**Make it live** (`landBuild`) and **Play this build** (`showBuild`) still reach its build on its ref
+([feature map](feature-map.md)).
 
 **Nested repositories.** A game that arrived as its own Git repository is a gitlink. `worktreeAt`
 copies the nested tree into every worktree; with the user's consent (`AdoptOptions.versionNested`)
 it is converted in a deterministic commit. `landBuild` applies the same conversion before merging
-([feature map](feature-map.md)). The health check fails a head that still holds the path as a
-gitlink (`unversionedNested`), and the run's landing stops with `nested-not-versioned`.
+([feature map](feature-map.md)).
 
 ## Projects, builds and previews
 
@@ -735,7 +736,9 @@ their rectangle intersects the Live slot; identical bounds do not repeat IPC. A 
 hidden (the loader, a dialog) stays in the rectangle it was last shown in, sized before it is hidden
 (`placedBounds`, `previewVisibility`): Chromium lays a zero-size view, or one wholly outside its
 window, out at 0x0, and a game that sizes its world from its canvas at start-up can then never
-finish loading. A load, Play, Reload or Stop waits at most a minute for its page (`waitForLoad`); a
+finish loading. A hidden view runs no animation frames, so Live uncovers a loaded page once its
+requests are quiet and, when it has a canvas, its game has drawn or asked for a frame
+(`liveStatus`, `live-load.ts`), 3 s after the page at most. A load, Play, Reload or Stop waits at most a minute for its page (`waitForLoad`); a
 page still loading then (a script that never yields) is noted as stalled
 (`LiveLoadFailure.Stalled`), and Live's load queue moves on to the next load.
 
@@ -804,8 +807,7 @@ at 4 KiB. Connector tool results, call errors and stderr health messages are red
 values (materialized env and headers, launch `secrets`, OAuth tokens) and then token shapes, through
 [`src/shared/redact.ts`](../../src/shared/redact.ts), the one redactor for the event log, the dev
 control and MCP. Collisions shorten a tool name's base so the suffixed name stays within 48
-characters (`uniqueToolName`). Judges, critics, read-only sessions and the
-coordinator get no connectors; the Auto chat, a Loop chat and a build's lead get them.
+characters (`uniqueToolName`). Judges, critics and read-only sessions get no connectors; the chat's session and a build's lead get them.
 
 **Connector trust.** A stdio connector is trusted native code: `studio:mcp.save` computes a launch
 digest over command, args, cwd and variable names, and a mismatch needs the native trust dialog
@@ -874,9 +876,10 @@ aborts it), with the kept `genex-clip` clip after it, or by `genex__cover-set` (
 applied plugin/skill set from one live view, so a brief's tools and skill lines agree; a file skill
 contributes an index line (`skill-prompts.ts`) and the host-answered `<id>__skill` tool, which reads
 only declared files through a checked handle, pages at 24,000 characters and writes nothing.
-Skills are served from the installed package, never written into games. Once a session
-answers, delegation records its applied set on `tool_registry_applied` by session id; a resume
-folds that back (`ConnectionService.lastApplied`) and prepends `withdrawnNotice` for withdrawals. Updates and hot reloads
+Skills are served from the installed package, never written into games. A session's plugins are
+its tool list on each launch and the system text it started with (a resumed Claude Code or Codex
+session keeps that text); delegation records only the revision it took
+(`tool_registry_applied`). Updates and hot reloads
 diff skills (`lastSkillChange`, scan `skillDigests`) for the trust dialog and plugin page.
 
 **Genex host tools.** A manifest tool with `host` (bundled `genex`, API 3 only) runs through the
@@ -889,7 +892,21 @@ removed afterwards), never a game folder, where the CLI's skill sync and contrac
 write `.claude`, `AGENTS.md` and ancestor contracts. Only `api.genex.games` (or a dev stand's, `GenexStand`) is reachable,
 games are write-denied, the token goes on stdin, and project commands see only `{id, slug}`. `GenexPackageService` (`genex-package.ts`) checks the name against
 `GENEX_GAME_PACKAGES` and the binding folder by realpath (the game, or a registered git worktree of
-it under scratch), then runs the toolchain's `add` through `GameBuilds.addPackages`.
+it under scratch), then runs the toolchain's `add` through `GameBuilds.addPackages`. `GenexRoomService`
+(`genex-room.ts`, host `genex-room`, no native step: no account, download or app) runs the payload's
+pinned `@genex-ai/authority-dev` on the bound game's room module in ProcessSandbox: `validate`
+through `run` (writes only its scratch), `start` through `spawnLongLived` (game write-denied,
+loopback only, stdin closing stops it; on Windows its listeners take free ports of the sandbox's
+loopback range, `ProcessSandbox.loopbackPorts`, and its stdin goes through the live-input relay;
+on Linux, `ProcessSandbox.ownLoopback`, it is a `loopbackServer` whose ports the loopback bridge,
+`substrate/linux-loopback-bridge.ts`, opens on the host's loopback: a relay in the same sandbox
+holds a Node IPC channel, takes each accepted TCP socket whole and passes datagrams both ways, and
+the host answers only a sender it heard; it keeps 64 senders a port, a new one replacing the one the
+room answered least lately, so senders the room ignores never displace its clients, and tells the
+relay to close that sender's socket), one room per game, all ended when the core stops. Once
+this process gets an HTTP answer at the room's address (`reachable`), the
+room's address goes into the game's loopback preview entry (`genex_local_test`,
+`genex_authority_url`, `PreviewService.joinLocalRoom`), and Live loads again into and out of it.
 
 **Blender.** Local Blender supplies `blender__model` through the ordinary API 3 registry with a
 managed local runtime; core has no Blender tool of its own.
@@ -899,7 +916,7 @@ managed local runtime; core has no Blender tool of its own.
 - **Ledger.** `PluginServices.onDelivered` fires after every `assets.deliver`; `StudioCore` records
   `asset_delivered` (project, plugin, job, files, worker attribution) and emits `asset.delivered`.
   [`src/main/plugin-activity.ts`](../../src/main/plugin-activity.ts) builds the
-  `plugin_tool_started`/`plugin_tool` pair for both agent paths. The Builds graph joins them on
+  `plugin_tool_started`/`plugin_tool` pair for both agent paths. The Builds list joins them on
   `callId` and `jobId`.
 - **Inventory.** [`src/main/game-assets.ts`](../../src/main/game-assets.ts) enumerates `assets/**` and
   `public/assets/**` read-only (lstat, symlinks skipped, capped), reads Genex `job.json`
@@ -922,7 +939,9 @@ managed local runtime; core has no Blender tool of its own.
 - **Export.** [`src/substrate/game-export.ts`](../../src/substrate/game-export.ts) stages fresh public
   files and replaces only an app-managed destination; hidden files, env files, private-key names,
   dependencies and symlinks are excluded or refused; parsed imports and references prune the
-  vendor folder. Static analysis cannot classify computed URLs, so browser export checks remain
+  vendor folder. `listPublicGame` answers the same two lists, with the same refusals, from the
+  files where they are and writes nothing (Publish's file list for a copy without the vendored
+  library). Static analysis cannot classify computed URLs, so browser export checks remain
   required.
 
 ## Persistence and the event log
@@ -1083,7 +1102,7 @@ Scope and commands are in [verification](verification.md). Suites that hold the 
 | UI events and custom events | `ui-events.test.ts` |
 | Seed copies and the provider table | `seed-contracts.test.ts`, `providers.test.ts` |
 | Engine voice and crossed roles | `engine-voice.test.ts`, `director-cross-engine.test.ts` |
-| One session: the lead is the chat's session | `director-one-session.test.ts`, `after-loop-run.test.ts`, `reopen-run.test.ts`, `lead-sessions-host.test.ts` |
+| One session: the lead is the chat's session | `director-one-session.test.ts`, `after-loop-run.test.ts`, `lead-sessions-host.test.ts` |
 | Renderer stores and words | `renderer-state.test.ts`, `words.test.ts` |
 | Harness loop incidents | `harness-incidents.test.ts` (`npm run verify:harness`) |
 | Boundaries and import cycles | `npm run verify:architecture` |

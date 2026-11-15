@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { validateManifest } from "../../src/substrate/plugins/manifest.ts";
+import type { AgentPlayMarker } from "../../src/plugins/unreal/agent-play.ts";
 import { recordStarting } from "../../src/plugins/unreal/editor-launch.ts";
 import {
   crashIn,
@@ -64,6 +65,7 @@ function never(signal?: AbortSignal | null): Promise<never> {
 /** The Genex editor helper's tool that names the project the editor has open. */
 const PROJECT_FILE = "project_file";
 const isIdentity = (body: any) => body?.params?.arguments?.tool_name === PROJECT_FILE;
+const LOOP_TOOLSET_NAME = "genex_loop.tools.GenexLoopTools";
 
 /** Marks a stand-in editor's answer as a JSON-RPC error it sends back, in place of a tool result. */
 const RPC_ERROR = Symbol("json-rpc error");
@@ -75,19 +77,48 @@ const rpcError = (code: number, message: string) => ({ [RPC_ERROR]: { code, mess
 const rpcErrorOf = (value: unknown) =>
   value && typeof value === "object" && RPC_ERROR in value ? (value as ReturnType<typeof rpcError>)[RPC_ERROR] : null;
 
+/** Who Epic's server says it is: UE 5.8.3 never fills serverInfo, so its name is empty. */
+const UNNAMED = { name: "", title: "", version: "" };
+/** Epic's server as Unreal 5.9 names itself. */
+const UNREAL_MCP = { name: "unreal-mcp", version: "5.9.0-60351404" };
+
+/**
+ * What Unreal 5.9 answers while a long task or a dialog blocks it: a tool call comes back as a failed
+ * tool answer in Epic's words, and any other request as a JSON-RPC error whose data names the reason.
+ */
+function blockedAnswer(body: any, slowTask: boolean): Response {
+  if (body.method === "tools/call") {
+    const text = slowTask
+      ? "Not run: the Unreal Editor is running a slow task, which blocks editor tools."
+      : "Not run: the Unreal Editor is showing a modal dialog, which blocks editor tools.";
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: { isError: true, content: [{ type: "text", text }] } });
+  }
+  const error = {
+    code: -32603,
+    message: slowTask
+      ? "The editor is running a slow task; retry when it finishes."
+      : "An editor modal dialog is open.",
+    data: { reason: slowTask ? "slowTaskInProgress" : "modalDialogOpen" },
+  };
+  return Response.json({ jsonrpc: "2.0", id: body.id, error }, { status: 400 });
+}
+
 function editor(
   answer: (params: any, signal?: AbortSignal | null) => unknown = () => ({ returnValue: null }),
   project: string = DRIFT.project,
+  serverInfo: { name: string; version: string } = UNNAMED,
 ) {
   const seen: Seen[] = [];
   const live = new Set<string>();
   let sessions = 0;
-  let mode: "up" | "closed" | "held" | "redirect" | "impostor" | "no-tools" | "named" = "up";
+  let mode: "up" | "closed" | "held" | "redirect" | "impostor" | "no-tools" | "named" | "busy" | "dialog" = "up";
   /**
    * A closed editor refuses the connection; a held port (a crashed editor's) takes it and never
    * answers; a redirecting one points elsewhere; an impostor is another app's web server on the
    * port; "no-tools" is an MCP server that is not Unreal's, and "named" another app's MCP server
-   * that names itself where Epic's leaves the name empty.
+   * that names itself where Epic's leaves the name empty. A "busy" editor runs a long task and one
+   * with a "dialog" shows a window that waits for an answer: Unreal 5.9 then runs no tool, and
+   * refuses every other request with why.
    */
   const unreachable = (signal?: AbortSignal | null) => {
     if (mode === "closed") throw new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
@@ -103,12 +134,11 @@ function editor(
   const initialize = (body: any) => {
     const id = `s${++sessions}`;
     live.add(id);
-    // UE 5.8.3 never fills serverInfo, so Epic's name is empty; its tools capability is what tells.
+    // Epic's name is empty on UE 5.8.3; its tools capability is what tells.
     const result = {
       protocolVersion: body.params.protocolVersion,
       capabilities: mode === "no-tools" ? { resources: {} } : { resources: {}, tools: { listChanged: true } },
-      serverInfo:
-        mode === "named" ? { name: "some-other-mcp-app", version: "1.0.0" } : { name: "", title: "", version: "" },
+      serverInfo: mode === "named" ? { name: "some-other-mcp-app", version: "1.0.0" } : serverInfo,
     };
     return Response.json({ jsonrpc: "2.0", id: body.id, result }, { headers: { "mcp-session-id": id } });
   };
@@ -116,12 +146,14 @@ function editor(
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const session = new Headers(init?.headers).get("mcp-session-id");
     seen.push({ url: String(input), method: init?.method, body, session, redirect: init?.redirect });
-    if (mode !== "up" && mode !== "no-tools" && mode !== "named") return unreachable(init?.signal);
+    const blocked = mode === "busy" || mode === "dialog";
+    if (mode !== "up" && mode !== "no-tools" && mode !== "named" && !blocked) return unreachable(init?.signal);
     if (init?.method === "GET") return new Response("", { status: 405 });
     if (init?.method === "DELETE") return end(session);
     if (body?.method === "initialize") return initialize(body);
     if (stale(session)) return new Response("Session not found", { status: 404 });
     if (body?.id === undefined) return new Response(null, { status: 202 });
+    if (blocked) return blockedAnswer(body, mode === "busy");
     // The helper names the project this editor has open; Epic answers a str tool as its returnValue.
     const value = isIdentity(body) ? { returnValue: project } : await answer(body.params, init?.signal);
     const error = rpcErrorOf(value);
@@ -165,10 +197,11 @@ async function connected(
   watch?: CrashWatcher,
   starts?: StartWait,
   platform?: NodeJS.Platform,
+  agentPlay?: AgentPlayMarker,
 ) {
   const projects = Array.isArray(found) ? { chosen: found[0], setUp: found } : found;
   const logs = watch ?? logCrashWatcher(await quietHome, "darwin", POLL_MS);
-  const bridge = createEditorMcp(async () => projects, fetchImpl, logs, starts, undefined, platform);
+  const bridge = createEditorMcp(async () => projects, fetchImpl, logs, starts, agentPlay, platform);
   const [local, hosted] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "studio-test", version: "1" });
   await bridge.server.connect(hosted);
@@ -437,8 +470,18 @@ function throttledEditor(
     rayTracing?: boolean;
     refuse?: string[];
     project?: string;
+    /**
+     * Whether the Genex editor helper there has its own throttle tools, as a current one does; Epic's
+     * object tools then refuse to write an editor setting, as Unreal 5.9's do.
+     */
+    helper?: boolean;
     /** The editor's crash on `tool`, if this call crashes it. */
     crash?: (tool: string, signal?: AbortSignal | null) => Promise<never> | undefined;
+    /**
+     * Whether the helper's `play_state` says a play runs, given Epic's calls so far; it answers no
+     * state unless a test says.
+     */
+    pie?: (calls: string[]) => boolean;
   } = {},
 ) {
   const settings = { throttle: options.throttle ?? true };
@@ -447,6 +490,13 @@ function throttledEditor(
     const crashed = options.crash?.(tool, signal);
     if (crashed) return crashed;
     if (options.refuse?.includes(tool)) return new Refusal(`${tool} failed`);
+    if (options.helper && tool === "run_settings")
+      return { returnValue: JSON.stringify({ throttle: settings.throttle, rayTracing: options.rayTracing === true }) };
+    if (options.helper && tool === "set_background_throttle") {
+      settings.throttle = args.on === true;
+      return { returnValue: JSON.stringify({ throttle: settings.throttle }) };
+    }
+    if (options.helper && tool === "set_properties") return new Refusal("class default data can't be edited");
     if (tool === "get_properties")
       return { returnValue: JSON.stringify({ bThrottleCPUWhenNotForeground: settings.throttle }) };
     if (tool === "set_properties") {
@@ -455,10 +505,14 @@ function throttledEditor(
     }
     if (tool === "SearchCVars")
       return { returnValue: JSON.stringify({ "r.RayTracing": { help: "", value: options.rayTracing ? 1 : 0 } }) };
+    if (tool === "play_state" && options.pie) return { returnValue: JSON.stringify({ pie: options.pie(calls()) }) };
     return { returnValue: null };
   }, options.project);
-  const calls = () => toolCalls(unreal).map((s) => s.body.params.arguments.tool_name);
-  return { ...unreal, settings, calls };
+  const named = () => toolCalls(unreal).map((s) => s.body.params.arguments.tool_name);
+  /** Epic's calls; the helper's `play_state`, which the bridge asks around a play step, is `playStates`. */
+  const calls = (): string[] => named().filter((tool) => tool !== "play_state");
+  const playStates = () => named().filter((tool) => tool === "play_state").length;
+  return { ...unreal, settings, calls, playStates };
 }
 
 /** A forwarded call to `tool_name`, in the play toolset unless another (or `null`, none) is given. */
@@ -472,7 +526,7 @@ test("a play test runs at full speed behind Genex, and the user's setting comes 
   const { client, close } = await connected(unreal.fetchImpl);
   try {
     await client.callTool(play("StartPIE"));
-    assert.deepEqual(unreal.calls(), ["get_properties", "SearchCVars", "set_properties", "StartPIE"]);
+    assert.deepEqual(unreal.calls(), ["run_settings", "get_properties", "SearchCVars", "set_properties", "StartPIE"]);
     assert.equal(unreal.settings.throttle, false, "a background editor would otherwise play at 3 frames/s");
     const lift = unreal.seen.find((s) => s.body?.params?.arguments?.tool_name === "set_properties");
     assert.deepEqual(lift?.body.params.arguments, {
@@ -483,13 +537,42 @@ test("a play test runs at full speed behind Genex, and the user's setting comes 
 
     await client.callTool(play("CaptureEditorImage"));
     await client.callTool(play("StopPIE"));
-    assert.deepEqual(unreal.calls().slice(4), ["CaptureEditorImage", "StopPIE", "set_properties"]);
+    assert.deepEqual(unreal.calls().slice(5), ["CaptureEditorImage", "StopPIE", "set_properties"]);
     assert.equal(unreal.settings.throttle, true);
 
     await client.callTool(play("StopPIE"));
-    assert.deepEqual(unreal.calls().slice(7), ["StopPIE"], "nothing left to put back");
+    assert.deepEqual(unreal.calls().slice(8), ["StopPIE"], "nothing left to put back");
   } finally {
     await close();
+  }
+});
+
+test("an editor whose Genex helper has the throttle's tools is lifted and given back through them, never Epic's", async () => {
+  const unreal = throttledEditor({ helper: true });
+  const { client, close } = await connected(unreal.fetchImpl);
+  try {
+    await client.callTool(play("StartPIE"));
+    assert.equal(unreal.settings.throttle, false, "full speed while the agent plays");
+    await client.callTool(play("StopPIE"));
+    assert.equal(unreal.settings.throttle, true, "the user's setting is back");
+    assert.deepEqual(unreal.calls(), [
+      "run_settings",
+      "set_background_throttle",
+      "StartPIE",
+      "StopPIE",
+      "set_background_throttle",
+    ]);
+  } finally {
+    await close();
+  }
+  const traced = throttledEditor({ helper: true, rayTracing: true });
+  const mac = await connected(traced.fetchImpl, [DRIFT], undefined, undefined, "darwin");
+  try {
+    await mac.client.callTool(play("StartPIE"));
+    assert.equal(traced.settings.throttle, true, "on a Mac a ray-traced editor keeps its throttle");
+    assert.deepEqual(traced.calls(), ["run_settings", "StartPIE"]);
+  } finally {
+    await mac.close();
   }
 });
 
@@ -499,7 +582,7 @@ test("a user who already turned background throttling off keeps it off", async (
   try {
     await client.callTool(play("StartPIE"));
     await client.callTool(play("StopPIE"));
-    assert.deepEqual(unreal.calls(), ["get_properties", "StartPIE", "StopPIE"]);
+    assert.deepEqual(unreal.calls(), ["run_settings", "get_properties", "StartPIE", "StopPIE"]);
     assert.equal(unreal.settings.throttle, false);
   } finally {
     await close();
@@ -512,7 +595,14 @@ test("a play start that fails, or the bridge closing mid-test, puts the user's s
   try {
     const result: any = await first.client.callTool(play("StartPIE"));
     assert.equal(result.isError, true);
-    assert.deepEqual(failed.calls(), ["get_properties", "SearchCVars", "set_properties", "StartPIE", "set_properties"]);
+    assert.deepEqual(failed.calls(), [
+      "run_settings",
+      "get_properties",
+      "SearchCVars",
+      "set_properties",
+      "StartPIE",
+      "set_properties",
+    ]);
     assert.equal(failed.settings.throttle, true);
   } finally {
     await first.close();
@@ -525,6 +615,87 @@ test("a play start that fails, or the bridge closing mid-test, puts the user's s
   await second.close();
   assert.equal(abandoned.settings.throttle, true);
   assert.equal(abandoned.calls().at(-1), "set_properties");
+});
+
+/** A mark of the agent's play that records what the bridge did with it. */
+function recordedMarks() {
+  const marks: string[] = [];
+  const marker: AgentPlayMarker = {
+    started: async () => {
+      marks.push("started");
+      return async () => {
+        marks.push("given back");
+      };
+    },
+    stopped: async () => {
+      marks.push("stopped");
+    },
+  };
+  return { marker, marks };
+}
+
+// Sword Duel, Windows: the game's own Blueprint errors made StartPIE answer an error while the play
+// ran, so the bridge gave the throttle back and the agent played the rest of the day at 3 frames/s.
+test("a play start Unreal answers with an error while the play runs keeps full speed and the agent's mark", async () => {
+  const unreal = throttledEditor({ refuse: ["StartPIE"], pie: (calls) => calls.includes("StartPIE") });
+  const { marker, marks } = recordedMarks();
+  const { client, close } = await connected(unreal.fetchImpl, [DRIFT], undefined, undefined, "win32", marker);
+  try {
+    const result: any = await client.callTool(play("StartPIE"));
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.match(textOf(result), /play session is running/);
+    assert.match(textOf(result), /StartPIE failed/, "Unreal's own words stay in the answer");
+    assert.equal(unreal.settings.throttle, false, "the play keeps running at full speed");
+    assert.deepEqual(marks, ["started"], "the play is still the agent's");
+    assert.equal(unreal.playStates(), 2, "asked before the start and after its refusal");
+
+    await client.callTool(play("StopPIE"));
+    assert.equal(unreal.settings.throttle, true, "the stop gives the user's setting back");
+    assert.deepEqual(marks, ["started", "stopped"]);
+  } finally {
+    await close();
+  }
+});
+
+test("a stop with no play left answers that there was nothing to stop, and still gives everything back", async () => {
+  const unreal = throttledEditor({ refuse: ["StopPIE"], pie: () => false });
+  const { marker, marks } = recordedMarks();
+  const { client, close } = await connected(unreal.fetchImpl, [DRIFT], undefined, undefined, "win32", marker);
+  try {
+    await client.callTool(play("StartPIE"));
+    const result: any = await client.callTool(play("StopPIE"));
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.match(textOf(result), /nothing to stop/);
+    assert.equal(unreal.settings.throttle, true);
+    assert.deepEqual(marks, ["started", "stopped"]);
+  } finally {
+    await close();
+  }
+});
+
+test("a refused play step stays refused when the helper's play state says it didn't take", async () => {
+  const cases = [
+    { label: "a start with no play after it", step: "StartPIE", pie: () => false, marks: ["started", "given back"] },
+    // With agents allowed to use Unreal as the person plays, a start can find the person's play running.
+    { label: "a start into the person's play", step: "StartPIE", pie: () => true, marks: ["started", "given back"] },
+    { label: "a stop whose play goes on", step: "StopPIE", pie: () => true, marks: ["started"] },
+  ] as const;
+  for (const { label, step, pie, marks: expected } of cases) {
+    const unreal = throttledEditor({ refuse: [step], pie });
+    const { marker, marks } = recordedMarks();
+    const { client, close } = await connected(unreal.fetchImpl, [DRIFT], undefined, undefined, "win32", marker);
+    try {
+      if (step === "StopPIE") await client.callTool(play("StartPIE"));
+      const result: any = await client.callTool(play(step));
+      assert.equal(result.isError, true, label);
+      assert.match(textOf(result), new RegExp(`${step} failed`), label);
+      assert.deepEqual(marks, expected, `${label}: only a play still running after a stop stays the agent's`);
+      const lifted = step === "StopPIE";
+      assert.equal(unreal.settings.throttle, !lifted, `${label}: a play that goes on keeps full speed`);
+    } finally {
+      await close();
+    }
+  }
 });
 
 // UE 5.8 on a Mac hangs the GPU rendering a ray-traced level at full speed behind another app.
@@ -1281,6 +1452,94 @@ test("the bundled Unreal manifest runs one bridge per game from the plugin's sto
   assert.deepEqual(manifest.capabilities, ["game-engine"], "it links games to their Unreal project");
 });
 
+test("the host's calls to a project's editor share one session: its connect and the helper's identity call happen once", async () => {
+  // Each request waits for one of the editor's frames: five per call (connect, identity, call, end)
+  // made every computer action several times slower than its one call.
+  const stand = editor(() => ({ returnValue: { ok: true } }));
+  const call = { toolset: LOOP_TOOLSET_NAME, tool: "play_state", args: {} };
+  const project = { ...DRIFT, project: "/Games/Shared/Shared.uproject" };
+  const shared = editor(() => ({ returnValue: { ok: true } }), project.project);
+  for (let i = 0; i < 3; i += 1) assert.deepEqual(await callProjectTool(project, call, shared.fetchImpl), { ok: true });
+  const initializes = shared.seen.filter((s) => s.body?.method === "initialize").length;
+  const identities = shared.seen.filter((s) => isIdentity(s.body)).length;
+  assert.deepEqual([initializes, identities, toolCalls(shared).length], [1, 1, 3]);
+  assert.equal(stand.seen.length, 0);
+});
+
+test("a kept session the editor forgot (it restarted) is opened and checked again, and the call is made once", async () => {
+  const project = { ...DRIFT, project: "/Games/Restarted/Restarted.uproject" };
+  let ran = 0;
+  const stand = editor(() => {
+    ran += 1;
+    return { returnValue: { ok: true } };
+  }, project.project);
+  const call = { toolset: LOOP_TOOLSET_NAME, tool: "play_state", args: {} };
+  await callProjectTool(project, call, stand.fetchImpl);
+  stand.restart();
+  assert.deepEqual(await callProjectTool(project, call, stand.fetchImpl), { ok: true });
+  const identities = stand.seen.filter((s) => isIdentity(s.body)).length;
+  assert.deepEqual([identities, ran], [2, 2], "checked again, and no call run twice");
+});
+
+test("Genex's own call waits out an editor a long task blocks, and is made once it is free", async () => {
+  const project = { ...DRIFT, project: "/Games/Busy/Busy.uproject" };
+  let ran = 0;
+  const stand = editor(
+    () => {
+      ran += 1;
+      return { returnValue: { ok: true } };
+    },
+    project.project,
+    UNREAL_MCP,
+  );
+  const call = { toolset: LOOP_TOOLSET_NAME, tool: "stop_play", args: {} };
+  const pace = { waitMs: 2_000, pollMs: 5 };
+  // Blocked before the first call, also while the session opens; free a few asks later.
+  stand.set("busy");
+  setTimeout(() => stand.set("up"), 40);
+  assert.deepEqual(await callProjectTool(project, call, stand.fetchImpl, undefined, pace), { ok: true });
+  assert.equal(ran, 1, "a blocked editor ran nothing, so the call ran once");
+
+  stand.set("dialog");
+  await assert.rejects(
+    callProjectTool(project, call, stand.fetchImpl, undefined, { waitMs: 20, pollMs: 5 }),
+    /modal dialog/,
+    "a block that outlasts the wait fails in Unreal's own words",
+  );
+  assert.equal(ran, 1);
+});
+
+test("Genex's own call that a free editor refuses is not asked again", async () => {
+  const project = { ...DRIFT, project: "/Games/Refusing/Refusing.uproject" };
+  let asked = 0;
+  const stand = editor(
+    (params) => {
+      if (params.arguments.tool_name !== "apply_part") return { returnValue: null };
+      asked += 1;
+      return new Refusal("The part's script failed.");
+    },
+    project.project,
+    UNREAL_MCP,
+  );
+  const call = { toolset: LOOP_TOOLSET_NAME, tool: "apply_part", args: {} };
+  await assert.rejects(
+    callProjectTool(project, call, stand.fetchImpl, undefined, { waitMs: 2_000, pollMs: 5 }),
+    /script failed/,
+  );
+  assert.equal(asked, 1);
+});
+
+test("a kept session whose call failed is not used again", async () => {
+  const project = { ...DRIFT, project: "/Games/Failing/Failing.uproject" };
+  let fail = true;
+  const stand = editor((_params, signal) => (fail ? never(signal) : { returnValue: { ok: true } }), project.project);
+  const slow = { toolset: LOOP_TOOLSET_NAME, tool: "play_state", args: {}, timeoutMs: 50 };
+  await assert.rejects(callProjectTool(project, slow, stand.fetchImpl), /timed out/i);
+  fail = false;
+  assert.deepEqual(await callProjectTool(project, { ...slow, timeoutMs: 5_000 }, stand.fetchImpl), { ok: true });
+  assert.equal(stand.seen.filter((s) => s.body?.method === "initialize").length, 2, "a new session");
+});
+
 test("a project call that names its own timeout fails once that passes, not at the bridge's five minutes", async () => {
   const stand = editor((_params, signal) => never(signal));
   const started = Date.now();
@@ -1311,7 +1570,7 @@ test("a project call that names its own timeout keeps its whole session within i
 });
 
 /** The Genex editor helper's Loop toolset, which only Genex's own editor queue calls. */
-const LOOP_TOOLSET = "genex_loop.tools.GenexLoopTools";
+const LOOP_TOOLSET = LOOP_TOOLSET_NAME;
 
 test("an agent's call to the Genex Loop toolset is refused however it is spelled, and nothing reaches the editor", async () => {
   const hostile: Array<[string, Record<string, unknown>]> = [
@@ -1435,6 +1694,136 @@ test("a helper tool that answers {error} reaches the agent as a failed call; any
   }
 });
 
+/* ---- Blueprint writes: the Genex editor helper checks an agent's write before and after ---- */
+
+const BLUEPRINTS = "editor_toolset.toolsets.blueprint.BlueprintTools";
+const COMBAT_TICK = { refPath: "/Game/Duel/BPC_Duel.BPC_Duel:CombatTick" };
+const TICK_TEXT = "(fn CombatTick (DT) (CallFunction|TickCommon :DT DT))";
+const WRITE = {
+  toolset_name: BLUEPRINTS,
+  tool_name: "write_graph_dsl",
+  arguments: { graph: COMBAT_TICK, code: TICK_TEXT },
+};
+const LOST = "BPC_Duel:CombatTick: Unreal answered ok, but reading the graph back found 0 of the 1 nodes";
+const TOO_BIG = "BPC_Duel:CombatTick: this text makes about 151 nodes, more than the 150 one write takes";
+
+/** The helper's check answering `before` and `after` (as Epic delivers the helper's JSON), Epic's write answering ok. */
+function checkingEditor(before: unknown, after: unknown) {
+  return editor((params) => {
+    if (params.arguments.tool_name !== "check_graph") return { returnValue: true };
+    const answer = params.arguments.arguments.written ? after : before;
+    return answer instanceof Refusal ? answer : { returnValue: JSON.stringify(answer) };
+  });
+}
+
+/** The tools the editor was asked for, in order: a check names whether its text was written. */
+const asked = (unreal: ReturnType<typeof editor>) =>
+  toolCalls(unreal).map(({ body }) => {
+    const { tool_name, arguments: args } = body.params.arguments;
+    return tool_name === "check_graph" ? `check_graph written=${args.written}` : tool_name;
+  });
+
+test("an agent's Blueprint write that came back short fails with the helper's words first, Unreal's answer kept", async () => {
+  const unreal = checkingEditor({ graph: COMBAT_TICK.refPath, nodes: 1 }, { error: LOST, wrote: 1, kept: 0 });
+  const { client, close } = await connected(unreal.fetchImpl);
+  try {
+    const result: any = await client.callTool({ name: EditorTool.CallTool, arguments: WRITE });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, LOST);
+    assert.match(JSON.stringify(result.content), /returnValue/, "Unreal's own answer stays");
+    assert.match(JSON.stringify(result.content), /\[Unreal project: Drift\]/);
+    assert.deepEqual(asked(unreal), ["check_graph written=false", "write_graph_dsl", "check_graph written=true"]);
+    const check = toolCalls(unreal)[0]?.body.params.arguments;
+    assert.equal(check.toolset_name, "genex_build.tools.GenexBuildTools");
+    assert.deepEqual(check.arguments, { graph: COMBAT_TICK.refPath, code: TICK_TEXT, written: false });
+  } finally {
+    await close();
+  }
+});
+
+test("an agent's Blueprint text too big for one write never reaches Unreal's writer", async () => {
+  const unreal = checkingEditor({ error: TOO_BIG, refused: true }, {});
+  const { client, close } = await connected(unreal.fetchImpl);
+  try {
+    const result: any = await client.callTool({ name: EditorTool.CallTool, arguments: WRITE });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /about 151 nodes/);
+    assert.match(textOf(result), /\[Unreal project: Drift\]/);
+    assert.deepEqual(asked(unreal), ["check_graph written=false"]);
+  } finally {
+    await close();
+  }
+});
+
+test("a Blueprint write that came back whole, or that the helper can't check, answers as Unreal did", async () => {
+  const rows: Array<[string, unknown, unknown]> = [
+    ["came back whole", { nodes: 1 }, { nodes: 1, kept: 3 }],
+    ["an older helper without the check", new Refusal("Unknown tool check_graph"), new Refusal("Unknown tool")],
+    ["a check that answers no JSON", { returnValue: 7 }, "not json"],
+    // The helper answers every failure as {error}: only its verdicts (refused, wrote and kept) fail a write.
+    [
+      "a check that failed itself",
+      { error: "graph must be a Blueprint graph's path" },
+      { error: "RuntimeError: read_graph_dsl can't spell node K2Node_X" },
+    ],
+  ];
+  for (const [label, before, after] of rows) {
+    const unreal = checkingEditor(before, after);
+    const { client, close } = await connected(unreal.fetchImpl);
+    try {
+      const result: any = await client.callTool({ name: EditorTool.CallTool, arguments: WRITE });
+      assert.equal(result.isError, undefined, label);
+      assert.match(textOf(result), /returnValue/, label);
+      assert.equal(asked(unreal).filter((tool) => tool === "write_graph_dsl").length, 1, `${label}: written once`);
+    } finally {
+      await close();
+    }
+  }
+});
+
+test("only Epic's write_graph_dsl is checked, named short or qualified, and a write Unreal refused is not read back", async () => {
+  const qualified = { tool_name: `${BLUEPRINTS.toUpperCase()}.WRITE_GRAPH_DSL`, arguments: WRITE.arguments };
+  const asText = { ...WRITE, arguments: JSON.stringify(WRITE.arguments) };
+  const rows: Array<[string, Record<string, unknown>, string[]]> = [
+    [
+      "a qualified name in capitals",
+      qualified,
+      ["check_graph written=false", qualified.tool_name, "check_graph written=true"],
+    ],
+    [
+      "arguments sent as JSON text",
+      asText,
+      ["check_graph written=false", "write_graph_dsl", "check_graph written=true"],
+    ],
+    ["a read of the graph", { ...WRITE, tool_name: "read_graph_dsl" }, ["read_graph_dsl"]],
+    ["a write without its text", { ...WRITE, arguments: { graph: COMBAT_TICK } }, ["write_graph_dsl"]],
+  ];
+  for (const [label, args, tools] of rows) {
+    const unreal = checkingEditor({ nodes: 1 }, { error: LOST });
+    const { client, close } = await connected(unreal.fetchImpl);
+    try {
+      await client.callTool({ name: EditorTool.CallTool, arguments: args });
+      assert.deepEqual(asked(unreal), tools, label);
+    } finally {
+      await close();
+    }
+  }
+  const refusing = editor((params) =>
+    params.arguments.tool_name === "check_graph"
+      ? { returnValue: JSON.stringify({ nodes: 1 }) }
+      : new Refusal("BlueprintTools: The node could not be created"),
+  );
+  const { client, close } = await connected(refusing.fetchImpl);
+  try {
+    const result: any = await client.callTool({ name: EditorTool.CallTool, arguments: WRITE });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /could not be created/);
+    assert.deepEqual(asked(refusing), ["check_graph written=false", "write_graph_dsl"]);
+  } finally {
+    await close();
+  }
+});
+
 /* ---- Descriptions: a toolset described in more than one answer holds reaches the agent by its tools' names ---- */
 
 /** The longest description the bridge hands over whole, in characters. */
@@ -1477,6 +1866,93 @@ test("a toolset description too long for one answer reaches the agent as its too
     assert.equal(missing.isError, true);
     assert.match(textOf(missing), /no tool "make_coffee"\. Its tools: NiagaraToolset_System\.tool_0, /);
     assert.deepEqual(sentArgs(unreal), Array(4).fill({ toolset_name: NIAGARA }), "Epic is asked for the toolset alone");
+  } finally {
+    await close();
+  }
+});
+
+test("an open editor that a long task or a dialog blocks is named so, in the editor's own reason, never as closed", async () => {
+  const rows: Array<["busy" | "dialog", RegExp]> = [
+    ["busy", /Drift's Unreal is busy with a long task/],
+    ["dialog", /Drift's Unreal is showing a window that waits for an answer/],
+  ];
+  for (const [mode, says] of rows) {
+    const unreal = editor(undefined, DRIFT.project, UNREAL_MCP);
+    unreal.set(mode);
+    const { client, close } = await connected(unreal.fetchImpl);
+    try {
+      const result = await client.callTool(SET_LABEL);
+      assert.equal(result.isError, true, mode);
+      assert.match(textOf(result), says, mode);
+      assert.doesNotMatch(textOf(result), /open-editor|isn't answering|another project/, mode);
+      assert.deepEqual(
+        toolCalls(unreal).map((s) => s.body.params.arguments.tool_name),
+        [],
+        "the call itself never reached the blocked editor",
+      );
+    } finally {
+      await close();
+    }
+  }
+});
+
+/**
+ * Unreal 5.9's own describing tool: several toolsets at once, each under its name, a name it
+ * doesn't have under `errors`. The older `describe_toolset` is no tool of its.
+ */
+function describes59(toolsets: Record<string, unknown>) {
+  return (params: any) => {
+    if (params.name !== "describe_toolsets") return rpcError(-32602, `Unknown tool: ${params.name}`);
+    const asked: string[] = params.arguments.toolset_names;
+    const known = asked.filter((name) => name in toolsets);
+    const errors = asked.filter((name) => !(name in toolsets));
+    const available = Object.keys(toolsets).join(", ");
+    return {
+      toolsets: Object.fromEntries(known.map((name) => [name, toolsets[name]])),
+      errors: Object.fromEntries(
+        errors.map((name) => [name, `Toolset '${name}' not found. Available toolsets: ${available}`]),
+      ),
+    };
+  };
+}
+
+test("an Unreal 5.9 editor is asked its own describe_toolsets, and the agent reads the one toolset as before", async () => {
+  const actors = {
+    name: "EditorToolset.ActorTools",
+    description: "Actors in the level.",
+    tools: [
+      { name: "set_label", description: "Label an actor.", inputSchema: { type: "object" } },
+      { name: "get_label", description: "Read an actor's label.", inputSchema: { type: "object" } },
+    ],
+  };
+  const unreal = editor(describes59({ [actors.name]: actors, [NIAGARA]: longDescription }), DRIFT.project, UNREAL_MCP);
+  const { client, close } = await connected(unreal.fetchImpl);
+  try {
+    const whole: any = await client.callTool(describe({ toolset_name: actors.name }));
+    assert.equal(whole.isError, undefined);
+    assert.deepEqual(JSON.parse(textOf(whole)), actors, "the toolset's own description, out of Epic's wrapper");
+    assert.deepEqual(whole.content.at(-1), { type: "text", text: "[Unreal project: Drift]" });
+
+    const one = await client.callTool(describe({ toolset_name: actors.name, tool_name: "get_label" }));
+    assert.deepEqual(JSON.parse(textOf(one)).tools, [actors.tools[1]], "tool_name still reads one tool");
+
+    const long = await client.callTool(describe({ toolset_name: NIAGARA }));
+    assert.ok(textOf(long).length <= DESCRIPTION_LIMIT);
+    assert.equal(JSON.parse(textOf(long)).tools.length, longDescription.tools.length, "a long one listed by name");
+
+    const missing = await client.callTool(describe({ toolset_name: "Nope" }));
+    assert.equal(missing.isError, true);
+    assert.match(textOf(missing), /Toolset 'Nope' not found\. Available toolsets: EditorToolset\.ActorTools, /);
+
+    const asked = toolCalls(unreal).filter((s) => s.body.params.name !== EditorTool.CallTool);
+    assert.deepEqual(
+      asked.map((s) => [s.body.params.name, s.body.params.arguments]),
+      [actors.name, actors.name, NIAGARA, "Nope"].map((name) => [
+        "describe_toolsets",
+        { toolset_names: [name], include_schemas: true },
+      ]),
+      "Epic is asked for the one toolset with its schemas, never by the older tool's name",
+    );
   } finally {
     await close();
   }
@@ -1637,6 +2113,33 @@ test("a capture_shot answer reaches the agent as the image and its tone numbers"
   }
 });
 
+// Sword Duel, Windows: three 3840x2160 covers in a row each lost the engine's connection to Genex
+// (about 13 MB of text per answer) while every file was written; 1920x1080 shots came through.
+test("a capture bigger than the agent's picture goes as a copy at most 1920 px wide, and its file keeps every pixel", async () => {
+  const { captures, project } = await captureProject();
+  const file = path.join(captures, "play-cover.png");
+  const width = 2400;
+  const height = 1350;
+  const full = encodePng({ width, height, rgb: new Uint8Array(width * height * 3).fill(90) });
+  const unreal = editor(async () => {
+    await writeFile(file, full);
+    return { returnValue: JSON.stringify({ queued: true, file, width, height }) };
+  }, project.project);
+  const { client, close } = await connected(unreal.fetchImpl, [project], undefined, stillClock());
+  try {
+    const result: any = await client.callTool(captureCall("capture_play", { name: "cover", width, height }));
+    const images = result.content.filter((part: any) => part.type === "image");
+    assert.equal(images.length, 1);
+    const sent = decodePng(Buffer.from(images[0].data, "base64"));
+    assert.deepEqual([sent.width, sent.height], [1920, 1080]);
+    const text = result.content.map((part: any) => part.text ?? "").join("\n");
+    assert.match(text, /2400x1350, attached at 1920x1080; the file keeps every pixel/);
+    assert.deepEqual(await readFile(file), full, "the file on disk is untouched");
+  } finally {
+    await close();
+  }
+});
+
 test("a capture outside the project's captures folder, through a link, or never written is never read", async () => {
   const { root, captures, project } = await captureProject();
   const outside = path.join(root, "outside.png");
@@ -1781,6 +2284,57 @@ test("a motion strip reaches the agent as one contact sheet with each frame's po
     assert.match(text, /frame 0 .*pawn \[0, 0, 90\]/);
     assert.match(text, /frame 2 .*pawn \[300, 0, 90\].*moved 300 cm/);
     assert.match(text, /frame 1 .*same picture as the frame before/);
+    assert.match(text, /poses file: .*strip-1\.json .*judge/, "the strip names the file the judge reads");
+  } finally {
+    await close();
+  }
+});
+
+test("a motion check's report reaches the agent once its record lands: who was measured, each problem, its numbers", async () => {
+  const { captures, project } = await captureProject();
+  const record = path.join(captures, "check-1-1.json");
+  const report = {
+    check: "check-1-1",
+    target: "BP_DuelManny_C_1",
+    mesh: "Body",
+    otherMeshes: ["Mesh"],
+    frames: 60,
+    slide: { ratio: 1.0, slidingShare: 1.0, movingFrames: 59, sliding: true },
+    problems: [{ code: "sliding", detail: "the feet slide: while the body travels, its planted foot moves at 100%" }],
+    verdict: "problems",
+  };
+  const unreal = editor(async () => {
+    await writeFile(record, JSON.stringify(report));
+    return {
+      returnValue: JSON.stringify({ check: "check-1-1", record, target: report.target, mesh: "Body", waitS: 18 }),
+    };
+  }, project.project);
+  const { client, close } = await connected(unreal.fetchImpl, [project], undefined, stillClock());
+  try {
+    const result: any = await client.callTool(captureCall("motion_check", { target: "DuelManny", seconds: 2 }));
+    const text = result.content.map((part: any) => part.text ?? "").join("\n");
+    assert.match(text, /motion check of BP_DuelManny_C_1, measured on its mesh Body \(not measured: Mesh\)/);
+    assert.match(text, /- the feet slide/);
+    assert.match(text, /numbers: .*"ratio":1/);
+  } finally {
+    await close();
+  }
+});
+
+test("a motion check whose record is outside the project's captures folder is never read", async () => {
+  const { project } = await captureProject();
+  const outside = path.join(await tmpDir("studio-check-outside-"), "check-1-1.json");
+  await writeFile(outside, JSON.stringify({ problems: [], target: "secret" }));
+  const unreal = editor(
+    () => ({ returnValue: JSON.stringify({ check: "check-1-1", record: outside, waitS: 1 }) }),
+    project.project,
+  );
+  const { client, close } = await connected(unreal.fetchImpl, [project], undefined, stillClock());
+  try {
+    const result: any = await client.callTool(captureCall("motion_check", { target: "", seconds: 1 }));
+    const text = result.content.map((part: any) => part.text ?? "").join("\n");
+    assert.doesNotMatch(text, /secret/);
+    assert.match(text, /no image: .*check-1-1\.json is not a file in this project's Saved\/Genex\/captures folder/);
   } finally {
     await close();
   }

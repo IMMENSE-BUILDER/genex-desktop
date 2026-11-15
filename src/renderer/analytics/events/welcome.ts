@@ -116,6 +116,10 @@ export type SignInFinishedProperties = {
   used_code_box: boolean;
   fell_back_to_terminal: boolean;
   exit_code?: number | null;
+  /** Codex only: whether `codex login` printed a sign-in link, its window was shown, and how many lines it printed (at most 50). */
+  link_seen?: boolean;
+  card_shown?: boolean;
+  output_lines?: number;
 };
 
 /** A sign-in moving on to its next step. */
@@ -226,6 +230,10 @@ export type WelcomeEventProperties = {
     phase: CliInstallPhase;
     problem: CliInstallProblem | null;
     duration_ms: number | null;
+    /** A failed download's refusal status (403 where a vendor blocks the region); else null. */
+    http_status: number | null;
+    /** A failed download's network error, only as Chromium's name ("ERR_NAME_NOT_RESOLVED"); else null. */
+    net_error: string | null;
   };
   /** Refused before it started, by the refusal's code; null when the call itself failed. */
   [WelcomeEvent.CliInstallRefused]: {

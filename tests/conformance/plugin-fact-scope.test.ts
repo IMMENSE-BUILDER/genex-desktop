@@ -22,7 +22,7 @@ import { validateManifest } from "../../src/substrate/plugins/manifest.ts";
 import { PluginRegistry } from "../../src/substrate/plugins/registry.ts";
 import type { ToolOffered } from "../../src/substrate/plugins/tool-allow.ts";
 import { coreLite } from "../helpers/core-lite.ts";
-import { copyOfExample, EXAMPLE_PLUGIN, PLUGIN_SDK_BACKEND } from "../helpers/plugins.ts";
+import { capabilityFactsOf, copyOfExample, EXAMPLE_PLUGIN, PLUGIN_SDK_BACKEND } from "../helpers/plugins.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: a hostile manifest is any shape a writer may send.
@@ -36,6 +36,9 @@ const PENDING: FactRef[] = [];
 const WEB = [at(CoreFact.WebGame)];
 const UNREAL = [at(CoreFact.UnrealProject)];
 const TOY_GAME = [at(TOY)];
+
+/** A tool's parameters with the one string it links a project by. */
+const PROJECT_PARAMETER = { type: "object", properties: { project: { type: "string" } } };
 
 /** A tool for the example manifest, with `fields` added. */
 const tool = (name: string, fields: Record<string, unknown> = {}) => ({
@@ -85,6 +88,21 @@ test("a tool scoped to a fact reaches only games with it; an unscoped tool reach
       "a fact anywhere in the folder reaches",
     );
     assert.deepEqual(registry.tools(), registry.snapshot(PENDING).tools, "tools() is a game with no kind yet");
+  } finally {
+    registry.cancel();
+  }
+});
+
+test("a Unity or Godot game's web export reaches no tool for web games, as it reaches no skill for them", async () => {
+  const registry = await registryWith([tool("greet"), tool("draw", { facts: [CoreFact.WebGame] })]);
+  try {
+    for (const engine of [CoreFact.UnityProject, CoreFact.GodotProject])
+      assert.deepEqual(
+        names(registry, [at(engine, "project"), at(CoreFact.WebGame, "web")]),
+        ["example__greet"],
+        engine,
+      );
+    assert.deepEqual(names(registry, WEB), ["example__greet", "example__draw"], "a web game gets it");
   } finally {
     registry.cancel();
   }
@@ -164,7 +182,9 @@ test("a skill for one part of the folder names that part", async () => {
   }
 });
 
-test("the snapshot lists the kinds its tools make, and an agent never sees facts or makes", async () => {
+// Flipped back: the kinds were read as for a game with no kind yet while the seed read them as which
+// plugins are on. Nothing reads them so now: a snapshot's kinds are the kind tools that reach its game.
+test("the snapshot lists the kinds its tools make for its game, and an agent never sees facts or makes", async () => {
   const registry = await registryWith([
     tool("greet"),
     tool("new-toy", { makes: [TOY] }),
@@ -182,6 +202,20 @@ test("the snapshot lists the kinds its tools make, and an agent never sees facts
       assert.equal(Object.hasOwn(handed, "facts"), false, handed.name);
       assert.equal(Object.hasOwn(handed, "makes"), false, handed.name);
     }
+  } finally {
+    registry.cancel();
+  }
+});
+
+test("an agent never sees which parameter a tool links a project by", async () => {
+  const registry = await registryWith([
+    tool("use-toy", { parameters: PROJECT_PARAMETER, makes: [TOY], links: "project" }),
+  ]);
+  try {
+    const handed = registry.snapshot(TOY_GAME).tools.find((one) => one.name === "example__use-toy");
+    assert.ok(handed, "the tool is handed");
+    assert.equal(Object.hasOwn(handed, "links"), false);
+    assert.deepEqual(handed.parameters, PROJECT_PARAMETER, "its parameters stay as declared");
   } finally {
     registry.cancel();
   }
@@ -216,6 +250,22 @@ test("a manifest keeps its scope fields, and a malformed scope is refused", () =
     assert.throws(() => validateManifest(manifestWith([tool("greet", { makes })])), /makes/, JSON.stringify(makes));
   const harnessMakes = tool("greet", { audience: PluginToolAudience.Harness, makes: [TOY] });
   assert.throws(() => validateManifest(manifestWith([harnessMakes])), /makes/, "a harness tool makes nothing");
+  const linker = (fields: Record<string, unknown>) => tool("use-toy", { parameters: PROJECT_PARAMETER, ...fields });
+  assert.equal(validateManifest(manifestWith([linker({ makes: [TOY], links: "project" })])).tools[0]?.links, "project");
+  const counted = { type: "object", properties: { project: { type: "number" } } };
+  const badLinks: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ["without makes", { links: "project" }],
+    ["naming no parameter", { makes: [TOY], links: "scene" }],
+    ["naming a parameter that is no string", { makes: [TOY], links: "project", parameters: counted }],
+    ["not a name", { makes: [TOY], links: ["project"] }],
+    ["an empty name", { makes: [TOY], links: "" }],
+  ];
+  for (const [label, fields] of badLinks)
+    assert.throws(() => validateManifest(manifestWith([linker(fields)])), /links/, label);
+  assert.throws(
+    () => validateManifest(manifestWith([linker({ makes: [TOY], links: "project" })], [], 2)),
+    /apiVersion 3/,
+  );
   const harnessOnly = tool("step", { audience: PluginToolAudience.Harness });
   const badTools: unknown[] = [[], ["nosuch"], ["greet", "greet"], ["step"], "greet", [1]];
   for (const tools of badTools) {
@@ -372,8 +422,7 @@ test("whether a connector reaches a game is the one rule its listing, capability
   const kite = await core.games.scaffold(web);
   await writeFile(path.join(harbor.dir, "Harbor.uproject"), "{}");
   const api = core.api() as unknown as Record<string, (input: unknown) => Promise<unknown>>;
-  const describe = async (project: string) =>
-    String(await api["capabilities.describe"]?.({ project, threadId: await core.createGameThread(project) }));
+  const describe = (project: string) => capabilityFactsOf(core, project);
   assert.doesNotMatch(await describe(web), /Unreal · editor/, "a web game's capability facts");
   assert.match(await describe(harbor.name), /Unreal · editor/, "a game holding an Unreal project's");
 

@@ -18,12 +18,12 @@ import { MINUTE_MS } from "../shared/duration.ts";
 import { assetFormat, type ProjectAsset } from "../shared/game-assets.ts";
 import { GameEngine } from "../shared/game-engine.ts";
 import { formatList, t, tc } from "../shared/i18n.ts";
-import { comparedWithNothing, ExecutionStatus, type RunWorked, VerdictPass, workedMs } from "../shared/run-state.ts";
+import { ExecutionStatus, type RunWorked, workedMs } from "../shared/run-state.ts";
 import { type RunSummary, UNKNOWN_EXECUTION } from "../shared/run-summary.ts";
 import { LoopProfile } from "../shared/project-facts.ts";
 import { WorkerEnd, WorkerIsolation, WorkerStopCode, WorkerVerdict } from "../shared/workers.ts";
 import {
-  boundsOf,
+  type AssetInfo,
   type FacetNode,
   finalNodeOf,
   GraphNodeKind,
@@ -33,14 +33,13 @@ import {
   IterationStatus,
   type MergeInfo,
   plainDefect,
-  type Rect,
   type RunGraph,
   type RunNode,
   truncate,
   type VerdictRecord,
   WorkerState,
 } from "./run-graph.ts";
-import { AssetCardState } from "./run-graph-assets.ts";
+import { AssetCardState, assetVersions } from "./run-graph-assets.ts";
 import type { WorkerInfo } from "./run-graph-workers.ts";
 import {
   GAME_ENGINE_WORDS,
@@ -121,6 +120,8 @@ export interface Step {
   picture?: WorkerPicture;
   /** A save point after the first: the one before it, whose pictures its own are compared with. */
   earlier?: IterationNode;
+  /** A worker that delivered assets: a card per distinct asset, under its node, in the order each was first made. */
+  assets?: AssetCard[];
 }
 
 /** Where a worker's node gets its picture from. */
@@ -148,6 +149,35 @@ export type WorkerPicture =
   | { source: typeof PictureSource.Build; path: string }
   | { source: typeof PictureSource.Asset; asset: ProjectAsset }
   | { source: typeof PictureSource.Reviewed; round: IterationNode };
+
+/**
+ * One asset a worker delivered, as a card of its own under the worker. Making the same asset again
+ * (`assetVersions`: the same game file, or the same plugin tool's asset of the same name) is its
+ * next version, never another card.
+ */
+export interface AssetCard {
+  /** its selection id (`assetSelection`), named by its first version: it stays put as versions arrive */
+  id: string;
+  facetId: string;
+  /** its newest version's name */
+  name: string;
+  /** what the worker delivered of this asset, oldest first */
+  versions: AssetInfo[];
+  /** its newest version's picture, when it has one to draw (a sound has none) */
+  picture?: WorkerPicture;
+}
+
+const ASSET_PREFIX = "asset:";
+
+/**
+ * The selection id of a worker's asset card, by the part and the card's first version: its job
+ * first, which a delivery has before its call comes back and keeps once the call's card folds it in.
+ */
+export const assetSelection = (facetId: string, first: AssetInfo): string =>
+  `${ASSET_PREFIX}${facetId}:${first.jobId ?? first.callId ?? `${first.name}@${first.at}`}`;
+
+/** Whether a selection id names one of a worker's asset cards. */
+export const isAssetSelection = (id: string): boolean => id.startsWith(ASSET_PREFIX);
 
 export interface PartRow {
   facet: FacetNode;
@@ -377,18 +407,63 @@ interface Delivery {
   inGame?: boolean;
 }
 
-function deliveriesOf(graph: RunGraph, facetId: string): Delivery[] {
-  const cards = graph.nodes.flatMap((node) => {
+/** Every asset job of the graph: the plugins' and the modeller's own. */
+export function graphAssetCards(graph: RunGraph): AssetInfo[] {
+  return graph.nodes.flatMap((node) => {
     if (node.kind === GraphNodeKind.Assets) return node.jobs;
     return node.kind === GraphNodeKind.Blender ? node.assets : [];
   });
+}
+
+/** Oldest first, by when each was made. */
+const byTime = (a: { at: string }, b: { at: string }): number => (a.at < b.at ? -1 : Number(a.at > b.at));
+
+function deliveriesOf(graph: RunGraph, facetId: string): Delivery[] {
+  const cards = graphAssetCards(graph);
   const own: Array<Delivery & { at: string }> = cards.filter(
     (card) => card.facetId === facetId && card.state === AssetCardState.Delivered,
   );
   const folded = cards.flatMap((card) =>
     (card.derived ?? []).filter((step) => step.facetId === facetId).map((step) => ({ ...step, render: null })),
   );
-  return [...own, ...folded].sort((a, b) => (a.at < b.at ? -1 : Number(a.at > b.at)));
+  return [...own, ...folded].sort(byTime);
+}
+
+/**
+ * An asset card's name: its job's, or for a delivery no call named (named by its game path) its
+ * file's own name, without the folders or the extension a small card has no room for.
+ */
+function cardName(version: AssetInfo): string {
+  if (!version.files.includes(version.name)) return version.name;
+  const leaf = version.name.slice(version.name.lastIndexOf("/") + 1);
+  const dot = leaf.lastIndexOf(".");
+  return dot > 0 ? leaf.slice(0, dot) : leaf;
+}
+
+/**
+ * What a worker delivered as cards of their own: one per distinct asset, in the order each was first
+ * made, each wearing its newest version's picture. Work it did on another asset (Blender measuring
+ * a Genex model) is a step of that asset's card, not an asset of its own.
+ */
+function assetCardsOf(graph: RunGraph, facetId: string): AssetCard[] {
+  const own = graphAssetCards(graph)
+    .filter((card) => card.facetId === facetId)
+    .sort(byTime);
+  return assetVersions(own).flatMap((versions) => {
+    const [first] = versions;
+    const newest = versions.at(-1);
+    if (!first || !newest) return [];
+    const picture = deliveryPicture(newest);
+    return [
+      {
+        id: assetSelection(facetId, first),
+        facetId,
+        name: cardName(newest),
+        versions,
+        ...(picture ? { picture } : {}),
+      },
+    ];
+  });
 }
 
 /** The kinds of asset a node draws as the Assets stage does: a picture, a model or a clip's first frame. */
@@ -449,7 +524,7 @@ function madeNothing(facet: FacetNode, made: Delivery[]): boolean {
 }
 
 /** Whether the run can still add work kept from a stopped try: it goes on, or it is paused. */
-function runMayStillAdd(graph: RunGraph): boolean {
+export function runMayStillAdd(graph: RunGraph): boolean {
   if (graph.active) return true;
   const run = graph.nodes.find((node): node is RunNode => node.kind === GraphNodeKind.Run);
   return run?.paused === true;
@@ -464,6 +539,7 @@ function sessionStep(
 ): Step {
   const verdict = sessionVerdict(graph, facet, task);
   const made = facet.worker ? deliveriesOf(graph, facet.facetId) : [];
+  const assets = facet.worker ? assetCardsOf(graph, facet.facetId) : [];
   const state = sessionState(graph, facet, task, { ...part, nothingMade: madeNothing(facet, made) });
   const picture = facet.worker
     ? workerPicture(facet, made, savePointsOf(graph), mergedBuildPicture(graph, facet.facetId))
@@ -483,6 +559,7 @@ function sessionStep(
     verdict,
     ...(facet.worker ? { worker: facet.worker } : {}),
     ...(picture ? { picture } : {}),
+    ...(assets.length ? { assets } : {}),
   };
 }
 
@@ -497,9 +574,6 @@ function finishedWell(facet: FacetNode, state: StepState): boolean {
   if (worker.verdict === WorkerVerdict.Rejected) return false;
   return !facet.delivered || worker.verdict === WorkerVerdict.Used;
 }
-
-/** Whether a row's step is a worker that finished well: on the line, though not in the build. */
-const isFinishedWorker = (step: Step): boolean => step.session && step.onLine && step.state === StepState.Delivered;
 
 /** A lead's judge that compared this part's own build, side by side. */
 function sessionVerdict(graph: RunGraph, facet: FacetNode, task: RunTask | null): VerdictRecord | null {
@@ -923,24 +997,6 @@ export function readyToPlay(graph: RunGraph, summary: RunSummary | null): string
   return runningResultStatus(graph, summary).state === StepState.InBuild ? summary.head : null;
 }
 
-/** Who took the last look at the build on offer, as the result card names them; the reviewers otherwise. */
-const REVIEW_BY: Partial<Record<string, string>> = {
-  [VerdictPass.Health]: t("Health check"),
-  [VerdictPass.Close]: t("Lead's last look"),
-};
-
-/**
- * The last look anybody took at the build on offer, for the result card: who looked, and the
- * sentence they wrote. Nothing when nobody wrote one, or when the build had nothing to be
- * compared with — a first build from an empty game is judged on its own, and saying so is noise.
- */
-export function buildReview(graph: RunGraph): { label: string; words: string } | null {
-  const look = headVerdict(graph);
-  const words = verdictSentence(look);
-  if (!look || !words || comparedWithNothing(look.decision.rule)) return null;
-  return { label: REVIEW_BY[look.pass] ?? t("Reviewers"), words };
-}
-
 /** A chat turn put a worker's work in your game: the lead added it, or the worker wrote it there and finished. */
 const turnAddedWork = (graph: RunGraph): boolean => graph.facets.some((facet) => facet.worker?.merged === true);
 
@@ -982,28 +1038,12 @@ export function leadWorking(graph: RunGraph, summary: RunSummary | null, rows: P
   return !rows.some((row) => row.working) && !checkingBuild(graph, summary);
 }
 
-/** How far a run is into the time it was given: "9 of 30 min", "1 h 5 min of 2 h". */
-export function budgetWords(elapsedMs: number, budgetMs: number): string {
-  const elapsed = Math.max(0, Math.floor(elapsedMs / MINUTE_MS));
-  const budget = Math.max(1, Math.round(budgetMs / MINUTE_MS));
-  if (budget < MINUTES_PER_HOUR) return t("{elapsed} of {budget} min", { elapsed, budget });
-  return t("{elapsed} of {budget}", { elapsed: spanWords(elapsed), budget: spanWords(budget) });
-}
-
 /** A span of whole minutes in the chat build card's short units: "9m", "1h", "1h 5m". */
 function shortSpanWords(minutes: number): string {
   if (minutes < MINUTES_PER_HOUR) return t("{minutes}m", { minutes });
   const rest = minutes % MINUTES_PER_HOUR;
   const hours = Math.floor(minutes / MINUTES_PER_HOUR);
   return rest ? t("{hours}h {minutes}m", { hours, minutes: rest }) : t("{hours}h", { hours });
-}
-
-/**
- * The time a build was given, as the chat's build card says it: "up to 10h". It is a cap, not a
- * target — the build may finish well before it.
- */
-export function capWords(budgetMs: number): string {
-  return t("up to {time}", { time: shortSpanWords(Math.max(1, Math.round(budgetMs / MINUTE_MS))) });
 }
 
 /** Whole minutes from `from` to `to` (or now); null when unknown, backwards or under a minute. */
@@ -1032,8 +1072,6 @@ const MAX_NAMED_MISSING = 2;
 interface LineFacts {
   /** how long the build has worked, pauses aside: "1 h 5 min" */
   worked: string | null;
-  /** the same for a build that can go on, against the time it was given when it has one: "1 h 5 min of 8 h" */
-  time: string | null;
   hasBuild: boolean;
 }
 
@@ -1054,23 +1092,13 @@ export function workedShortWords(worked: RunWorked | null | undefined, now = Dat
   return minutes < 1 ? null : shortSpanWords(minutes);
 }
 
-/**
- * The time a build has worked (run-state.ts `RunWorked`, left out while its start is unknown),
- * said once for every state, and against the time it was given while it can still go on.
- */
+/** The time a build has worked (run-state.ts `RunWorked`, left out while its start is unknown), said once for every state. */
 function lineFacts(graph: RunGraph, summary: RunSummary | null, now: number): LineFacts {
-  const run = graph.nodes.find((node) => node.kind === GraphNodeKind.Run);
-  const budget = run?.kind === GraphNodeKind.Run ? (run.durationMs ?? null) : null;
   const ms = summary?.worked ? workedMs(summary.worked, now) : null;
-  const worked = ms === null ? null : workedWords(ms);
-  return {
-    worked,
-    time: ms !== null && budget ? budgetWords(ms, budget) : worked,
-    hasBuild: hasNewBuild(graph, summary),
-  };
+  return { worked: ms === null ? null : workedWords(ms), hasBuild: hasNewBuild(graph, summary) };
 }
 
-/** A state and the time the build has worked: "Paused · 1 h of 8 h". */
+/** A state and the time the build has worked: "Paused · 1 h 5 min". */
 const timed = (state: string, time: string | null): string => (time ? `${state} · ${time}` : state);
 
 /**
@@ -1086,7 +1114,7 @@ export function statusLine(graph: RunGraph, summary: RunSummary | null, rows: Pa
   if (execution === ExecutionStatus.Paused)
     return {
       tone: Tone.Orange,
-      strong: timed(t("Paused"), facts.time),
+      strong: timed(t("Paused"), facts.worked),
       rest: facts.hasBuild ? t("an earlier build is ready to play · resume from chat") : t("resume from chat"),
     };
   if (execution === ExecutionStatus.Failed || execution === ExecutionStatus.Cancelled)
@@ -1124,7 +1152,7 @@ function runningLine(graph: RunGraph, summary: RunSummary | null, rows: PartRow[
   if (startFailed)
     rest = building || working ? `${rest} · ${t("the starting point failed")}` : startFailedWords(base.error);
   const doing = step?.state === StepState.Judging ? t("Checking") : t("Building");
-  return { tone: "live", strong: timed(doing, facts.time), rest };
+  return { tone: "live", strong: timed(doing, facts.worked), rest };
 }
 
 /** The starting point failed, with the harness's own error when it gave one. */
@@ -1244,395 +1272,4 @@ function finishedLine(summary: RunSummary | null, rows: PartRow[], facts: LineFa
     strong: timed(t("No new build"), facts.worked),
     rest: summary?.reason ? stoppedWords(summary.reason) : t("nothing was merged"),
   };
-}
-
-// ── layout ────────────────────────────────────────────────────────────────────────────────
-
-/** The strip under the start's pictures that holds its words (`placeStart`). */
-export const START_WORDS = "start:words";
-
-/**
- * Fixed frame sizes, in canvas pixels. Every picture node is one size — its picture fills it and
- * its words sit on the picture — so no state, try count or zoom level changes a node's height.
- */
-export const STEPS = {
-  pad: 24,
-  startW: 208,
-  startH: 130,
-  /** Under the start's pictures, its words: the label and up to three lines of the request, then Show all. */
-  startWordsH: 102,
-  assetsW: 208,
-  assetsH: 96,
-  assetsGap: 32,
-  busGap: 18,
-  nodeW: 208,
-  nodeH: 130,
-  pitch: 244,
-  labelH: 26,
-  rowGap: 36,
-  hangGap: 36,
-  resultW: 208,
-  resultH: 130,
-  resultGap: 18,
-  leadGap: 64,
-  corner: 10,
-} as const;
-
-/** How far the start's line runs when there is no row to feed. */
-const EMPTY_BUS_REACH = 40;
-/** How far a row's label stops short of the result's bus. */
-const LABEL_INSET = 8;
-
-/** How an edge is drawn: merged, merging later, never merged, or in hand now. */
-export const StepEdgeKind = { Solid: "solid", Pending: "pending", Dotted: "dotted", Live: "live" } as const;
-export type StepEdgeKind = (typeof StepEdgeKind)[keyof typeof StepEdgeKind];
-
-export interface EdgeLine {
-  id: string;
-  d: string;
-  kind: StepEdgeKind;
-}
-
-export interface GatePoint {
-  /** the node the gate opens: a step id, or `final` */
-  target: string;
-  gate: Gate;
-  x: number;
-  y: number;
-}
-
-export interface StepsLayout {
-  /** The steps in reading order when the layout has one of its own (a lead's tree in place); else row by row. */
-  order?: string[];
-  /**
-   * `start`, `assets`, `final`, `lead`, every step id, `row:<facetId>` for a label,
-   * and in a tree `jobs` and `finish_check`
-   */
-  rects: Record<string, Rect>;
-  edges: EdgeLine[];
-  gates: GatePoint[];
-  /** steps drawn off the line or on a line that never reaches the build */
-  ghosts: Set<string>;
-  width: number;
-  height: number;
-}
-
-/** What a layout fills in as it places things. */
-export type LayoutDraft = Pick<StepsLayout, "rects" | "edges" | "gates" | "ghosts">;
-
-/** A tree's extra nodes: the lead's background work under it, and the finish check after the result. */
-export interface TreeOptions {
-  jobs: boolean;
-  finishCheck: boolean;
-}
-
-/** What the layout draws besides the rows. */
-export interface LayoutOptions {
-  assets?: boolean;
-  /** the start shows the person's pictures, its words in a strip under them */
-  startWords?: boolean;
-  resultGate?: Gate | null;
-  /** the lead has the run to itself: drawn after the result, or in a tree, on a live line into it */
-  lead?: boolean;
-  /** a tree: the lead stands between what you asked and the rows */
-  tree?: TreeOptions;
-}
-
-/** Where the rows' bus is fed from (the start's right edge, or the lead's in a tree), runs, and the rows begin. */
-interface BusOrigin {
-  from: number;
-  busX: number;
-  rowX: number;
-}
-
-/** The lead of a tree stands right of the start by the lead's gap. */
-export const treeLeadX = (): number => STEPS.pad + STEPS.startW + STEPS.leadGap;
-
-function busOrigin(tree: boolean): BusOrigin {
-  const from = tree ? treeLeadX() + STEPS.nodeW : STEPS.pad + STEPS.startW;
-  return { from, busX: from + STEPS.busGap, rowX: from + 2 * STEPS.busGap };
-}
-
-/**
- * A row as the layout sees it: nothing on its line (a ghost row), or something hanging below; and
- * the height of its label, which a part built in one session does not have.
- */
-interface RowShape {
-  row: PartRow;
-  ghostRow: boolean;
-  label: number;
-  hangs: boolean;
-}
-
-/** A drawn row: where its line runs, and the last node on it that reaches the build. */
-interface DrawnRow {
-  row: PartRow;
-  cy: number;
-  last: Rect | null;
-}
-
-/** Where the next node of a row goes: its column on the line, the node it follows, the next free hang. */
-interface RowCursor {
-  origin: BusOrigin;
-  col: number;
-  previous: Rect | null;
-  anchor: Rect | null;
-  hangX: number;
-}
-
-const rowShape = (row: PartRow): RowShape => {
-  const ghostRow = !row.steps.some((step) => step.onLine);
-  const label = row.steps.some((step) => !step.session) ? STEPS.labelH : 0;
-  return { row, ghostRow, label, hangs: !ghostRow && row.steps.some((step) => !step.onLine) };
-};
-
-/**
- * Start (and the assets under it) → a bus into every row → the steps on each line, the rest
- * hanging below them → a bus out to the result → the lead, while it has the run. Rows never
- * overlap by construction: a row that has something hanging is taller by that lane. A part built
- * in one session is its one node, so its row has no label over it. A tree puts the lead between
- * the start and the rows (its background work under it) and ends in the finish check.
- */
-export function layoutSteps(rows: PartRow[], options: LayoutOptions = {}): StepsLayout {
-  const S = STEPS;
-  const draft: LayoutDraft = { rects: {}, edges: [], gates: [], ghosts: new Set<string>() };
-  const origin = busOrigin(options.tree !== undefined);
-  const shapes = rows.map(rowShape);
-  // A row is taller by one lane when something hangs below its line; the start and the result
-  // sit on the middle of the rows, and the rows move down when the start would not fit above.
-  const heights = shapes.map(({ label, hangs }) => label + S.nodeH + (hangs ? S.hangGap + S.nodeH : 0));
-  const lines = rowLines(shapes, heights);
-  const rowsMid = lines.length ? ((lines[0] ?? 0) + (lines.at(-1) ?? 0)) / 2 : S.startH / 2;
-  const top = S.pad + Math.max(0, S.startH / 2 - rowsMid);
-  const midY = top + rowsMid;
-
-  const drawn: DrawnRow[] = [];
-  let y = top;
-  let right = origin.rowX;
-  shapes.forEach((shape, index) => {
-    drawn.push(placeRow(draft, shape, y, origin));
-    for (const step of shape.row.steps) right = Math.max(right, (draft.rects[step.id]?.x ?? origin.rowX) + S.nodeW);
-    y += (heights[index] ?? 0) + S.rowGap;
-  });
-
-  placeStart(draft, midY, options.assets === true, options.startWords === true);
-  if (options.tree) placeTreeLead(draft, midY, options.tree.jobs, options.lead === true);
-  const rightBus = drawn.length ? right + S.resultGap : origin.from + EMPTY_BUS_REACH;
-  // A row's label may use the row's whole width, never the result's.
-  for (const { row } of drawn) {
-    const label = draft.rects[`row:${row.facet.facetId}`];
-    if (label) label.w = Math.max(S.nodeW, rightBus - origin.rowX - LABEL_INSET);
-  }
-  const into = rightBus + S.resultGap;
-  const final = placeResult(draft, into, midY);
-  placeEnd(draft, final, midY, options);
-  draft.edges.unshift(...busIn(drawn, midY, into, origin));
-  draft.edges.push(...busOut(drawn, rightBus, midY, into));
-  if (options.resultGate) draft.gates.push({ target: "final", gate: options.resultGate, x: final.x, y: midY });
-
-  const bounds = boundsOf(Object.values(draft.rects)) ?? { x: 0, y: 0, w: 0, h: 0 };
-  return { ...draft, width: bounds.x + bounds.w + S.pad, height: bounds.y + bounds.h + S.pad };
-}
-
-/** Where each row's line runs, from the top of the first row. */
-function rowLines(shapes: RowShape[], heights: number[]): number[] {
-  const lines: number[] = [];
-  let top = 0;
-  shapes.forEach((shape, index) => {
-    lines.push(top + shape.label + STEPS.nodeH / 2);
-    top += (heights[index] ?? 0) + STEPS.rowGap;
-  });
-  return lines;
-}
-
-/** One row: its label (none for a part built in one session), the steps on its line, the rest below. */
-function placeRow(draft: LayoutDraft, { row, ghostRow, label }: RowShape, y: number, origin: BusOrigin): DrawnRow {
-  const S = STEPS;
-  const nodeY = y + label;
-  const cy = nodeY + S.nodeH / 2;
-  if (label) draft.rects[`row:${row.facet.facetId}`] = { x: origin.rowX, y, w: S.nodeW, h: S.labelH };
-  const cursor: RowCursor = { origin, col: 0, previous: null, anchor: null, hangX: -Infinity };
-  for (const step of row.steps) {
-    if (ghostRow || step.onLine) placeOnLine(draft, cursor, step, { nodeY, cy, ghostRow });
-    else placeHanging(draft, cursor, step, { hangY: nodeY + S.nodeH + S.hangGap, cy });
-  }
-  return { row, cy, last: ghostRow ? null : cursor.anchor };
-}
-
-/** A line edge into a step: merged, in hand, or never reaching the build. */
-function lineKind(step: Step): StepEdgeKind {
-  if (step.onLine) return StepEdgeKind.Solid;
-  return isLiveStep(step) ? StepEdgeKind.Live : StepEdgeKind.Dotted;
-}
-
-function placeOnLine(
-  draft: LayoutDraft,
-  cursor: RowCursor,
-  step: Step,
-  at: { nodeY: number; cy: number; ghostRow: boolean },
-): void {
-  const S = STEPS;
-  const rect = { x: cursor.origin.rowX + cursor.col * S.pitch, y: at.nodeY, w: S.nodeW, h: S.nodeH };
-  cursor.col += 1;
-  draft.rects[step.id] = rect;
-  if (at.ghostRow && !isLiveStep(step)) draft.ghosts.add(step.id);
-  const { previous } = cursor;
-  if (previous)
-    draft.edges.push({
-      id: `line:${step.id}`,
-      d: `M${previous.x + previous.w} ${at.cy} H${rect.x}`,
-      kind: lineKind(step),
-    });
-  if (step.gate) draft.gates.push({ target: step.id, gate: step.gate, x: rect.x, y: at.cy });
-  cursor.previous = rect;
-  if (step.onLine) cursor.anchor = rect;
-}
-
-/** Off the line: under the node it would have followed, never on top of another hang. */
-function placeHanging(draft: LayoutDraft, cursor: RowCursor, step: Step, at: { hangY: number; cy: number }): void {
-  const S = STEPS;
-  const r = S.corner;
-  const { anchor } = cursor;
-  const x = Math.max(anchor ? anchor.x : cursor.origin.rowX, cursor.hangX);
-  cursor.hangX = x + S.pitch;
-  draft.rects[step.id] = { x, y: at.hangY, w: S.nodeW, h: S.nodeH };
-  if (!isLiveStep(step)) draft.ghosts.add(step.id);
-  const fromX = anchor ? anchor.x + anchor.w / 2 : cursor.origin.busX;
-  const fromY = anchor ? anchor.y + anchor.h : at.cy;
-  const toX = x + S.nodeW / 2;
-  const mid = at.hangY - S.hangGap / 2;
-  const d =
-    fromX === toX
-      ? `M${fromX} ${fromY} V${at.hangY}`
-      : `M${fromX} ${fromY} V${mid - r} Q${fromX} ${mid} ${fromX + r} ${mid} H${toX - r} Q${toX} ${mid} ${toX} ${mid + r} V${at.hangY}`;
-  draft.edges.push({ id: `hang:${step.id}`, d, kind: isLiveStep(step) ? StepEdgeKind.Live : StepEdgeKind.Dotted });
-  if (step.gate) draft.gates.push({ target: step.id, gate: step.gate, x: toX, y: at.hangY });
-}
-
-/**
- * The start on the middle of the rows (with pictures, its words in a strip under them), and the
- * assets card under it with its dotted link.
- */
-export function placeStart(draft: LayoutDraft, midY: number, assets: boolean, words: boolean): void {
-  const S = STEPS;
-  draft.rects.start = { x: S.pad, y: midY - S.startH / 2, w: S.startW, h: S.startH };
-  const bottom = midY + S.startH / 2 + (words ? S.startWordsH : 0);
-  if (words) draft.rects[START_WORDS] = { x: S.pad, y: midY + S.startH / 2, w: S.startW, h: S.startWordsH };
-  if (!assets) return;
-  const assetsTop = bottom + S.assetsGap;
-  draft.rects.assets = { x: S.pad, y: assetsTop, w: S.assetsW, h: S.assetsH };
-  draft.edges.push({
-    id: "assets",
-    d: `M${S.pad + S.startW / 2} ${bottom} V${assetsTop}`,
-    kind: StepEdgeKind.Dotted,
-  });
-}
-
-/** The result; returns its rect. */
-export function placeResult(draft: LayoutDraft, into: number, midY: number): Rect {
-  const S = STEPS;
-  draft.rects.final = { x: into, y: midY - S.resultH / 2, w: S.resultW, h: S.resultH };
-  return draft.rects.final;
-}
-
-/** After the result: a tree's finish check, else the lead while it has the run. */
-export function placeEnd(draft: LayoutDraft, final: Rect, midY: number, options: LayoutOptions): void {
-  if (!options.tree) {
-    if (options.lead) placeLead(draft, final, midY);
-    return;
-  }
-  if (options.tree.finishCheck) placeFinishCheck(draft, final, midY);
-}
-
-/**
- * A tree's lead, right of the start on the middle line: a live line into it while it works alone.
- * Its background work hangs under it on a dotted line, as the assets hang under the start.
- */
-export function placeTreeLead(draft: LayoutDraft, midY: number, jobs: boolean, alone: boolean): void {
-  const S = STEPS;
-  const startRight = S.pad + S.startW;
-  const x = treeLeadX();
-  const lead = { x, y: midY - S.nodeH / 2, w: S.nodeW, h: S.nodeH };
-  draft.rects.lead = lead;
-  draft.edges.push({
-    id: "lead",
-    d: `M${startRight} ${midY} H${x}`,
-    kind: alone ? StepEdgeKind.Live : StepEdgeKind.Solid,
-  });
-  if (!jobs) return;
-  const top = lead.y + lead.h + S.assetsGap;
-  draft.rects.jobs = { x, y: top, w: S.assetsW, h: S.assetsH };
-  draft.edges.push({ id: "jobs", d: `M${x + S.nodeW / 2} ${lead.y + lead.h} V${top}`, kind: StepEdgeKind.Dotted });
-}
-
-/** The finish check, the last node of a run's tree: after the result on a dotted line. */
-function placeFinishCheck(draft: LayoutDraft, final: Rect, midY: number): void {
-  const S = STEPS;
-  const from = final.x + final.w;
-  draft.rects[GraphNodeKind.FinishCheck] = { x: from + S.leadGap, y: midY - S.resultH / 2, w: S.resultW, h: S.resultH };
-  draft.edges.push({
-    id: GraphNodeKind.FinishCheck,
-    d: `M${from} ${midY} H${from + S.leadGap}`,
-    kind: StepEdgeKind.Dotted,
-  });
-}
-
-/** The lead, after the result while it has the run, on a live line from it. */
-function placeLead(draft: LayoutDraft, final: Rect, midY: number): void {
-  const S = STEPS;
-  const from = final.x + final.w;
-  draft.rects.lead = { x: from + S.leadGap, y: midY - S.nodeH / 2, w: S.nodeW, h: S.nodeH };
-  draft.edges.push({ id: "lead", d: `M${from} ${midY} H${from + S.leadGap}`, kind: StepEdgeKind.Live });
-}
-
-/** A row's entry from the bus: solid when something of it reached the line, else live or dotted. */
-function rowEntryKind(row: PartRow): StepEdgeKind {
-  if (row.steps.some((step) => step.onLine)) return StepEdgeKind.Solid;
-  return row.steps.some(isLiveStep) ? StepEdgeKind.Live : StepEdgeKind.Dotted;
-}
-
-/**
- * From the start (the lead, in a tree) into the bus and every row — or straight to the result
- * when there are no rows.
- */
-function busIn(drawn: DrawnRow[], midY: number, into: number, origin: BusOrigin): EdgeLine[] {
-  const { from, busX, rowX } = origin;
-  if (!drawn.length) return [{ id: "direct", d: `M${from} ${midY} H${into}`, kind: StepEdgeKind.Solid }];
-  return [
-    { id: "start", d: `M${from} ${midY} H${busX}`, kind: StepEdgeKind.Solid },
-    ...drawn.map(({ row, cy }) => ({
-      id: `in:${row.facet.facetId}`,
-      d: bend(busX, midY, cy, rowX, STEPS.corner),
-      kind: rowEntryKind(row),
-    })),
-  ];
-}
-
-/** From each row's last node on the line to the result; where lines share the bus the merged one shows. */
-function busOut(drawn: DrawnRow[], rightBus: number, midY: number, into: number): EdgeLine[] {
-  const exits: EdgeLine[] = [];
-  for (const { row, cy, last } of drawn) {
-    if (!last) continue;
-    exits.push({
-      id: `out:${row.facet.facetId}`,
-      d: `M${last.x + last.w} ${cy} ${join(rightBus, cy, midY, into, STEPS.corner)}`,
-      kind: row.integrated || row.steps.some(isFinishedWorker) ? StepEdgeKind.Solid : StepEdgeKind.Pending,
-    });
-  }
-  // The merged one is drawn last.
-  return exits.sort((a, b) => Number(a.kind === StepEdgeKind.Solid) - Number(b.kind === StepEdgeKind.Solid));
-}
-
-/** From the bus at `fromY` up or down to a row at `toY`, then right into its first node. */
-export function bend(x: number, fromY: number, toY: number, toX: number, r: number): string {
-  if (fromY === toY) return `M${x} ${fromY} H${toX}`;
-  const dir = toY > fromY ? 1 : -1;
-  return `M${x} ${fromY} V${toY - dir * r} Q${x} ${toY} ${x + r} ${toY} H${toX}`;
-}
-
-/** Along a row's line to the right bus at `x`, down or up to `midY`, then right into the result. */
-function join(x: number, fromY: number, midY: number, toX: number, r: number): string {
-  if (fromY === midY) return `H${toX}`;
-  const dir = midY > fromY ? 1 : -1;
-  return `H${x - r} Q${x} ${fromY} ${x} ${fromY + dir * r} V${midY - dir * r} Q${x} ${midY} ${x + r} ${midY} H${toX}`;
 }

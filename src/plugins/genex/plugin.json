@@ -1,7 +1,7 @@
 {
   "apiVersion": 3,
   "id": "genex",
-  "version": "1.11.1",
+  "version": "1.16.22",
   "name": "Genex plugin",
   "publisher": "Genex",
   "description": "3D models, characters, sound and art for your games, made in chat with Genex credits. Coding stays on your own provider.",
@@ -35,7 +35,7 @@
     },
     {
       "name": "publish",
-      "description": "Put this game online on Genex. operation 'gallery' publishes it: Studio exports the game, updates its draft page and makes that same build the public version, listing it in the gallery the first time. operation 'draft' updates only the unlisted draft page, a test build that leaves the public version as it is. Studio exports the game itself and asks the user before either runs, so this call can wait several minutes for the answer. Other Genex commands run through genex__cli. A game on Genex shows a cover: a publish, and a draft until the game is first public, sends the picture kept with genex__cover once the upload is recorded (publish-status's cover says how it went) and takes no picture of its own; with none kept and none the owner chose, Genex keeps the cover it has. Returns a job: poll genex__publish-status with operation 'wait' and the jobId until state is done or failed, then give the user galleryUrl after publishing, or draftUrl for a draft.",
+      "description": "Put this game online on Genex. operation 'gallery' publishes it: Studio exports the game, updates its draft page and makes that same build the public version, listing it in the gallery the first time. operation 'draft' updates only the unlisted draft page, a test build that leaves the public version as it is. Studio exports the game itself and asks the user twice: before either runs, then with the exact files it will upload. Tell the user both questions are coming; this call waits for both answers, which can take several minutes. Other Genex commands run through genex__cli. A game on Genex shows a cover: a publish, and a draft until the game is first public, sends the picture kept with genex__cover once the upload is recorded (publish-status's cover says how it went) and takes no picture of its own; with none kept and none the owner chose, Genex keeps the cover it has. Returns a job: poll genex__publish-status with operation 'wait' and the jobId until state is done or failed, then give the user galleryUrl after publishing, or draftPlayUrl for a draft: anyone with it plays the draft, as a guest or signed in. draftUrl is the owner's own draft page and needs their sign-in, so never hand it out as the place to play or test.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -50,7 +50,7 @@
     },
     {
       "name": "publish-status",
-      "description": "Read this game's Genex publishing state, or wait for a running publish. operation 'status' returns immediately; operation 'wait' waits for the job named by jobId and then returns the same state. The state carries the job phase, the draft and gallery links, any error and warnings, and cover: the kept cover picture and clip and how their last send went (last.kind). 'wait' also waits for the cover a publish sends after its upload. Asks the user nothing and charges nothing.",
+      "description": "Read this game's Genex publishing state, or wait for a running publish. operation 'status' returns immediately; operation 'wait' waits for the job named by jobId and then returns the same state. The state carries the job phase, the links (galleryUrl, the public page; draftPlayUrl, the tested draft's own address that anyone may play, guests included; draftUrl, the owner's draft page behind their sign-in), any error and warnings, and cover: the kept cover picture and clip and how their last send went (last.kind). 'wait' also waits for the cover a publish sends after its upload. For a game with a room module, job.room says what this publish made of it: validated (it passed the publish gate; moduleSha256 is that bundle's) and uploaded (it went up with this build), or the gate's failures. Asks the user nothing and charges nothing.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -116,6 +116,7 @@
     },
     {
       "name": "package",
+      "facts": ["web-game"],
       "description": "Add Genex's multiplayer package (@genex-ai/multiplayer) or player-identity package (@genex-ai/embed-sdk) to this game, at the version Studio pins. A game with a package.json installs it with its own package manager; a multiplayer request installs both multiplayer and player identity in one command, with the npm registry open for that command only. It asks nobody. A game made from Studio's template (no package.json) gets Studio's copies mapped into its index.html import map instead, with nothing downloaded, and Studio connects the game. Any other game without package.json cannot add them.",
       "parameters": {
         "type": "object",
@@ -128,6 +129,34 @@
         "required": ["package"]
       },
       "host": "genex-package"
+    },
+    {
+      "name": "room",
+      "facts": ["web-game", "unity-project", "unreal-project"],
+      "description": "Test this game's server-authoritative room module on this computer, with the room-module toolchain Studio ships; the game installs nothing. action validate runs the publish gate: it bundles the module named by the game's authority block, fuzzes it for 30 simulated seconds and replays it, and answers {passed, moduleSha256, failures}; fix every failure before you publish. action start serves the room on 127.0.0.1 with bots (default 3, at most 8) behind latencyMs of one-way delay (default 0, at most 300), and loads the game's preview into it, so the person plays against the bots there; it answers the room's address and whether the preview joined. action status answers the room's last REPORT (players, maxPlayers, perRoom: each room's seats, players and bots, tick p50/p99 against budgetMs, strikes, lastFault, corrections), seatsPerRoom from it, its ctx.log lines and errors; read it while the room runs. Where the game's client joins with a matchKey, start with the same matchKey so the bots join that pool and share the preview's room. action stop ends the room and puts the preview back. One room per game; starting again replaces it. Free: no account, no network, nothing published.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "validate, start, status or stop"
+          },
+          "bots": {
+            "type": "number",
+            "description": "start: bots that join, wander, aim at the nearest player and fire (0 to 8). Default 3, fewer where the authority block's maxPlayers needs a seat for the preview and one free; a count that leaves no seat free is refused."
+          },
+          "latencyMs": {
+            "type": "number",
+            "description": "start: one-way delay added in front of the room, in milliseconds (0 to 300, default 0)."
+          },
+          "matchKey": {
+            "type": "string",
+            "description": "start: the matchKey the game's client passes to connectAuthority (1 to 32 of a-z 0-9 . _ : -, a letter or digit first); the bots join that pool. Leave it out when the client names none."
+          }
+        },
+        "required": ["action"]
+      },
+      "host": "genex-room"
     },
     {
       "name": "cover",
@@ -181,7 +210,7 @@
     },
     {
       "name": "genex",
-      "summary": "Genex's own guide to its asset toolkit, with Studio's map from each Genex CLI command to the Studio tool that runs it (genex__asset, genex__publish, genex__cover, genex__cli, genex__cli-paid, genex__package).",
+      "summary": "Genex's own guide to its asset toolkit, with Studio's map from each Genex CLI command to the Studio tool that runs it (genex__asset, genex__publish, genex__cover, genex__cli, genex__cli-paid).",
       "file": "skills/genex/SKILL.md"
     },
     {
@@ -190,6 +219,22 @@
       "summary": "The @genex-ai/multiplayer API for a web game: rooms, matchmaking, shared state, host and ownership, rate limits, and the draft link that runs it (Studio's preview is single-player).",
       "file": "skills/genex-threejs-multiplayer/SKILL.md",
       "references": ["skills/genex-threejs-multiplayer/references/realtime-patterns.md"]
+    },
+    {
+      "name": "genex-authoritative-multiplayer",
+      "engines": ["web"],
+      "summary": "Server-authoritative multiplayer for a competitive web game: the room module Genex's servers run, connectAuthority on the client, movement presets, lag-compensated shots, and what Studio cannot run or publish of it yet.",
+      "file": "skills/genex-authoritative-multiplayer/SKILL.md",
+      "references": [
+        "skills/genex-authoritative-multiplayer/references/module-api.md",
+        "skills/genex-authoritative-multiplayer/references/physics.md",
+        "skills/genex-authoritative-multiplayer/references/presets.md",
+        "skills/genex-authoritative-multiplayer/references/projectiles.md",
+        "skills/genex-authoritative-multiplayer/references/room-template.md",
+        "skills/genex-authoritative-multiplayer/references/settings.md",
+        "skills/genex-authoritative-multiplayer/references/testing.md",
+        "skills/genex-authoritative-multiplayer/references/levels.md"
+      ]
     },
     {
       "name": "genex-threejs-embed-auth",
@@ -284,6 +329,24 @@
       "label": "Blender server address",
       "type": "string",
       "default": ""
+    },
+    {
+      "key": "mac-notarize",
+      "label": "Sign and notarize Mac apps with my own Apple Developer ID",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "key": "mac-signing-identity",
+      "label": "Developer ID to sign with (empty: the only one in your keychain)",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "mac-notary-profile",
+      "label": "Notary profile saved with xcrun notarytool store-credentials",
+      "type": "string",
+      "default": "genex-notary"
     }
   ],
   "actions": [
@@ -337,6 +400,29 @@
       "confirmation": "Upload this game's ready Mac, Windows and Linux apps from its folder to Genex and list the game in the gallery, where people playing in the Genex desktop app can install them. The first time, a hosted Genex project is created for this game under your account."
     },
     {
+      "name": "cloud-build",
+      "label": "Build an app on Genex",
+      "confirmation": "Upload this game's project privately to Genex, which builds an app of it for another system (a Windows app of an Unreal game made on a Mac) on its own computers and adds it to the game's Genex page. Only you and Genex can see the project."
+    },
+    {
+      "name": "publish-remove-web",
+      "label": "Remove web version",
+      "confirmation": "Take this game's web version off Genex. Its page shows its Mac, Windows and Linux apps again, and the apps stay as they are. You can publish a web version again later."
+    },
+    {
+      "name": "publish-remove-app",
+      "label": "Take an app down",
+      "confirmation": "Take this app off Genex. Players can't download it any more; the game's other apps stay as they are. You can publish it again later."
+    },
+    {
+      "name": "publish-name",
+      "label": "Rename the game"
+    },
+    {
+      "name": "publish-link",
+      "label": "Change the game's link"
+    },
+    {
       "name": "publish-allow-upload",
       "label": "Publish again"
     },
@@ -363,6 +449,20 @@
     {
       "name": "cover-pick",
       "label": "Use this cover"
+    },
+    {
+      "name": "review-status",
+      "label": "Review of this game's apps"
+    },
+    {
+      "name": "review-request",
+      "label": "Request human review",
+      "confirmation": "Ask a person at Genex to review this game's turned-down Mac, Windows or Linux app, or its takedown, with your note. An app Genex keeps no copy of is uploaded again from the game folder so a person can read it."
+    },
+    {
+      "name": "apps-resend",
+      "label": "Send apps again",
+      "confirmation": "Upload this game's ready Mac, Windows and Linux apps from its folder to Genex again, so Genex checks them before players get them. The game's web version stays as it is."
     }
   ],
   "toolbar": [

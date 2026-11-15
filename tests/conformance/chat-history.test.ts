@@ -1,6 +1,6 @@
 import { appendedEntryIds } from "../../src/renderer/chat/transcript-motion.ts";
 import { learningParts } from "../../src/renderer/chat/learning-parts.ts";
-import { anchorShift, mountedRange, rowOffsets } from "../../src/renderer/chat/transcript-window.ts";
+import { anchorShift, loadsEarlier, mountedRange, rowOffsets } from "../../src/renderer/chat/transcript-window.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -15,7 +15,8 @@ import { EventKind } from "../../src/shared/event-log.ts";
 import { EngineId } from "../../src/shared/providers.ts";
 import { EntryKind, toEntries } from "../../src/renderer/chat-entries.ts";
 import { compactedWords } from "../../src/renderer/words.ts";
-import { withLiveTail } from "../../src/renderer/use-chat-history.ts";
+import { filledAfterPage, FOLLOWING_HOLDS, withLiveBatch, withLiveTail } from "../../src/renderer/use-chat-history.ts";
+import { RunState, runExecution } from "../../src/shared/run-state.ts";
 import { removeTree } from "../helpers/tmp.ts";
 import type { EventData, EventEnvelope } from "../../src/substrate/types.ts";
 const event = (id: number, data: EventData): EventEnvelope => ({
@@ -255,11 +256,6 @@ test("delegated background work never becomes the main reply, while a direct cha
     runId: undefined,
     facetId: undefined,
   });
-  assert.deepEqual(delegationActivityScope({ coordinator: { runId: "run" }, readOnly: true }), {
-    role: "planner",
-    runId: "run",
-    facetId: undefined,
-  });
 });
 
 test("late terminal records from another build do not replace the current build outcome", () => {
@@ -468,7 +464,7 @@ test("a run's earlier result card is superseded by its later close, so only the 
   );
 });
 
-test("a coordinator turn ending does not end worker tools; stopping their run does", () => {
+test("a chat turn ending does not end worker tools; stopping their run does", () => {
   const pending = [
     custom(1, "delegated.codex", {
       runId: "build",
@@ -548,7 +544,7 @@ test("cancelled plans stay at their recorded position when a later conversation 
 
 test("queue identity, edits and removals survive paged history and checkpoint batches", async () => {
   const { messageQueueState } = await import("../../src/shared/message-queue.ts");
-  const { conversationThrough } = await import("../../src/shared/coordinator.ts");
+  const { conversationThrough } = await import("../../src/shared/chat-run.ts");
   const user = event(1, { type: "messages", messages: [{ role: "user", content: "Original request" }] });
   const queued = custom(2, "coordinator_message_queued", { messageId: "a", action: { text: "Original request" } });
   let state = chatContext(chatContext([], [user]), [queued]);
@@ -781,6 +777,122 @@ test("the live tail keeps the loaded array when nothing new arrived for this thr
   );
 });
 
+test("a chat following a long Loop holds its newest pages, keeps the run's facts and pages the rest back gap-free", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "studio-chat-follow-"));
+  try {
+    const store = await EventStore.open(root);
+    const thread = await store.createThread();
+    await store.appendEvents(thread, [
+      { type: "messages", messages: [{ role: "user", content: "Build the racing game for three hours" }] },
+      { type: "custom", event_type: CustomEvent.RunStarted, payload: { runId: "loop", project: "game" } },
+    ]);
+    const opened = await store.chatPage(thread);
+    // The window's copy of the log, as the feed hands it over: one builder trace at a time.
+    const live = [...opened.events];
+    const trace = (n: number): EventData => ({
+      type: "custom",
+      event_type: `delegated.${EngineId.ClaudeCode}`,
+      payload: {
+        runId: "loop",
+        delegationId: "builder",
+        kind: "assistant",
+        data: { parts: [{ type: "text", text: `step ${n}` }] },
+      },
+    });
+    const follow = async (records: number, following: boolean) => {
+      let history = { ...opened, threadId: thread, loading: false, paging: false };
+      let most = 0;
+      for (let n = 0; n < records; n += 20) {
+        const { events } = await store.appendEvents(
+          thread,
+          Array.from({ length: 20 }, (_, i) => trace(n + i)),
+        );
+        for (const record of events) {
+          live.push(record);
+          const loaded = new Set(history.events);
+          const rendered = withLiveTail(history.events, live, thread);
+          history = withLiveBatch(
+            history,
+            rendered,
+            rendered.filter((e) => !loaded.has(e)),
+            following,
+          );
+          most = Math.max(most, history.events.length);
+        }
+      }
+      return { history, most };
+    };
+
+    const { history, most } = await follow(2 * FOLLOWING_HOLDS, true);
+    assert.ok(most <= FOLLOWING_HOLDS, `a following chat held ${most} records`);
+    assert.equal(history.hasMore, true);
+    assert.equal(history.events.at(-1)?.id, live.at(-1)?.id, "the newest record stays");
+    const state = mergeChatEvents(history.context, history.events);
+    assert.equal(runExecution(state)?.state, RunState.Running, "the run's start outlives the records dropped after it");
+
+    const earlier = await store.chatPage(thread, history.before ?? undefined);
+    const paged = mergeChatEvents(earlier.events, history.events);
+    const all = await store.listEvents(thread);
+    const from = all.findIndex((e) => e.id === paged[0]?.id);
+    assert.deepEqual(
+      paged.map((e) => e.id),
+      all.slice(from).map((e) => e.id),
+      "scrolling up reads the dropped records back with no gap",
+    );
+
+    const reading = await follow(100, false);
+    assert.equal(
+      reading.history.events.length,
+      live.length,
+      "a reader scrolled up keeps every record since the chat opened",
+    );
+  } finally {
+    await removeTree(root);
+  }
+});
+
+test("a following chat whose newest pages draw too few rows to fill it stops paging them back after every batch", () => {
+  // A Loop's log as the chat draws it: one short row per eighty records (a builder's trace folds
+  // into its tool row), and a chat that needs twenty rows to fill its height. Its newest pages
+  // were too short, so it paged earlier ones back; the next batch dropped them again.
+  const RECORDS_PER_ROW = 80;
+  const ROW_PX = 40;
+  const VIEW_PX = 800;
+  const log = Array.from({ length: 20_000 }, (_, n) => custom(n, "delegated.claude-code", { step: n }));
+  const pageBefore = (before: string | null) => {
+    const end = before ? log.findIndex((e) => e.id === before) : log.length;
+    const start = Math.max(0, end - CHAT_PAGE_SIZE);
+    return { events: log.slice(start, end), before: log[start]?.id ?? null, hasMore: start > 0 };
+  };
+  const first = pageBefore(null);
+  let history = { ...first, context: [] as EventEnvelope[], paging: false };
+  let filled = 0;
+  let pages = 0;
+  const fill = (): void => {
+    for (;;) {
+      const rows = Math.ceil(history.events.length / RECORDS_PER_ROW);
+      const position = { scrollTop: 0, scrollHeight: Math.max(VIEW_PX, rows * ROW_PX), clientHeight: VIEW_PX };
+      if (rows * ROW_PX > VIEW_PX || !loadsEarlier(position, history, true)) return;
+      const page = pageBefore(history.before);
+      pages++;
+      history = { ...history, ...page, events: mergeChatEvents(page.events, history.events) };
+      filled = filledAfterPage(filled, history.events.length, true);
+    }
+  };
+  fill();
+  const toFill = pages;
+  assert.ok(toFill > 0, "the chat paged to fill its height once");
+  pages = 0;
+  for (let batch = 0; batch < 100; batch++) {
+    const fresh = Array.from({ length: 6 }, (_, i) => custom(log.length + i, "delegated.claude-code", { step: i }));
+    log.push(...fresh);
+    const rendered = withLiveTail(history.events, log, "game");
+    history = withLiveBatch(history, rendered, fresh, true, filled);
+    fill();
+  }
+  assert.ok(pages <= toFill, `a hundred batches paged ${pages} pages back after the chat filled with ${toFill}`);
+});
+
 test("routine narration folds by what its record says, not by the words written about it", () => {
   const lines = (events: EventEnvelope[]) =>
     toEntries(events).map((entry) =>
@@ -965,8 +1077,8 @@ test("a message steered in by interrupting the session stops the tools that leg 
       runId: "build",
       facetId: "river",
     }),
-    // A run's coordinator answers for that run: its rows carry the runId, but it is the chat's session.
-    // (Its run controls are the host's own rows, recorded when the host answers them: a read here.)
+    // An older log's session that answered for a run: its rows carry the runId, but it was the chat's.
+    // (Run controls are the host's own rows, recorded when the host answers them: a read here.)
     said(7, "coordinator", [{ type: "tool_use", id: "status", name: "Read", input: { file_path: "NOTES.md" } }], {
       runId: "build",
     }),
@@ -981,7 +1093,7 @@ test("a message steered in by interrupting the session stops the tools that leg 
   assert.deepEqual(
     states("interrupt"),
     ["running", "stopped", "running", "stopped", "running"],
-    "only the interrupted chat legs (a coordinator's too); not the turn's own call, a build worker or the resumed session",
+    "only the interrupted chat legs (an older log's run-scoped one too); not the turn's own call, a build worker or the resumed session",
   );
   assert.deepEqual(
     states("native"),
@@ -1122,52 +1234,4 @@ test("a finished compaction stays in the chat as its own row, never folded into 
   assert.equal(compactedWords(42), "Compacted 42 messages");
   assert.equal(compactedWords(1), "Compacted 1 message");
   assert.equal(compactedWords(undefined), "Compacted the conversation");
-});
-
-test("a message a build's lead heard in its wrap-up reads where the lead heard it, and stays there once the chat answers it", async () => {
-  const { deliveryOrder, toldToLead } = await import("../../src/renderer/chat/delivery-order.ts");
-  const { messageQueueState } = await import("../../src/shared/message-queue.ts");
-  const user = (id: number, content: string) => event(id, { type: "messages", messages: [{ role: "user", content }] });
-  const lead = (id: number, text: string) => custom(id, "director_note", { runId: "run_1", text });
-  const told = [
-    lead(1, "Wrapping up: merging the boss fight."),
-    user(2, "also add rain"),
-    custom(3, "coordinator_message_queued", { messageId: "rain", action: { text: "also add rain" } }),
-    custom(4, "run_steering", {
-      runId: "run_1",
-      text: "also add rain",
-      sourceMessageId: "rain",
-      how: "lead",
-      kept: true,
-    }),
-    lead(5, "Noted: rain comes right after this build closes."),
-  ];
-  assert.deepEqual([...toldToLead(told, messageQueueState(told).messages)], ["rain"]);
-  assert.deepEqual(
-    deliveryOrder(told).map((e) => Number(e.id)),
-    [1, 3, 2, 4, 5],
-    "where the lead heard it, not below the work",
-  );
-  // The build closes and the chat answers it: the bubble stays where the lead heard it.
-  const answered = [
-    ...told,
-    custom(6, "run_finished", { runId: "run_1" }),
-    custom(7, "coordinator_message_processing", { messageId: "rain" }),
-    custom(8, "coordinator_message_handled", { messageId: "rain" }),
-  ];
-  assert.deepEqual(
-    deliveryOrder(answered).map((e) => Number(e.id)),
-    [1, 3, 2, 4, 5, 6, 7, 8],
-  );
-  // A message the lead took as usual is its delivery's, not a told one.
-  const delivered = [
-    user(1, "more lava"),
-    custom(2, "coordinator_message_queued", { messageId: "lava", action: { text: "more lava" } }),
-    custom(3, "coordinator_message_delivered", { messageId: "lava", into: "run_1", how: "lead" }),
-    custom(4, "run_steering", { runId: "run_1", text: "more lava", sourceMessageId: "lava", how: "lead" }),
-  ];
-  assert.deepEqual([...toldToLead(delivered, messageQueueState(delivered).messages)], []);
-  // Delivered to the lead, never heard, and given back as its run ended: it waits below like any other.
-  const givenBack = [...delivered, custom(5, "coordinator_message_requeued", { messageId: "lava" })];
-  assert.deepEqual([...toldToLead(givenBack, messageQueueState(givenBack).messages)], []);
 });

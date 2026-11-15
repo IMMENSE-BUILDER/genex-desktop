@@ -37,6 +37,7 @@ import { LocalSessions } from "./local-session.ts";
 import { CompletionStop, DEFAULT_COMPACTION_PERCENT, STOPPED_BY_USER } from "./common.ts";
 import type { ApiKeyStore } from "../provider-keys.ts";
 import { SecretStorageUnavailableError } from "../secrets.ts";
+import { cleanApiKey } from "../provider-keys.ts";
 import { HOUR_MS, SECOND_MS } from "../../shared/duration.ts";
 import { ContextSource } from "../../shared/context.ts";
 import { EngineKind, EngineStatusCode } from "../../shared/engine-descriptor.ts";
@@ -65,14 +66,18 @@ export const OPENROUTER_COMPLETION_TIMEOUT_MS = HOUR_MS;
 const MAX_REPLY_TOKENS = 32_768;
 /** A model whose context the catalog does not give is assumed to have this much. */
 const DEFAULT_CONTEXT_TOKENS = 32_768;
+/** OpenRouter's 402 when the balance covers a shorter reply: "… but can only afford 9000". */
+const AFFORDABLE_REPLY = /can only afford (\d+)/i;
+/** A reply shorter than this cannot carry a build step: below it the credits are simply out. */
+const MIN_AFFORDABLE_REPLY_TOKENS = 1_024;
+/** The share of the affordable reply asked for, so the prompt's own rounding still fits the balance. */
+const AFFORDABLE_REPLY_SHARE = 0.9;
 /** Characters per token when no tokenizer is at hand: low, so the estimate errs towards compacting early. */
 const CHARS_PER_TOKEN = 3;
 /** Tokens set aside for each picture, which the provider counts in its own way. */
 const IMAGE_RESERVE_TOKENS = 1_600;
 /** Tokens set aside for the provider's chat template around the messages and tools. */
 const TEMPLATE_SLACK_TOKENS = 512;
-/** The shortest and longest a pasted key may be, and the characters it may hold (no space, no newline). */
-const KEY_SHAPE = /^[\x21-\x7e]{16,512}$/;
 /** The reasoning efforts a thinking model is offered; OpenRouter maps them onto each provider's own dial. */
 const OPENROUTER_EFFORTS = [ReasoningEffort.Low, ReasoningEffort.Medium, ReasoningEffort.High] as const;
 /** Tokens per million, the unit OpenRouter's catalog prices are quoted against. */
@@ -192,6 +197,18 @@ export function openRouterModel(entry: CatalogEntry): EngineModel | null {
   return row;
 }
 
+/**
+ * The shorter reply a 402 says the balance still covers, or null when it names none, covers too
+ * little to build with, or is no shorter than the reply already asked for.
+ */
+export function affordableReply(error: unknown, asked: number): number | null {
+  const said = error instanceof Error ? error.message : String(error);
+  const afford = Number(AFFORDABLE_REPLY.exec(said)?.[1]);
+  if (!Number.isFinite(afford)) return null;
+  const reply = Math.floor(afford * AFFORDABLE_REPLY_SHARE);
+  return reply >= MIN_AFFORDABLE_REPLY_TOKENS && reply < asked ? reply : null;
+}
+
 /** The tool-calling models of a catalog response, in the order OpenRouter lists them. */
 export function openRouterModels(body: unknown): EngineModel[] {
   const data = (body as { data?: unknown } | null)?.data;
@@ -243,12 +260,8 @@ function estimatedPromptTokens(request: CompleteRequest): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-/** The key as pasted, trimmed, or null when it cannot be a key (a space, a newline, too short or long). */
-export function cleanApiKey(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const key = value.trim();
-  return KEY_SHAPE.test(key) ? key : null;
-}
+/** The key as pasted, trimmed, or null when it cannot be a key; the rule is every pasted key's (`provider-keys.ts`). */
+export { cleanApiKey };
 
 export interface OpenRouterEngineOptions {
   /** The engine's home: its sessions live under it. */
@@ -453,32 +466,50 @@ export class OpenRouterEngine implements Engine {
     const maxTokens = Math.min(request.maxTokens ?? row.maxTokens, row.maxTokens);
     this.#preflight(request, row, maxTokens);
     const key = await this.#key();
-    const { models, model } = await this.#provider(row, key);
+    const provider = await this.#provider(row, key);
     try {
-      const stream = (models as { stream: PiStreamFn }).stream(model, piContext(request, this.id), {
-        fetch: longHaulFetch(request.signal),
-        timeoutMs: Math.min(request.timeoutMs ?? this.#timeoutMs, this.#timeoutMs),
-        maxTokens,
-        ...(request.signal ? { signal: request.signal } : {}),
-        ...(row.supportsThinking && request.effort ? { reasoningEffort: openRouterEffort(request.effort) } : {}),
-      });
-      await drainPiStream(stream, request, this.id);
-      const assistant = (await stream.result()) as PiAssistant;
-      if (assistant.stopReason === CompletionStop.Aborted)
-        throw new EngineError(EngineFailureKind.Aborted, this.id, STOPPED_BY_USER);
-      if (assistant.stopReason === CompletionStop.Error)
-        throw this.#streamFailure(assistant.errorMessage ?? "model stream failed");
-      const { message, usage } = fromPiAssistant(assistant, this.id);
-      return {
-        message,
-        usage,
-        stopReason: assistant.stopReason ?? CompletionStop.Stop,
-        model: modelId,
-        engine: this.id,
-      };
+      return await this.#stream(request, row, provider, maxTokens);
     } catch (err) {
-      throw this.#failure(err, request);
+      const failure = this.#failure(err, request);
+      // A low balance refuses the full reply before anything streams; the reply it covers still builds.
+      const fewer = failure.kind === EngineFailureKind.UsageLimit ? affordableReply(err, maxTokens) : null;
+      if (fewer === null) throw failure;
+      try {
+        return await this.#stream(request, row, provider, fewer);
+      } catch (again) {
+        throw this.#failure(again, request);
+      }
     }
+  }
+
+  /** One streamed completion of `request`, asking for at most `maxTokens` of reply. */
+  async #stream(
+    request: CompleteRequest,
+    row: EngineModel,
+    { models, model }: { models: unknown; model: unknown },
+    maxTokens: number,
+  ): Promise<CompleteResponse> {
+    const stream = (models as { stream: PiStreamFn }).stream(model, piContext(request, this.id), {
+      fetch: longHaulFetch(request.signal),
+      timeoutMs: Math.min(request.timeoutMs ?? this.#timeoutMs, this.#timeoutMs),
+      maxTokens,
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(row.supportsThinking && request.effort ? { reasoningEffort: openRouterEffort(request.effort) } : {}),
+    });
+    await drainPiStream(stream, request, this.id);
+    const assistant = (await stream.result()) as PiAssistant;
+    if (assistant.stopReason === CompletionStop.Aborted)
+      throw new EngineError(EngineFailureKind.Aborted, this.id, STOPPED_BY_USER);
+    if (assistant.stopReason === CompletionStop.Error)
+      throw this.#streamFailure(assistant.errorMessage ?? "model stream failed");
+    const { message, usage } = fromPiAssistant(assistant, this.id);
+    return {
+      message,
+      usage,
+      stopReason: assistant.stopReason ?? CompletionStop.Stop,
+      model: request.model ?? row.id,
+      engine: this.id,
+    };
   }
 
   /**

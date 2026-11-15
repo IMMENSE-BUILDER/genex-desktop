@@ -9,8 +9,6 @@ export default {
   "(done)": "（完了）",
   "(named {count, plural, one {# time} other {# times}} now)": "（これで{count, plural, other {#回目}}の指摘）",
   "**Build to start:** {ask}": "**開始するビルド：** {ask}",
-  "15 minutes less": "15分減らす",
-  "15 minutes more": "15分増やす",
   "1 credit ≈ 1¢": "1クレジット ≈ 1¢",
   "2 to 20 characters.": "2〜20文字。",
   "3D": "3D",
@@ -23,8 +21,6 @@ export default {
   "64-bit PCs": "64ビットPC",
   "<added>+{count}</added> this month": "今月<added>+{count}</added>",
   "<name>{title}</name> <live>is live!</live>": "<name>{title}</name><live>が公開されました！</live>",
-  'A "beat a real game" run needs at least two screenshots of the reference.':
-    "「本物のゲームを超える」ビルドには、参考ゲームのスクリーンショットが2枚以上必要です。",
   "A ChatGPT connection change is already in progress.": "ChatGPTとの接続はすでに変更中です。",
   "A GLB for the game plus reference renders to check it.": "ゲーム用のGLBと、確認用の参考レンダー。",
   "A Loop in {game} is using Unreal.": "{game}のLoopがUnrealを使っています。",
@@ -127,6 +123,7 @@ export default {
     "モデルをダウンロード中です。ダウンロードが終わってから、このモデルを削除してください。",
   "A mountain rescue game with a dog and a sled": "犬とそりで山の救助をするゲーム",
   "A museum guard game where the exhibits come alive": "展示品が動き出す博物館の警備員ゲーム",
+  "Agents get Unreal {to}’s tools.": "エージェントが Unreal {to} のツールを使えるようになります。",
   "An arcade shooter where your bullets bounce off the walls": "弾が壁で跳ね返るアーケードシューティング",
   "A new build is ready to play.": "新しいビルドをプレイできます。",
   "A new build is ready — reload to play it": "新しいビルドができました。再読み込みでプレイできます",
@@ -139,7 +136,6 @@ export default {
     "Genexの新しいバージョンの準備ができました。これで直るかもしれません。",
   "A night-vision security camera, its timestamp burned in": "タイムスタンプが焼き付いた、暗視モードの防犯カメラ",
   "A ninja who can only move when the music plays": "音楽が鳴っているときだけ動ける忍者",
-  "A note for every part": "すべてのパートへのメモ",
   "A one-button game about a whale jumping out of the ocean": "海から飛び出すクジラのワンボタンゲーム",
   "A paper airplane flying through an office without hitting coworkers":
     "同僚にぶつからないようにオフィスを飛ぶ紙飛行機",
@@ -196,10 +192,6 @@ export default {
   "A stealth game where a cat steals socks from a sleeping house": "寝静まった家から猫が靴下を盗むステルスゲーム",
   "A survival game on a raft that grows from things you fish out of the sea":
     "海から釣り上げたもので大きくなるいかだでのサバイバル",
-  "A team of AIs builds and tests your idea for up to {limit}.":
-    "AIのチームが最大{limit}かけて、アイデアをつくってテストします。",
-  "A team of AIs builds and tests your idea until it’s done.":
-    "AIのチームが、完成するまでアイデアをつくってテストします。",
   "A tide pool explorer collecting shells before the waves return": "波が戻る前に貝殻を集める潮だまり探検",
   "A tiny planet you walk around, planting trees until it turns green":
     "歩き回って木を植え、緑でいっぱいにする小さな惑星",
@@ -216,7 +208,6 @@ export default {
   "A typing game where words are monsters marching toward your castle":
     "言葉がモンスターになって城へ迫ってくるタイピングゲーム",
   "A vertical climber up a beanstalk above the clouds": "雲の上まで豆の木を登る縦スクロールのクライミング",
-  "A visual question failed.": "見た目に関する質問が1件不合格でした。",
   "A volcano island where you build before the next eruption": "次の噴火までに建物を建てる火山島",
   "A wizard duel where spells are drawn with the mouse": "マウスで呪文を描く魔法使いの決闘",
   "A word puzzle where letters fall like rain": "文字が雨のように降ってくる言葉パズル",
@@ -351,13 +342,8 @@ export default {
   "Always allowed": "常に許可",
   "An agent used {app} while you were playing.": "プレイ中にエージェントが{app}を使いました。",
   "An empty level to build from scratch.": "ゼロからつくるための空のレベル。",
-  "An empty scene. It runs and its cameras see it; nothing else was checked yet.":
-    "空のシーンです。動作し、カメラにも映っています。それ以外はまだチェックしていません。",
   "An external Codex CLI is required.": "外部のCodex CLIが必要です。",
   "An http or sse connector has no command": "httpまたはsseのコネクタにはコマンドを指定できません",
-  "An independent interaction check failed.": "独立したインタラクションチェックに失敗しました。",
-  "An independent interaction test was incomplete; its revision was not recorded.":
-    "独立したインタラクションテストが未完了で、そのバージョンは記録されていません。",
   "An independent reviewer compares the current and suggested instructions on your past requests. It doesn’t rebuild your games, so an applied change isn’t proof of better results.":
     "独立したレビュアーが、過去のリクエストを使って現在の指示と提案された指示を比べます。ゲームをつくり直すわけではないため、適用された変更が結果の改善を証明するわけではありません。",
   "An installed plugin declares an MCP server under that id — give this connector a different one":
@@ -373,13 +359,13 @@ export default {
   "Anime cel": "アニメセル",
   Another: "もう1枚",
   "Another Bonsai download is running": "別のBonsaiのダウンロードが実行中です",
-  "Another app is using the port Genex gave {project}. Set it up again to move it to a free one.":
-    "Genexが{project}に割り当てたポートを別のアプリが使っています。もう一度セットアップして空いているポートに移してください。",
   "Another app, such as OneDrive or an antivirus, is still reading the new project's files. Try Create and open again in a moment.":
     "OneDriveやウイルス対策ソフトなど、別のアプリがまだ新しいプロジェクトのファイルを読み込んでいます。少し待ってから、もう一度「作成して開く」を試してください。",
   "Another clip": "別のクリップ",
   "Another cover": "別のカバー",
   "Another folder…": "別のフォルダー…",
+  "Another installer or Visual Studio is running. Close it, then press Do it for me again.":
+    "別のインストーラーかVisual Studioが動いています。閉じてから、もう一度「おまかせ」を押してください。",
   "Another model installation is running.": "別のモデルをインストール中です。",
   Answer: "回答する",
   "Answer question": "質問に答える",
@@ -391,7 +377,6 @@ export default {
     "誰でもつくれます。マニフェスト、ツール、パネルの入ったフォルダーが1つあればOK。Local BlenderやGenexと同じつくりです。",
   "Anyone with the link can play it.": "リンクを知っている人なら誰でも遊べます。",
   "Anything the lead should do next?": "メインエージェントに次にしてほしいことは？",
-  "Anything this part should do differently?": "このパートに変えてほしいことは？",
   "Anything to change here?": "ここで変えたいことは？",
   "App language": "アプリの言語",
   Appearance: "外観",
@@ -438,8 +423,6 @@ export default {
   "Assets are for web games.": "アセットはWebゲーム用です。",
   "Assets being made": "作成中のアセット",
   "Assets you make with Genex show up here.": "Genexでつくったアセットがここに表示されます。",
-  "Assets · {count}": "アセット · {count}",
-  "Assets: {status}": "アセット：{status}",
   "Attach app logs": "アプリのログを添付",
   "Attach images": "画像を添付",
   "Attach this chat": "このチャットを添付",
@@ -454,8 +437,6 @@ export default {
   "Auto would let phones play: no crash reports flagged it.":
     "自動ならスマホでもプレイできます。問題のあるクラッシュレポートはありません。",
   "Auto · desktop only": "自動 · デスクトップのみ",
-  "Available revision: none recorded": "利用できるバージョン：記録なし",
-  "Available revision: {revision}": "利用できるバージョン：{revision}",
   Avatar: "アバター",
   Back: "戻る",
   "Back to Play": "プレイに戻る",
@@ -474,6 +455,8 @@ export default {
   Better: "改善",
   Beta: "ベータ",
   "Between builds": "ビルドの合間",
+  "Bigger than the graphics card, so part of it runs on the CPU":
+    "グラフィックカードに収まらないため、一部をCPUで動かします",
   "Billed by each provider you use": "使うプロバイダーごとに請求されます",
   "Billed by each provider you use.": "使ったプロバイダーごとに請求されます。",
   "Billed by each provider you use. Free models stay in the model menu too.":
@@ -501,7 +484,6 @@ export default {
   "Bring All to Front": "すべてを手前に移動",
   "Bring back newer version": "新しいバージョンに戻す",
   "Bring your AI subscription": "AIサブスクリプションを使う",
-  "Broke again": "再び失敗",
   "Browser OAuth is available for HTTP/SSE connectors only": "ブラウザOAuthはHTTP/SSEコネクタでのみ使えます",
   "Browser showed a code?": "ブラウザにコードが表示されましたか？",
   Build: "ビルド",
@@ -533,19 +515,67 @@ export default {
   "Build the {players} app of {title} again so I can publish it.":
     "{title}の{players}アプリをもう一度ビルドしてください。公開したいです。",
   "Build updated": "ビルドを更新しました",
+  "Build with Genex": "Genexでつくる",
   "Build with the Cursor plan you already have.": "すでに契約しているCursorのプランでつくります。",
   "Build with the Grok account you already have.": "すでに持っているGrokアカウントでつくります。",
   "Changes Harness made to its own instructions. Undo any of them.":
     "Harnessが自分の指示に加えた変更です。どれでも元に戻せます。",
+  "Checking that Microsoft signed the installer…": "インストーラーにMicrosoftの署名があるか確認しています…",
+  "Downloading the Visual Studio Build Tools installer from Microsoft…":
+    "MicrosoftからVisual Studio Build Toolsのインストーラーをダウンロードしています…",
+  "Genex keeps a copy of the project file first. What Unreal {to} saves won’t open in {from}.":
+    "Genex は先にプロジェクトファイルのコピーを残します。Unreal {to} で保存したものは {from} では開けません。",
+  "Genex makes a save point of this game first. What Unreal {to} saves won’t open in {from}.":
+    "Genex は先にこのゲームのセーブポイントを作ります。Unreal {to} で保存したものは {from} では開けません。",
+  "Genex makes new games with Unreal {to}. Agents get its tools.":
+    "Genex は新しいゲームを Unreal {to} で作ります。エージェントはそのツールを使えます。",
+  "Get {version}": "{version}を入手",
+  "Install Visual Studio Build Tools": "Visual Studio Build Toolsをインストール",
+  "Install Visual Studio Build Tools 2022 from Microsoft with Desktop development with C++ and the .NET Framework 4.8 SDK.":
+    "MicrosoftのVisual Studio Build Tools 2022を「C++ によるデスクトップ開発」と .NET Framework 4.8 SDK 付きでインストールしてください。",
+  "Installing Visual Studio Build Tools. Choose Yes when Windows asks; Microsoft's installer shows its progress.":
+    "Visual Studio Build Toolsをインストールしています。Windowsに聞かれたら「はい」を選んでください。進み具合はMicrosoftのインストーラーに表示されます。",
+  "Microsoft's download led somewhere other than Microsoft, so Genex stopped.":
+    "Microsoftのダウンロードが Microsoft 以外の場所につながっていたため、Genexは中止しました。",
+  "Microsoft's download link wasn't secure, so Genex didn't download it.":
+    "Microsoftのダウンロードリンクが安全ではなかったため、Genexはダウンロードしませんでした。",
+  "Microsoft's download was far bigger than its installer, so Genex stopped.":
+    "Microsoftのダウンロードがインストーラーよりはるかに大きかったため、Genexは中止しました。",
+  "Microsoft's installer couldn't download the Build Tools. Check your internet connection and try again.":
+    "MicrosoftのインストーラーがBuild Toolsをダウンロードできませんでした。インターネット接続を確認して、もう一度試してください。",
+  "Microsoft's installer didn't download. Check your internet connection and try again.":
+    "Microsoftのインストーラーをダウンロードできませんでした。インターネット接続を確認して、もう一度試してください。",
+  "Microsoft's installer finished, but Unreal still can't build C++ with what it installed. Install Visual Studio Build Tools 2022 with Desktop development with C++ and the .NET Framework 4.8 SDK yourself.":
+    "Microsoftのインストーラーは終わりましたが、インストールされたものではまだUnrealがC++をビルドできません。Visual Studio Build Tools 2022を「C++ によるデスクトップ開発」と .NET Framework 4.8 SDK 付きでご自身でインストールしてください。",
+  "Move to {version}": "{version} に移行",
+  "Move {name} to Unreal {to}?": "{name} を Unreal {to} に移行しますか？",
+  "Move {project} to Unreal {to}": "{project} を Unreal {to} に移行",
+  "Play in browser": "ブラウザでプレイ",
+  "Play {title} in the browser": "{title}をブラウザでプレイ",
+  "Recommended. Microsoft's free C++ tools: with them the agent writes your game's logic in C++, and Unreal packages a game or plugin with C++. About 7 GB. Do it for me installs them: choose Yes when Windows asks.":
+    "おすすめ。Microsoftの無料のC++ツールです。これがあるとエージェントがゲームのロジックをC++で書けて、C++を使うゲームやプラグインをUnrealでパッケージできます。約7 GB。「おまかせ」でインストールできます。Windowsに聞かれたら「はい」を選んでください。",
+  "Recommended. Microsoft's free C++ tools: with them the agent writes your game's logic in C++, and Unreal packages a game or plugin with C++. Install Visual Studio Build Tools with Desktop development with C++ and the .NET Framework 4.8 SDK.":
+    "おすすめ。Microsoftの無料のC++ツールです。これがあるとエージェントがゲームのロジックをC++で書けて、C++を使うゲームやプラグインをUnrealでパッケージできます。Visual Studio Build Toolsを「C++ によるデスクトップ開発」と .NET Framework 4.8 SDK 付きでインストールしてください。",
   "Self-improvement is off. Harness keeps its own instructions as they are.":
     "自己改善はオフです。Harnessは自分の指示をそのままにします。",
+  "This project isn't on an older Unreal that Genex moves to {version}.":
+    "このプロジェクトは、Genex が {version} に移行できる古い Unreal のものではありません。",
+  "Unreal can build C++ on this PC.": "このPCでUnrealがC++をビルドできます。",
+  "Unreal {engine} doesn't build with the C++ tools on this PC. Do it for me updates them: choose Yes when Windows asks.":
+    "Unreal {engine}はこのPCのC++ツールではビルドできません。「おまかせ」で更新できます。Windowsに聞かれたら「はい」を選んでください。",
+  "Unreal {to} isn’t on this computer yet: about {gb} GB, beside Unreal {from}.":
+    "Unreal {to} はまだこのコンピューターにありません。約 {gb} GB、Unreal {from} と並べて入ります。",
+  "Unreal {version} isn't on this computer yet. Install it first, then move the project.":
+    "Unreal {version} はまだこのコンピューターにありません。先にインストールしてから、プロジェクトを移行してください。",
+  "Update Visual Studio Build Tools": "Visual Studio Build Toolsを更新",
+  "Visual Studio Build Tools are installed.": "Visual Studio Build Toolsをインストールしました。",
+  "Visual Studio's C++ tools are ready": "Visual StudioのC++ツールの準備ができました",
   "When off, Harness doesn’t change its own instructions. Changes it already made stay until you undo them.":
     "オフにすると、Harnessは自分の指示を変えません。すでに加えた変更は、元に戻すまで残ります。",
   "Workers pitch in": "ワーカーが手伝う",
   Building: "制作中",
   "Building the game": "ゲームをビルド中",
   "Building the starting point": "土台をつくっています",
-  "Building the starting point…": "土台をつくっています…",
   "Building your game": "ゲームをつくっています",
   "Building {what}": "{what}をつくっています",
   "Building · Earlier build available": "制作中 · 以前のビルドあり",
@@ -633,8 +663,6 @@ export default {
   Checked: "チェック済み",
   "Checked the project": "プロジェクトをチェックしました",
   "Checked whether play runs": "プレイが動いているか確認しました",
-  "Checked: it loads and its cameras see it. Gameplay is reviewed step by step.":
-    "チェック済み：読み込めて、カメラにも映っています。ゲームプレイはステップごとにレビューします。",
   Checking: "確認中",
   "Checking Blender…": "Blenderを確認中…",
   "Checking it starts…": "起動を確認中…",
@@ -658,8 +686,6 @@ export default {
   "Checking {what} in the preview": "プレビューで{what}を確認しています",
   "Checking…": "確認中…",
   Checkpoint: "チェックポイント",
-  Checks: "チェック",
-  "Checks — {counts}": "チェック — {counts}",
   Choose: "選択",
   "Choose Blender…": "Blenderを選ぶ…",
   "Choose PQ2_0 (recommended) or PTQ1_0 in Model setup.": "モデル設定でPQ2_0（推奨）かPTQ1_0を選んでください。",
@@ -689,6 +715,8 @@ export default {
   "Choose another": "別の画像を選ぶ",
   "Choose another model or check your account in Model providers, then try again.":
     "別のモデルを選ぶか、「モデルプロバイダー」でアカウントを確認してから、もう一度試してください。",
+  "Choose another model, or try again once its provider is back. Your prompt stays here.":
+    "別のモデルを選ぶか、プロバイダーが戻ってからもう一度試してください。プロンプトはここに残ります。",
   "Choose another version": "別のバージョンを選ぶ",
   "Choose blender.exe": "blender.exeを選ぶ",
   "Choose browser OAuth or an Authorization header, not both":
@@ -749,7 +777,6 @@ export default {
   "Close (Esc)": "閉じる（Esc）",
   "Close Window": "ウィンドウを閉じる",
   "Close a terminal session before opening another.": "新しく開く前に、ターミナルセッションをひとつ閉じてください。",
-  "Close capture": "キャプチャを閉じる",
   "Close file": "ファイルを閉じる",
   "Close plugin panel": "プラグインパネルを閉じる",
   "Close search": "検索を閉じる",
@@ -999,6 +1026,7 @@ export default {
   "Couldn't look up Blueprint nodes": "ブループリントのノードを調べられませんでした",
   "Couldn't make Blueprint {blueprint}": "ブループリント{blueprint}を作成できませんでした",
   "Couldn't make material {material}": "マテリアル{material}を作成できませんでした",
+  "Couldn't measure how {character} moves": "{character}の動きを測れませんでした",
   "Couldn't measure the route": "ルートを測定できませんでした",
   "Couldn't measure {count}": "測定不可{count}",
   "Couldn't move {actor}": "{actor}を移動できませんでした",
@@ -1063,6 +1091,8 @@ export default {
   "Couldn’t install: this game is larger than it says.":
     "インストールできませんでした。このゲームは表示されたサイズより大きいです。",
   "Couldn’t install: this game isn’t signed.": "インストールできませんでした。このゲームは署名されていません。",
+  "Couldn’t install: this game needs a newer Genex. Update Genex and try again.":
+    "インストールできませんでした。このゲームには新しいバージョンのGenexが必要です。Genexをアップデートして、もう一度試してください。",
   "Couldn’t install: this game needs Rosetta to run on this Mac.":
     "インストールできませんでした。このゲームをこのMacで動かすにはRosettaが必要です。",
   "Couldn’t install: this game’s files aren’t safe to open.":
@@ -1117,14 +1147,11 @@ export default {
   "Credential save failed. {reason} Sign-in is stopped.":
     "認証情報を保存できませんでした。{reason}サインインを停止しました。",
   Credits: "クレジット",
-  "Critic's advice": "批評役のアドバイス",
   "Curated release": "厳選リリース",
   "Current build failed; no stale output was exported":
     "現在のビルドに失敗しました。古い出力はエクスポートしていません",
   "Current cover": "今のカバー",
-  Custom: "カスタム",
   "Custom theme": "カスタムテーマ",
-  "Custom time limit": "カスタムの時間制限",
   "Customize theme": "テーマをカスタマイズ",
   Cut: "カット",
   "Daily stats arrive with the next genex.games update. Until then, your games’ plays in total.":
@@ -1146,6 +1173,7 @@ export default {
   "Delete every row shared from this computer?": "このコンピューターから共有したすべての行を削除しますか？",
   "Delete game": "ゲームを削除",
   "Delete it from this Mac? You can download it again.": "このMacから削除しますか？もう一度ダウンロードできます。",
+  "Delete it from this PC? You can download it again.": "このPCから削除しますか？もう一度ダウンロードできます。",
   "Delete what I shared": "共有したデータを削除",
   "Delete your comment": "自分のコメントを削除",
   "Delete {model}": "{model}を削除",
@@ -1157,7 +1185,6 @@ export default {
   "Delete…": "削除…",
   "Deleting…": "削除中…",
   Delivered: "提出済み",
-  "Delivered revision: {revision} · from integration {source}": "届けたバージョン：{revision} · 統合{source}から",
   "Delivered, not used yet": "提出済み、未使用",
   Demon: "デーモン",
   Denied: "拒否",
@@ -1175,6 +1202,7 @@ export default {
   Details: "詳細",
   "Details for MCP {name}": "MCP {name}の詳細",
   "Detecting this Mac…": "このMacを確認中…",
+  "Detecting this PC…": "このPCを確認中…",
   Developer: "開発者",
   "Development build": "開発ビルド",
   "Development builds and builds packaged under another name update from source.":
@@ -1193,10 +1221,8 @@ export default {
   "Dismiss remaining imports": "残りのインポートを閉じる",
   Dividers: "区切り線",
   "Do it for me": "おまかせ",
-  "Do it for me opens the launcher, and this chat installs it there with computer control. About 45 GB. Only you sign in to Epic, when it asks.":
-    "「おまかせ」でランチャーを開き、このチャットがコンピューター操作でUnrealをインストールします。約45 GB。Epicにサインインを求められたら、あなたがサインインしてください。",
-  "Does it feel alive? {score} of {max}": "生き生きしている？{score}/{max}",
-  "Does what you ask, then stops.": "頼んだことをやったら、止まります。",
+  "Do it for me opens the launcher, and this chat installs it there with computer control. About {gb} GB. Only you sign in to Epic, when it asks.":
+    "「おまかせ」でランチャーを開き、このチャットがコンピューター操作でUnrealをインストールします。約{gb} GB。Epicにサインインを求められたら、あなたがサインインしてください。",
   "Don't allow": "許可しない",
   "Don't ask again for this action in {source}.": "{source}では今後この操作を確認しません。",
   "Don't use Godot": "Godotを使わない",
@@ -1248,7 +1274,6 @@ export default {
     "ドロップして{count, plural, other {#枚の画像}}を追加",
   "Drove the route": "ルートを走りました",
   Earlier: "それ以前",
-  "Earlier builds": "以前のビルド",
   "Earlier conversation · no folder": "以前の会話 · フォルダーなし",
   Edit: "編集",
   "Edit connector {id}": "コネクタ{id}を編集",
@@ -1296,7 +1321,6 @@ export default {
   "Every game chat and Loop run is recorded under Recent runs.":
     "ゲームのチャットとLoopの実行は、すべて「最近のビルド」に記録されます。",
   "Every game dev tool": "すべてのゲーム開発ツール",
-  "Every part": "すべてのパート",
   "Every part can reach for it when a shape needs real modelling.":
     "本格的なモデリングが必要な形があれば、どのパートからも使えます。",
   "Every part starts from it · {count, plural, one {# part} other {# parts}} waiting.":
@@ -1327,8 +1351,6 @@ export default {
   "Export target must be an ordinary directory": "エクスポート先は通常のフォルダーにする必要があります",
   "Export validation does not yet support scoped import maps; build this project before export":
     "エクスポートの検証はまだscoped import mapsに対応していません。エクスポートする前にこのプロジェクトをビルドしてください",
-  "Exported for the web into web/: Live's Web game tab plays it, and Publish puts it online.":
-    "web/にWeb向けにエクスポートしました。ライブの「Webゲーム」タブでプレイでき、「公開」でオンラインにできます。",
   "Exported {count} public files. Included: {included}. Excluded from selected roots: {excluded}.":
     "公開ファイルを{count}個書き出しました。含まれるファイル：{included}。選んだルートから除外：{excluded}。",
   "Exporting…": "エクスポート中…",
@@ -1389,11 +1411,32 @@ export default {
   Fit: "全体表示",
   "Fit every asset": "すべてのアセットを表示",
   "Fit everything": "全体を表示",
-  "Fit everything (0)": "全体を表示（0）",
+  "Tidy up": "整える",
+  "Genex is drawing {title}": "Genex が {title} を描いています",
+  "{title} · next": "{title} · 次",
+  "{count, plural, one {# new pick} other {# new picks}}": "{count, plural, other {新しい選択 #件}}",
+  "Use this": "これにする",
+  "Not this": "これはなし",
+  Chosen: "選択済み",
+  "Use this: {title} ({file})": "これにする: {title}（{file}）",
+  "Not this: {title} ({file})": "これはなし: {title}（{file}）",
+  "My picks on the Design board:": "Design ボードでの選択:",
+  Note: "メモ",
+  "Add a picture": "画像を追加",
+  "Write a note…": "メモを書く…",
+  "Delete note": "メモを削除",
+  "Not sent yet": "未送信",
+  "Sent to Genex": "Genex に送信済み",
+  "{count, plural, one {# new note} other {# new notes}}": "{count, plural, other {新しいメモ #件}}",
+  "Tell Genex": "Genex に伝える",
+  "My notes on the Design board:": "Design ボードのメモ:",
+  "{title} ({file}), {across}% across and {down}% down: {text}":
+    "{title}（{file}）、左から{across}%・上から{down}%: {text}",
+  "On the canvas: {text}": "キャンバス上: {text}",
+  "Put every artboard back in its row": "アートボードを元の並びに戻す",
   "Fit the picture": "画像を全体表示",
   Fix: "修正",
   "Fix the build error, then try again.": "ビルドエラーを直してから、もう一度試してください。",
-  "Fix: {fix}": "修正案：{fix}",
   "Fixes: {task}": "修正：{task}",
   "Fixing a shader error…": "シェーダーのエラーを直しています…",
   Flare: "フレア",
@@ -1523,6 +1566,8 @@ export default {
   "Genex cover": "Genexカバー",
   "Genex credits": "Genexクレジット",
   "Genex decides from crash reports": "クラッシュレポートからGenexが判断します",
+  "Genex didn't answer in time. Check the game's link again in a minute.":
+    "Genexから時間内に応答がありませんでした。1分ほどしてからゲームのリンクをもう一度確認してください。",
   "Genex didn't click anything. Install Unreal {version} yourself in the launcher: {clicks}.":
     "Genexは何もクリックしていません。ランチャーで自分でUnreal {version}をインストールしてください：{clicks}。",
   "Genex didn't click anything. Turn it on yourself: {clicks}.":
@@ -1568,6 +1613,8 @@ export default {
     "GenexがGodotをインストールしています。何もしなくて大丈夫です。",
   "Genex is open source under the MIT License. It also includes software from other projects, each under its own license.":
     "GenexはMITライセンスのオープンソースです。ほかのプロジェクトのソフトウェアも含まれており、それぞれ独自のライセンスに従います。",
+  "Genex is still publishing this game. Change the link once it's done.":
+    "Genexはまだこのゲームを公開中です。終わってからリンクを変更してください。",
   "Genex isn't getting Roblox Studio right now.": "Genexは今、Roblox Studioを入手していません。",
   "Genex keeps a copy of each file first, and Undo setup takes these changes back. A Genex editor helper file you changed is kept beside it as a .mine copy.":
     "Genexは先に各ファイルのコピーを保存します。「セットアップを元に戻す」でこれらの変更を取り消せます。あなたが変更したGenexエディターヘルパーのファイルは、.mineコピーとして横に残ります。",
@@ -1580,6 +1627,8 @@ export default {
   "Genex leaves it open until the Loop ends.": "Loopが終わるまでGenexは開いたままにします。",
   "Genex makes new Unreal projects with Unreal {versions}, and this computer has Unreal {version}. Install {wanted} beside it in the Epic Games Launcher ({clickPath}), or make the project in Unreal's own New Project dialog and choose it from the Unreal button.":
     "GenexはUnreal {versions}で新しいUnrealプロジェクトを作りますが、このコンピューターにはUnreal {version}が入っています。Epic Games Launcherで{wanted}も追加でインストールする（{clickPath}）か、Unreal自身のNew Projectダイアログでプロジェクトを作り、Unrealボタンから選んでください。",
+  "Genex makes new Unreal projects with Unreal {versions}, and this computer has Unreal {version}. Install {wanted} beside it in the Epic Games Launcher ({clickPath}).":
+    "GenexはUnreal {versions}で新しいUnrealプロジェクトを作りますが、このコンピューターにはUnreal {version}が入っています。Epic Games Launcherで{wanted}も追加でインストールしてください（{clickPath}）。",
   "Genex needs your OK to set up": "Genexのセットアップには許可が必要です",
   "Genex plugin": "Genexプラグイン",
   "Genex plugin, Credits": "Genexプラグイン、クレジット",
@@ -1588,10 +1637,6 @@ export default {
     "Genexがこのプラグインのために{count, plural, other {#個のツール}}を実行します：",
   "Genex saves each change to the folder’s own Git history.":
     "Genexは変更のたびに、フォルダー自身のGit履歴に保存します。",
-  "Genex sets it up for agents first; you confirm what changes.":
-    "Genexが先にエージェント用にセットアップします。変更内容はあなたが確認します。",
-  "Genex sets {project} up for agents now; you confirm what changes.":
-    "Genexが今{project}をエージェント用にセットアップします。変更内容はあなたが確認します。",
   "Genex sign-in expired. Reconnect your account.": "Genexのサインインが期限切れです。アカウントを再接続してください。",
   "Genex starts Git history here, so any change can be undone.":
     "GenexがここでGit履歴を始めるので、どの変更も元に戻せます。",
@@ -1724,7 +1769,6 @@ export default {
   Headers: "ヘッダー",
   "Headers: name": "ヘッダー：名前",
   Headset: "ヘッドセット",
-  "Health check": "動作チェック",
   "Held {input}": "{input}を押し続けました",
   Help: "ヘルプ",
   Hide: "隠す",
@@ -1736,8 +1780,6 @@ export default {
   "Hide this card until the agent shows it again": "エージェントがまた表示するまで、このカードを隠す",
   "Hide what would be sent": "送信される内容を隠す",
   "Hide {app}": "{app}を隠す",
-  "History incomplete — counts describe recorded events.":
-    "履歴が不完全です。件数は記録されたイベントだけを数えています。",
   "Hold {key} to exit full screen": "{key}を長押しすると全画面表示を終了します",
   "Holding {input}": "{input}を押し続けています",
   "Holo foil": "ホロ箔",
@@ -1746,10 +1788,6 @@ export default {
   "Home background": "ホームの背景",
   "Hooks can run commands with your access.": "フックはあなたの権限でコマンドを実行できます。",
   Horns: "ツノ",
-  "Hours — workers build while you're away, and a reviewer keeps only what improves the game. It builds until about {end}. Keep the app open.":
-    "時間：離れている間にワーカーがつくり、レビュアーはゲームが良くなる変更だけを残します。{end}ごろまでつくります。アプリは開いたままにしてください。",
-  "Hours — workers build while you're away, and a reviewer keeps only what improves the game. No cap: it runs until what you asked for is checked working, and stops by about {end} whatever happens. Keep the app open.":
-    "時間：離れている間にワーカーがつくり、レビュアーはゲームが良くなる変更だけを残します。上限なし。頼んだことが動くと確認できるまで続き、何があっても{end}ごろには止まります。アプリは開いたままにしてください。",
   Hover: "ホバー",
   "How Harness works": "Harnessの仕組み",
   "How does Harness build a game?": "Harnessはどのようにゲームをつくりますか？",
@@ -1796,9 +1834,8 @@ export default {
   "In the background: {title}": "バックグラウンド：{title}",
   "In the build · not in your game folder yet": "ビルド内 · まだゲームフォルダーにはありません",
   "In the game's folder": "ゲームのフォルダー内",
-  "In the launcher, sign in, then {clickPath}. About 45 GB. Only you can sign in to Epic.":
-    "ランチャーでサインインしてから、{clickPath}の順に進みます。約45 GB。Epicにサインインできるのはあなただけです。",
-  "In the reviewers' words: {words}": "レビュアーの言葉：{words}",
+  "In the launcher, sign in, then {clickPath}. About {gb} GB. Only you can sign in to Epic.":
+    "ランチャーでサインインしてから、{clickPath}の順に進みます。約{gb} GB。Epicにサインインできるのはあなただけです。",
   "In this game’s folder. Workers load them from there.":
     "このゲームのフォルダーにあります。ワーカーはここから読み込みます。",
   "In total": "合計",
@@ -1808,10 +1845,6 @@ export default {
   "In {folder}": "{folder}内",
   "In-game economy": "ゲーム内経済",
   Incomplete: "未完了",
-  "Independent interaction coverage is incomplete.": "独立したインタラクションの確認範囲が不完全です。",
-  "Independent interaction coverage is unavailable for this revision.":
-    "このバージョンでは独立したインタラクションの確認範囲を利用できません。",
-  "Independent interaction coverage is unknown.": "独立したインタラクションの確認範囲は不明です。",
   "Independent playtest": "独立プレイテスト",
   "Independent playtest {number} — {check} (question not recorded)":
     "独立プレイテスト{number} — {check}（質問は記録されていません）",
@@ -1882,7 +1915,8 @@ export default {
   "Installing {name}. This can take a minute.": "{name}をインストールしています。1分ほどかかることがあります。",
   "Installing {title}": "{title}をインストール中",
   "Installing…": "インストール中…",
-  "Installing… {percent}%": "インストール中… {percent}%",
+  "Installing… {speed}": "インストール中… {speed}",
+  "about {minutes} min left": "残り約{minutes}分",
   "Installs OpenCode on this Mac. This can take a minute.":
     "このMacにOpenCodeをインストールします。1分ほどかかることがあります。",
   "Install…": "インストール…",
@@ -1944,8 +1978,6 @@ export default {
     "Genexの次のタイミングで実行されます：{steps}。これらのステップは事前に確認しません。",
   "It runs with your access: Genex doesn't sandbox its code.":
     "あなたの権限で動作します。Genexはこのコードをサンドボックス化しません。",
-  "It runs, but no reviewer compared it with the game you had.":
-    "動作はしますが、レビュアーは前のゲームと比較していません。",
   "It shows up here as soon as it runs.": "動くようになったら、すぐここに表示されます。",
   "It starts off: turn it on in Plugins; each of its tools asks you before it runs.":
     "最初はオフです。「プラグイン」でオンにしてください。各ツールは実行前に確認します。",
@@ -1973,8 +2005,10 @@ export default {
   "Its packages aren’t installed yet.": "パッケージがまだインストールされていません。",
   "Its project didn’t go, so no one can remix it yet.":
     "プロジェクトが送れなかったので、まだ誰もリミックスできません。",
-  "Its project is too big to remix: Genex keeps up to 5 GB and 5,000 files.":
-    "プロジェクトが大きすぎてリミックスできません。Genex に置けるのは 5 GB・5,000 ファイルまでです。",
+  "Its project is too big to remix: Genex keeps up to 100 GB and 50,000 files.":
+    "プロジェクトが大きすぎてリミックスできません。Genex に置けるのは 100 GB・50,000 ファイルまでです。",
+  "There isn’t enough free space on this computer to remix this game.":
+    "このコンピューターの空き容量が足りないため、このゲームをリミックスできません。",
   "Its session failed before it delivered anything.": "何も提出しないうちにセッションが失敗しました。",
   "Its source is your own repository: run genex make-remixable in the game’s folder to allow remixing.":
     "ソースはあなた自身のリポジトリにあります。リミックスを許可するには、ゲームのフォルダーでgenex make-remixableを実行してください。",
@@ -1992,7 +2026,6 @@ export default {
   "Joined {when}": "{when}に参加",
   "Judge who played it": "プレイした審査員",
   "Jump to latest": "最新へ移動",
-  "Jump to now": "現在に移動",
   Keep: "残す",
   "Keep building": "続きをつくる",
   "Keep building where you left off.": "中断したところから続きをつくってください。",
@@ -2008,14 +2041,8 @@ export default {
   "Kept by reviewers": "レビュアーが採用",
   "Kept by reviewers, not added": "レビュアーが採用、未追加",
   "Kept in your project": "プロジェクトに保存済み",
-  "Kept, and the reviewers are satisfied with this part: every identity check passes and the side-by-side reviewer has nothing left to ask.":
-    "採用。レビュアーはこのパートに満足しています：主要なチェックはすべて合格し、並べて比べるレビュアーからの要望ももうありません。",
   "Kept, not added": "採用、未追加",
   "Kept.": "採用されました。",
-  "Kept. No check changed, but the step landed and the side-by-side reviewer preferred the new build to the one before.":
-    "採用。チェックに変化はありませんが、ステップは反映され、並べて比べるレビュアーは前のビルドより新しいビルドを選びました。",
-  "Kept. {count, plural, one {# check that failed before now passes} other {# checks that failed before now pass}}, nothing that passed before broke, and the side-by-side reviewer did not object.":
-    "採用。前は失敗していたチェックのうち{count, plural, other {#件}}が合格になり、前に合格していたものは壊れず、並べて比べるレビュアーからの異論もありませんでした。",
   Kind: "種類",
   "Kinds of asset": "アセットの種類",
   "Koi drifting through a neon night market, seen from above": "ネオンの夜市の上を漂う鯉を真上から",
@@ -2032,7 +2059,6 @@ export default {
   "Latest build": "最新のビルド",
   "Latin only": "ラテン文字のみ",
   "Laying the terrain": "地形を作成しています",
-  "Lead's last look": "メインエージェントの最終確認",
   Learn: "詳しく",
   "Learn about Genex": "Genexについて詳しく",
   "Learn more": "詳しく見る",
@@ -2069,8 +2095,6 @@ export default {
   "Listing the toolsets": "ツールセットの一覧を取得しています",
   Live: "ライブ",
   "Live in your game": "ゲームに反映済み",
-  "Live is showing: {shown}": "ライブで表示中：{shown}",
-  "Live is showing: {shown} — {error}": "ライブで表示中：{shown} — {error}",
   "Live · just now": "公開中 · たった今",
   "Live · {when} ago": "公開中 · {when}前",
   "Load a local plugin package": "ローカルのプラグインパッケージを読み込む",
@@ -2126,19 +2150,9 @@ export default {
   "Looking through the assets": "アセットに目を通しています",
   "Looking up Blueprint nodes": "ブループリントのノードを調べています",
   "Looking…": "探しています…",
-  "Loop can't start: the studio's own loop code predates the composer's Loop feature, so it doesn't know how to run a timed build. To fix it, ask the studio in chat to merge the seed's Loop handling (harness-seed/loop) into its own loop code and restart itself — or restore the seed copies so the next launch upgrades them. Your brief is saved above; send it again once the loop code is current.":
-    "Loopを開始できません：Studioのループのコードが入力欄のLoop機能より古いため、時間指定ビルドの実行方法がわかりません。直すには、チャットでStudioに、ベースのLoop処理（harness-seed/loop）を自身のループのコードにマージして再起動するよう頼んでください。または、ベースのコピーを復元して、次回の起動で更新されるようにしてください。指示は上に保存されています。ループのコードが最新になったら、もう一度送信してください。",
-  "Loop can’t run in this game yet, so Keep building can’t start it.":
-    "このゲームではまだLoopを実行できないため、「続きをつくる」で開始できません。",
   "Loop finished · Changes kept in your project": "Loop終了 · 変更はプロジェクトに残っています",
   "Loop from {day}": "{day}のLoop",
-  "Loop mode": "Loopモード",
   "Loop not started": "Loopは開始されませんでした",
-  "Loop time limit": "Loopの時間制限",
-  "Loops need the {engine} project inside this game’s folder, so Rewind can undo each step; {project} is in {place}. Make a new one from the {engine} button, or move {project} into this game’s folder and choose it there. Until then, it does what you ask, then stops.":
-    "Loopには、巻き戻しで各ステップを元に戻せるよう、{engine}プロジェクトがこのゲームのフォルダー内にある必要があります。{project}は{place}にあります。{engine}ボタンから新しく作るか、{project}をこのゲームのフォルダーに移してそこで選んでください。それまでは、頼んだことをして止まります。",
-  "Loops need this game’s {engine} project inside its folder, so Rewind can undo each step. A new {engine} project made from the {engine} button goes there. Until then, it does what you ask, then stops.":
-    "Loopには、巻き戻しで各ステップを元に戻せるよう、このゲームの{engine}プロジェクトがフォルダー内にある必要があります。{engine}ボタンから作った新しい{engine}プロジェクトはそこに入ります。それまでは、頼んだことをして止まります。",
   "Luau checks are added: scripts are checked at each worker's end and before a build finishes.":
     "Luauチェックを追加しました。各ワーカーの終了時とビルド完了前に、スクリプトがチェックされます。",
   "Luau checks are already on this computer.": "Luauチェックはすでにこのコンピューターにあります。",
@@ -2150,7 +2164,6 @@ export default {
   "Made Blueprint {blueprint}": "ブループリント{blueprint}を作成しました",
   "Made by {name}": "{name}で作成",
   "Made material {material}": "マテリアル{material}を作成しました",
-  "Made with {engine}": "{engine}で制作",
   "Made {name} in this game's folder and linked it, but Roblox Studio didn't open: {why}":
     "このゲームのフォルダーに{name}を作ってリンクしましたが、Roblox Studioが開きませんでした：{why}",
   "Made {name} in this game's folder and opened it in Roblox Studio.":
@@ -2211,9 +2224,11 @@ export default {
   Mast: "マスト",
   "Matrix rain": "マトリックスの雨",
   "Maximum concurrent workers": "同時に動かすワーカーの上限",
+  "Measured how {character} moves": "{character}の動きを測りました",
   "Measured in a plugin": "プラグインで計測",
   "Measured in {plugin}": "{plugin}で計測",
   "Measured the route": "ルートを測定しました",
+  "Measuring how {character} moves": "{character}の動きを測っています",
   "Measuring the route": "ルートを測定しています",
   "Measuring…": "計測中…",
   "Meet your Genex avatar": "あなたのGenexアバターです",
@@ -2230,7 +2245,6 @@ export default {
   "Mobile support for {title}": "{title}のモバイル対応",
   "Mobile support saved": "モバイル対応を保存しました",
   Mode: "モード",
-  "Mode options": "モードのオプション",
   "Model Providers": "モデルプロバイダー",
   "Model discovery disconnected.": "モデルの検出が切断されました。",
   "Model discovery timed out. Try again.": "モデルの検出がタイムアウトしました。もう一度試してください。",
@@ -2288,6 +2302,7 @@ export default {
   "Needs a key": "キーが必要",
   "Needs a {ram} GB Mac": "{ram} GBのMacが必要",
   "Needs setup": "セットアップが必要",
+  "Needs ~{need} GB to run": "動かすには約{need} GBが必要",
   "Neon rings": "ネオンリング",
   "Never asks, stays sandboxed": "確認なし、サンドボックス内で動作",
   "Never asks, works anywhere": "確認せず、どこでも動きます",
@@ -2306,8 +2321,8 @@ export default {
   "New versions arrive with your system's updates: Software Updater, sudo apt upgrade or sudo dnf upgrade.":
     "新しいバージョンはシステムのアップデート（Software Updater、sudo apt upgrade、sudo dnf upgrade）で届きます。",
   "Newer integrated build not delivered": "新しい統合ビルドは反映されていません",
+  Newest: "新しい順",
   "Newest code on {branch}": "{branch}の最新コード",
-  "Newly passing": "新たに合格",
   "Newspaper halftone, the ink bleeding": "インクがにじむ新聞の網点",
   Next: "次へ",
   "Next (→)": "次へ（→）",
@@ -2335,7 +2350,6 @@ export default {
     "このコンピューターには{file}を開けるアプリがないため、エクスプローラーで表示しています。",
   "No assets yet": "アセットはまだありません",
   "No build": "ビルドなし",
-  "No checks recorded.": "記録されたチェックはありません。",
   "No checks yet": "まだチェックはありません",
   "No comments on {title} yet": "{title}にはまだコメントがありません",
   "No compatible newer release is available for this installed plugin":
@@ -2362,14 +2376,13 @@ export default {
   "No plugin.json at that path in the pinned commit": "固定されたコミットのそのパスにplugin.jsonがありません",
   "No plugins installed yet. Add one from the Add menu.":
     "まだプラグインがありません。「追加」メニューから追加してください。",
-  "No prompt recorded": "プロンプトの記録がありません",
-  "No prompt was recorded.": "プロンプトは記録されていません。",
   "No provider signed in. OpenCode's free models run without an account.":
     "サインイン済みのプロバイダーはありません。OpenCodeの無料モデルはアカウントなしで使えます。",
   "No published games yet.": "公開済みのゲームはまだありません。",
   "No recommended model fits this Mac. More models lists what bigger Macs can run.":
     "このMacに合うおすすめモデルはありません。「その他のモデル」で、より大きなMacで動くモデルを確認できます。",
-  "No reviewer compared it": "レビュアーの比較なし",
+  "No recommended model fits this PC. More models lists what each one needs.":
+    "このPCに合うおすすめモデルはありません。「その他のモデル」で、それぞれに必要な容量を確認できます。",
   "No reviewer saw it; the lead merged the part's work into your build.":
     "レビュアーは見ていません。メインエージェントがパートの作業をビルドに追加しました。",
   "No screenshot was saved for this stage.": "この段階のスクリーンショットは保存されていません。",
@@ -2382,7 +2395,6 @@ export default {
   "No such account: {account}": "そのアカウントはありません：{account}",
   "No supported UI colors found. Choose a Genex token file or a VS Code color theme.":
     "対応するUIカラーが見つかりません。Genexのトークンファイルか、VS Codeのカラーテーマを選んでください。",
-  "No time limit": "時間制限なし",
   "No unlocked system keyring is available. Start GNOME Keyring or KWallet and unlock it, then restart Genex.":
     "ロック解除されたシステムキーリングがありません。GNOME KeyringかKWalletを起動してロックを解除し、Genexを再起動してください。",
   "Nobody answered": "誰も応答しませんでした",
@@ -2390,7 +2402,6 @@ export default {
   "Nobody named “{query}”.": "「{query}」という名前の人はいません。",
   Noise: "ノイズ",
   None: "なし",
-  "None made": "作成なし",
   "None yet": "まだありません",
   "Not a public file: {path}": "公開ファイルではありません：{path}",
   "Not added": "未追加",
@@ -2398,7 +2409,6 @@ export default {
   "Not asked — the step did not land.": "依頼なし — ステップが実現しませんでした。",
   "Not confirmed": "未確認",
   "Not connected": "未接続",
-  "Not decided yet.": "まだ決まっていません。",
   "Not downloaded": "未ダウンロード",
   "Not enabled": "未許可",
   "Not enough space: {required, plural, other {# bytes}} needed for remaining downloads, temporary extraction and reserve; {available} available.":
@@ -2448,9 +2458,15 @@ export default {
   "Nothing beyond its own tools": "自分のツールだけ",
   "Nothing changed. Try again in a moment.": "何も変わりませんでした。少し待ってからもう一度試してください。",
   "Nothing is added to this folder.": "このフォルダーには何も追加されません。",
-  "Nothing is failing.": "失敗しているものはありません。",
   "Nothing is installing.": "インストール中のものはありません。",
   "Nothing is online for this game yet": "このゲームはまだ何もオンラインにありません",
+  "Give the link a letter or a number.": "リンクに文字か数字を入れてください。",
+  "Another game already has this link. Try another one.":
+    "このリンクは別のゲームが使っています。別のものを試してください。",
+  "This game has used all its link changes.": "このゲームはリンクの変更回数を使い切りました。",
+  "Genex keeps this link for itself. Try another one.":
+    "このリンクは Genex が使うため使えません。別のものを試してください。",
+  "Give the game a name with a letter or a number in it.": "文字か数字を含む名前をゲームに付けてください。",
   "Nothing kept yet": "まだ採用なし",
   "Nothing made": "成果なし",
   "Nothing made yet": "まだ何も作られていません",
@@ -2468,8 +2484,6 @@ export default {
     "まだありません。チャットで「常に許可」を選ぶと、ここに追加されます。",
   "Nothing yet. Finish a build and its row appears here.":
     "まだありません。ビルドを終えると、その行がここに表示されます。",
-  "Nothing — this part has stopped ({reason}).": "なし — このパートは停止しました（{reason}）。",
-  "Nothing — this part is done.": "なし — このパートは完了しました。",
   Notifications: "通知",
   "Notifications, new activity": "通知、新しいアクティビティあり",
   "Notifications, {count} waiting for you": "通知（対応待ち{count}件）",
@@ -2483,8 +2497,6 @@ export default {
   "OS encryption is unavailable; secret storage remains locked.":
     "OSの暗号化が使えないため、シークレットストレージはロックされたままです。",
   Off: "オフ",
-  "Off — one build pass in this chat, shown as it goes. Set hours for a reviewed build that runs on its own: ∞ until what you asked for is checked working, or a number of hours.":
-    "オフ：このチャットで1回だけビルドし、その様子が見えます。時間を設定すると、レビュー付きのビルドが自動で進みます。∞なら頼んだことが動くと確認できるまで、数字ならその時間だけ続きます。",
   "Off. Your agent can't use Genex tools.": "オフ。エージェントはGenexのツールを使えません。",
   "Off: friends see your name only.": "オフ：フレンドには名前だけが表示されます。",
   Offline: "オフライン",
@@ -2496,6 +2508,9 @@ export default {
   "Older messages can still rewind the chat, but not its files.":
     "古いメッセージまでチャットを巻き戻すことはできますが、ファイルは戻りません。",
   "Older models": "以前のモデル",
+  "Ollama could not download this model: {reason}": "Ollamaはこのモデルをダウンロードできませんでした：{reason}",
+  "The download stopped before it finished. Download again to continue.":
+    "ダウンロードが途中で止まりました。もう一度ダウンロードすると続きから再開します。",
   "Ollama is not running at {host}. Install or start Ollama, then download again.":
     "{host}でOllamaが動いていません。Ollamaをインストールまたは起動してから、もう一度ダウンロードしてください。",
   "Ollama keeps its models in its own folder: move them in Ollama → Settings → Model location.":
@@ -2516,9 +2531,10 @@ export default {
   "On this Mac · {size}": "このMac · {size}",
   "Once on, it runs at Genex's moments: {steps}; those steps don't ask you first.":
     "オンにすると、Genexの次のタイミングで実行されます：{steps}。これらのステップは事前に確認しません。",
+  "One account for frontier AI models and game dev tools. Pay with Genex credits.":
+    "1つのアカウントで最先端のAIモデルとゲーム開発ツールが使えます。Genexのクレジットで支払います。",
   "One account for hundreds of models. You pay OpenRouter for what you use.":
     "1つのアカウントで数百のモデルが使えます。使った分だけOpenRouterに支払います。",
-  "One bold move": "大胆な一手",
   "One key for hundreds of models. Pay as you go.": "1つのキーで数百のモデルが使えます。料金は使った分だけ。",
   "One step before the agent can build in Godot.": "あと1ステップで、エージェントがGodotでつくれるようになります。",
   "Online rooms": "オンラインルーム",
@@ -2588,10 +2604,8 @@ export default {
   "Open in Godot {version}.": "Godot {version}で開いています。",
   "Open in Unreal": "Unrealで開く",
   "Open in terminal": "ターミナルで開く",
-  "Open it after the Loop ends.": "Loopが終わったら開いてください。",
   "Open it in a private window to join as another player.":
     "プライベートウィンドウで開くと、別のプレイヤーとして参加できます。",
-  "Open it once Unreal is free.": "Unrealが空いたら開いてください。",
   "Open on Play": "「プレイ」で開く",
   "Open page": "ページを開く",
   "Open pages on {domain}": "{domain}のページを開く",
@@ -2706,7 +2720,6 @@ export default {
   "Part of {plugin}": "{plugin}の一部",
   "Part {number}": "パート{number}",
   "Particles orbiting a faint signal": "かすかな信号のまわりを回る粒子",
-  "Partly added": "一部追加済み",
   "Parts of the build": "ビルドのパート",
   Passed: "合格",
   "Passed {count}": "合格{count}",
@@ -2870,7 +2883,6 @@ export default {
   "Processed in {plugin}": "{plugin}で処理",
   Profile: "プロフィール",
   Prompt: "プロンプト",
-  "Public:": "公開リンク：",
   Publish: "公開",
   "Publish again": "もう一度公開",
   "Publish again without waiting for the last upload": "前回のアップロードを待たずにもう一度公開",
@@ -2902,7 +2914,6 @@ export default {
   "Publishing this game ({phase})": "このゲームを公開中（{phase}）",
   "Publishing…": "公開しています…",
   "Pull a recommended model from the Models tab.": "「モデル」タブからおすすめのモデルを取得してください。",
-  "Put it together and check": "組み合わせて確認",
   "Put question aside": "あとで答える",
   "Put the game files back as they were before this rewind; the chat stays rewound":
     "ゲームファイルを巻き戻す前の状態に戻す。チャットは巻き戻したまま",
@@ -2927,7 +2938,6 @@ export default {
   "Ran {script}": "{script}を実行しました",
   "Read Blueprint {blueprint}": "ブループリント{blueprint}を読みました",
   "Read a toolset": "ツールセットを読み込みました",
-  "Read all": "すべて読む",
   "Read by agents on demand": "必要なときにエージェントが読みます",
   "Read files in {path}": "{path}内のファイルを読む",
   "Read the Blueprint guide": "ブループリントのガイドを読みました",
@@ -2973,7 +2983,6 @@ export default {
   "Recorded build capture": "記録されたビルドのキャプチャ",
   "Recorded check": "記録されたチェック",
   "Recorded check capture": "チェック時のキャプチャ",
-  "Recorded interaction check passed.": "記録されたインタラクションチェックに合格しました。",
   Redo: "やり直す",
   "Reference or mood board": "参考画像やムードボード",
   "Refresh marketplace index": "マーケットプレイスの一覧を更新",
@@ -3013,6 +3022,9 @@ export default {
   "Remove plugin": "プラグインを削除",
   "Remove preset": "プリセットを削除",
   "Remove queued message": "待機中のメッセージを削除",
+  "Edit queued message": "待機中のメッセージを編集",
+  "Send now": "今すぐ送信",
+  "Stop and send now": "停止して今すぐ送信",
   "Remove tag": "タグを外す",
   "Remove the waiting messages first: this harness cannot take them back.":
     "先に待機中のメッセージを削除してください。このHarnessはそれを取り消せません。",
@@ -3042,7 +3054,6 @@ export default {
   "Replace the key in Settings › Model Providers.": "設定 › モデルプロバイダーでキーを置き換えてください。",
   "Replace {old} with {name} {version}?": "{old}を{name} {version}に置き換えますか？",
   "Replayed route": "再現したルート",
-  "Replayed the judge's route": "審査員のルートを再現",
   "Report sent": "レポートを送信しました",
   "Reported by the selected Codex CLI profile. Availability does not mean a skill was used in a conversation.":
     "選択中のCodex CLIプロファイルからの情報です。利用可能でも、チャットでスキルが使われたとは限りません。",
@@ -3105,17 +3116,9 @@ export default {
   Reviewers: "レビュアー",
   "Reviewers compare instructions; they don’t rebuild your games. An applied change isn’t proof of better results.":
     "レビュアーが比べるのは指示で、ゲームをつくり直すわけではありません。変更を適用しても、結果がよくなった証明にはなりません。",
-  "Reviewers kept it": "レビュアーが採用",
-  "Reviewers kept try {number}": "レビュアーが{number}回目を採用",
-  "Reviewers looking now": "レビュアーが確認中",
   "Reviewers model": "レビュアーのモデル",
-  "Reviewers preferred it": "レビュアーはこちらを選びました",
-  "Reviewers preferred the game you had": "レビュアーは前のゲームを選びました",
   "A second opinion": "セカンドオピニオン",
-  "Reviewers undid it": "レビュアーが取り消し",
-  "Reviewers undid {count, plural, other {# tries}}": "レビュアーが{count, plural, other {#回}}取り消し",
   "Reviewers · try {number}": "レビュアー · {number}回目",
-  "Reviewers' notes": "レビュアーのメモ",
   "Reviewers: {model}": "レビュアー：{model}",
   Reviewing: "レビュー中",
   "Reviewing a build": "ビルドをレビュー中",
@@ -3224,7 +3227,6 @@ export default {
   "Save as preset…": "プリセットとして保存…",
   "Save image": "画像を保存",
   "Save key": "キーを保存",
-  "Save name": "名前を保存",
   "Save tags": "タグを保存",
   "Save the new game in": "新しいゲームの保存先",
   "Save to your library": "ライブラリに保存",
@@ -3326,12 +3328,10 @@ export default {
   "Set up Codex": "Codexをセットアップ",
   "Set up OpenCode": "OpenCodeをセットアップ",
   "Set up an Unreal project for Genex.": "UnrealプロジェクトをGenex用にセットアップします。",
-  "Set up and open": "セットアップして開く",
   "Set up for Genex": "Genex用にセットアップ",
   "Set up the protected workspace": "保護されたワークスペースをセットアップ",
   "Set up this game's Unity project": "このゲームのUnityプロジェクトをセットアップしてください",
   "Set up {name} for Genex.": "{name}をGenex用にセットアップします。",
-  "Set up {name} for Genex?": "{name}をGenex用にセットアップしますか？",
   "Set up {project} after it ends.": "Loopが終わったら{project}をセットアップしてください。",
   "Set up {project} for Genex · {game} now builds in {engine}":
     "{project}をGenex用にセットアップしました · {game}は{engine}でつくるようになりました",
@@ -3404,7 +3404,6 @@ export default {
   "Shows in its folder": "フォルダー内で表示します",
   "Shows on Play under {shelf} · {tags}.": "「プレイ」の「{shelf}」に表示されます · {tags}。",
   "Shows on Play under {shelf}.": "「プレイ」の「{shelf}」に表示されます。",
-  "Side by side with the build before": "前のビルドとの比較",
   Sidebar: "サイドバー",
   Sigil: "紋章",
   "Sign in": "サインイン",
@@ -3459,8 +3458,6 @@ export default {
     "サインアウトしました。続きをつくるには、もう一度サインインしてください。",
   "Signing in…": "サインイン中…",
   "Single player": "シングルプレイ",
-  "Six things the critic looks for; the weakest here is {thing}.":
-    "批評役は6つの点を見ます。ここでいちばん弱いのは「{thing}」です。",
   Size: "サイズ",
   "Skill details": "スキルの詳細",
   Skills: "スキル",
@@ -3503,6 +3500,7 @@ export default {
   Sound: "サウンド",
   "Sound effect": "効果音",
   "Sound, music and art": "サウンド、音楽、アート",
+  "Sort assets": "アセットを並べ替え",
   Sounds: "サウンド",
   Source: "ソース",
   "Source code": "ソースコード",
@@ -3515,7 +3513,6 @@ export default {
   "Start Speaking": "読み上げを開始",
   "Start a game here": "ここでゲームを始める",
   "Start building": "つくり始める",
-  "Start failed": "開始できませんでした",
   "Start free with OpenCode's own models, or sign in to a provider you already use.":
     "OpenCode独自のモデルで無料で始めるか、いま使っているプロバイダーにサインインしましょう。",
   "Start in folder": "開始フォルダー",
@@ -3524,7 +3521,6 @@ export default {
   "Start your server, then check again.": "サーバーを起動してから、もう一度確認してください。",
   "Started by the lead": "メインエージェントが開始",
   "Started by {who}": "開始：{who}",
-  "Started from": "開始時点",
   "Started {time}": "{time}に開始",
   "Started {time} · {duration} so far": "{time}に開始 · ここまで{duration}",
   Starting: "起動中",
@@ -3535,7 +3531,6 @@ export default {
   "Starting background work": "バックグラウンド作業を開始中",
   "Starting game": "ゲームを起動中",
   "Starting point": "土台",
-  "Starting point…": "土台…",
   "Starting the protected workspace": "保護されたワークスペースを起動中",
   "Starting your build": "ビルドを開始しています",
   "Starting…": "起動中…",
@@ -3543,9 +3538,7 @@ export default {
     "エージェント用に{count, plural, other {#個のプログラム}}を起動します：",
   Stats: "統計",
   "Status unavailable": "ステータスを取得できません",
-  Steps: "ステップ",
   "Still checking the payment": "支払いを確認中です",
-  "Still failing": "まだ失敗中",
   "Still open": "未完了",
   "Still testing": "まだテスト中",
   "Still to fix": "残りの修正点",
@@ -3564,7 +3557,6 @@ export default {
   "Stop your builds and replies first, then move.": "先にビルドと返信を止めてから移動してください。",
   Stopped: "停止",
   "Stopped adding the Luau checks. Nothing was kept.": "Luauチェックの追加を停止しました。何も保存されていません。",
-  "Stopped by the lead": "メインエージェントが停止",
   "Stopped getting Roblox Studio.": "Roblox Studioの入手を止めました。",
   "Stopped getting Roblox Studio. Anything Roblox's installer already put on this computer stays.":
     "Roblox Studioの入手を止めました。Robloxのインストーラーがすでにこのコンピューターに入れたものは残ります。",
@@ -3604,7 +3596,6 @@ export default {
   "Studio is offline in this profile": "このプロファイルではStudioはオフラインです",
   "Studio is restarting. Try again in a moment.": "Studioを再起動しています。少ししてからもう一度試してください。",
   "Studio is still starting": "Studioはまだ起動中です",
-  "Studio learning: {learning} — separate from game execution.": "Studioの学習：{learning}（ゲームの実行とは別です）。",
   "Studio no longer has that saved version.": "Studioにはその保存済みバージョンがもうありません。",
   "Studio plugins": "Studioプラグイン",
   "Studio restarted": "Studioを再起動しました",
@@ -3650,7 +3641,6 @@ export default {
   "Taking a still from {camera}": "{camera}から静止画を撮っています",
   "Taking longer than usual.": "いつもより時間がかかっています。",
   "Talk to the lead while it builds…": "つくっている間もメインエージェントと話せます…",
-  "Technical details": "技術的な詳細",
   "Tell Claude what to do instead…": "代わりにどうしてほしいかClaudeに伝える…",
   "Tell the worker what to do instead…": "代わりにどうしてほしいかワーカーに伝える…",
   Terminal: "ターミナル",
@@ -3668,7 +3658,6 @@ export default {
   Terrain: "地形",
   Test: "テスト",
   "Test connector {id}": "コネクタ{id}をテスト",
-  "Test link:": "テストリンク：",
   Testing: "テスト中",
   Text: "テキスト",
   "Text adjusted for readability.": "読みやすいように文字色を調整しました。",
@@ -3826,8 +3815,6 @@ export default {
   "The installer stopped before it finished. Try again.":
     "インストーラーが途中で止まりました。もう一度試してください。",
   "The judge didn't play": "審査員はプレイしませんでした",
-  "The judge's moves were replayed on this build, and the goal held.":
-    "審査員の操作をこのビルドで再現し、目標は達成されたままでした。",
   "The key is checked with OpenRouter, then kept on this Mac.":
     "キーはOpenRouterで確認したあと、このMacに保存されます。",
   "The last publish failed. Open Publish to read why.":
@@ -3835,7 +3822,6 @@ export default {
   "The last version is still live.": "前のバージョンは公開されたままです。",
   "The latest build is ready to play.": "最新のビルドをプレイできます。",
   "The lead": "メインエージェント",
-  "The lead asked": "メインエージェントの依頼",
   "The lead didn't merge it, so it isn't in your build.":
     "メインエージェントが追加しなかったので、ビルドには入っていません。",
   "The lead is building in your project": "メインエージェントがプロジェクト内で直接つくっています",
@@ -3861,8 +3847,6 @@ export default {
   "The lead stopped {count}.": "メインエージェントが{count}回の試行を止めました。",
   "The lead wants to run {job} in the background":
     "メインエージェントが{job}をバックグラウンドで実行しようとしています",
-  "The lead's summary": "メインエージェントのまとめ",
-  "The lead's view of the game": "メインエージェントから見たゲーム",
   "The lead: done": "メインエージェント：完了",
   "The lead: paused": "メインエージェント：一時停止中",
   "The lead: stopped": "メインエージェント：停止",
@@ -3932,10 +3916,6 @@ export default {
     "土台はチェックに合格しました。各パートにはそれぞれの判定がまだ必要です。",
   "The starting point runs but is empty — no scenery or gameplay yet.":
     "土台は動きますが空っぽです。まだ景色もゲームプレイもありません。",
-  "The starting point was rejected, and the game was put back the way it started.":
-    "土台は却下され、ゲームは最初の状態に戻されました。",
-  "The starting point was rejected, and the game was put back the way it started. What the checks saw: {problem}":
-    "土台は却下され、ゲームは最初の状態に戻されました。チェックで見つかったこと：{problem}",
   "The starting point was rejected; the parts carry on from an empty game.":
     "土台は却下されました。パートは空のゲームから続けます。",
   "The studio could not see the game — looking again in {seconds}s":
@@ -3947,14 +3927,11 @@ export default {
   "The studio window keeps crashing": "Studioのウィンドウがクラッシュを繰り返しています",
   "The terminal could not start. Try opening it again.":
     "ターミナルを起動できませんでした。もう一度開いてみてください。",
-  "The weakest thing: {thing}.": "いちばん弱い点：{thing}。",
   "The worker is on try {tryNumber}.": "ワーカーは{tryNumber}回目に取り組んでいます。",
   "The worker tried something outside the rules of its workspace.":
     "ワーカーがワークスペースのルール外のことをしようとしました。",
   "The {app} is older than your last change: build it again, then publish.":
     "{app}は最後の変更より前のものです。もう一度ビルドしてから公開してください。",
-  "The {plugin} plugin {version} is ready. Press to update it in Plugins.":
-    "{plugin}プラグイン{version}の準備ができました。押すと「プラグイン」でアップデートできます。",
   Theme: "テーマ",
   "Theme JSON": "テーマのJSON",
   "Theme copied.": "テーマをコピーしました。",
@@ -4017,7 +3994,6 @@ export default {
   "This account is signed out": "このアカウントはサインアウトしています",
   "This audio codec could not be played. Try a WAV, MP3 or Ogg export.":
     "このオーディオコーデックは再生できません。WAV、MP3、Oggで書き出してみてください。",
-  "This build": "このビルド",
   "This build doesn't check for updates.": "このビルドはアップデートを確認しません。",
   "This build is your game now": "このビルドが今のゲームになりました",
   "This build is your game now — open Live to play it.":
@@ -4029,12 +4005,8 @@ export default {
     "このGenexのビルドでは、ビルドの統計共有が削除されています。",
   "This build of the studio can't pick a build back up yet — its own loop code predates timed builds.":
     "このバージョンのStudioは、まだビルドを再開できません。ループのコードが時間指定ビルドより古いためです。",
-  "This build of the studio can't run a timed build yet — your brief is saved above, and sending it again once the studio has updated itself will start the build. (Its own loop code predates timed builds: the seed's harness-seed/loop needs to be merged into it, or the seed copies restored so the next launch upgrades them.)":
-    "このバージョンのStudioは、まだ時間指定ビルドを実行できません。指示は上に保存されています。Studioが自身をアップデートしたあとにもう一度送信すると、ビルドが始まります。（ループのコードが時間指定ビルドより古いためです。ベースのharness-seed/loopをそこにマージするか、ベースのコピーを復元して次回の起動で更新されるようにする必要があります。）",
   "This build turned out not to run — reload to go back to your game":
     "このビルドは動きませんでした。再読み込みでゲームに戻れます",
-  "This build's workers or reviewers run on a local model, which the studio's own loop code doesn't support yet — your brief is saved above. Pick every job on one kind of engine and send it again, or ask the studio to merge the seed's harness-seed/loop into its own loop code (or restore the seed copies) so the next launch upgrades them.":
-    "このビルドのワーカーまたはレビュアーはローカルモデルで動いていますが、Studioのループのコードはまだ対応していません。指示は上に保存されています。すべての役割を同じ種類のエンジンにしてもう一度送信するか、ベースのharness-seed/loopを自身のループのコードにマージする（またはベースのコピーを復元する）ようStudioに頼んで、次回の起動で更新されるようにしてください。",
   "This change no longer differs from what Harness has now.": "この変更は、今のHarnessの内容ともう違いがありません。",
   "This change was already undone.": "この変更はすでに元に戻されています。",
   "This chat has no game folder yet.": "このチャットにはまだゲームフォルダーがありません。",
@@ -4138,6 +4110,7 @@ export default {
   "This model is unavailable": "このモデルは利用できません",
   "This model is unavailable. Check the connection or choose another model.":
     "このモデルは使えません。接続を確認するか、別のモデルを選んでください。",
+  "This model isn’t available right now": "このモデルは今使えません",
   "This page isn't from the sign-in Genex started.": "このページは、Genexが開始したサインインのものではありません。",
   "This paste has {count, plural, other {# servers}}. Pick one:":
     "貼り付けた内容に{count, plural, other {#個のサーバー}}があります。1つ選んでください：",
@@ -4209,6 +4182,8 @@ export default {
   "Toggle Developer Tools": "デベロッパーツール",
   "Toggle Full Screen": "フルスクリーン",
   "Toggle terminal": "ターミナルの表示を切り替え",
+  "Told a worker: {said}": "ワーカーに伝えた：{said}",
+  "Told “{task}”: {said}": "「{task}」に伝えた：{said}",
   "Too large to run locally": "大きすぎてローカルでは動かせません",
   "Too large to save, so it stays as it is: {names}.": "保存するには大きすぎるため、そのままになります：{names}。",
   "Too large to save, so they stay as they are: {names}.": "保存するには大きすぎるため、そのままになります：{names}。",
@@ -4249,8 +4224,6 @@ export default {
   "Try again, or choose another model.": "もう一度試すか、別のモデルを選んでください。",
   "Try the build again": "ビルドをもう一度試す",
   "Try your changes before you update.": "アップデート前に変更を試せます。",
-  "Try {count}": "{count}回目",
-  "Try {count} · the worker is done": "{count}回目 · ワーカーの作業が完了",
   "Try {number}": "{number}回目",
   "Try {number}: {state}": "{number}回目：{state}",
   "Trying again…": "再試行中…",
@@ -4293,15 +4266,10 @@ export default {
     "フィードバックを送信できませんでした。少し待ってから、もう一度試してください。",
   "Unclosed TOML array": "TOMLの配列が閉じられていません",
   "Unclosed TOML string": "TOMLの文字列が閉じられていません",
-  "Undid {count, plural, one {# try} other {# tries}} before it": "それまでに{count, plural, other {#回}}取り消し",
   Undo: "元に戻す",
-  "Undo setup for {name}?": "{name}のセットアップを元に戻しますか？",
   "Undo this change": "この変更を元に戻す",
   Undone: "取り消し済み",
   "Undone because {reason}.": "取り消した理由：{reason}。",
-  "Undone — {reason}.": "取り消し — {reason}。",
-  "Undone — {reason}. The reviewers' biggest objection: {objection}.":
-    "取り消し — {reason}。レビュアーのいちばんの指摘：{objection}。",
   "Undone. {game} builds in {engine} again, and {project} is no longer set up for Genex.":
     "元に戻しました。{game}はまた{engine}でつくるようになり、{project}のGenex用セットアップは解除されました。",
   "Undone. {game} builds in {engine} again.": "元に戻しました。{game}はまた{engine}でつくるようになりました。",
@@ -4349,7 +4317,7 @@ export default {
   Unpublish: "公開を取り消す",
   "Unpublish {title}?": "{title}の公開をやめますか？",
   "Unpublishing…": "公開をやめています…",
-  "Unreal Engine 5.8 isn’t on this computer yet.": "Unreal Engine 5.8はまだこのコンピューターにありません。",
+  "Unreal Engine isn’t on this computer yet.": "Unreal Engineはまだこのコンピューターにありません。",
   "Unreal Engine {version} isn't on this computer yet. The Unreal button above the game shows how to get it free from Epic, and notices when it's installed.":
     "Unreal Engine {version}はまだこのコンピューターにありません。ゲームの上にあるUnrealボタンで、Epicから無料で入手する方法を確認できます。インストールされると自動で認識します。",
   "Unreal couldn't use the port Genex gave {name}. Quit Unreal and open it again from the Unreal button.":
@@ -4399,8 +4367,6 @@ export default {
   "Update and play": "アップデートしてプレイ",
   "Update needed": "アップデートが必要",
   "Update ready — restart": "アップデートの準備完了 — 再起動",
-  "Update the Genex plugin in Plugins to publish apps.":
-    "アプリを公開するには、「プラグイン」でGenexプラグインをアップデートしてください。",
   "Update to {version}": "{version}にアップデート",
   "Update {count}": "{count}件をアップデート",
   "Update {name}": "{name}をアップデート",
@@ -4472,7 +4438,6 @@ export default {
   "Vaporwave sun": "ヴェイパーウェイヴの太陽",
   "Variable names use capital letters, digits and _; header names letters, digits and -.":
     "変数名には大文字・数字・_、ヘッダー名には英字・数字・-が使えます。",
-  Verdict: "判定",
   Version: "バージョン",
   "Version {version}": "バージョン{version}",
   "Versions of your games saved for Rewind and builds.": "巻き戻しとビルドのために保存したゲームのバージョンです。",
@@ -4486,7 +4451,6 @@ export default {
   "Video, 5 s": "動画（5秒）",
   Videos: "動画",
   View: "表示",
-  "View capture": "キャプチャを表示",
   "View plugin": "プラグインを表示",
   "View {name}": "{name}を表示",
   Vision: "画像対応",
@@ -4556,12 +4520,8 @@ export default {
   "What should it show? Or leave it empty": "何を写しますか？空欄のままでもOKです",
   "What should the worker do instead?": "代わりにワーカーにどうしてほしいですか？",
   "What the new cover should show": "新しいカバーに写すもの",
-  "What the reviewers named": "レビュアーが挙げた点",
-  "What the studio learned": "Studioが学んだこと",
-  "What the worker is asked next": "ワーカーへの次の依頼",
   "What to show": "表示する内容",
   "What was learned": "学んだこと",
-  "What you asked": "リクエストの内容",
   "What's missing: {task}": "足りないもの：{task}",
   "When a session limit resets, a while after a model provider’s outage, or when Studio’s loop restarts, a paused build picks up where it left off, up to twice per build. A build you stop stays stopped, and one paused on a sign-in waits for you.":
     "セッションの上限がリセットされたとき、モデルプロバイダーの障害からしばらくたったとき、またはStudioのループが再起動したときに、一時停止中のビルドが中断したところから再開します（1つのビルドにつき最大2回）。自分で止めたビルドは止まったままで、サインイン待ちで止まったビルドはあなたを待ちます。",
@@ -4574,9 +4534,7 @@ export default {
   Whose: "誰の",
   "Whose assets": "誰のアセット",
   "Who’s playing shows again when you’re back online.": "オンラインに戻ると、誰がプレイ中かがまた表示されます。",
-  "Why it stopped": "停止した理由",
   "Why the agents didn’t start": "エージェントが起動しなかった理由",
-  "Why the lead stopped it": "メインエージェントが止めた理由",
   Window: "ウィンドウ",
   "Windows app": "Windowsアプリ",
   "Windows didn't get permission to install. Press Do it for me again and choose Yes when Windows asks.":
@@ -4636,8 +4594,6 @@ export default {
   "Yes, in Auto mode": "はい、Autoモードで",
   Yesterday: "昨日",
   "You approved": "あなたが承認",
-  "You asked": "あなたのリクエスト",
-  "You asked: {request}": "あなたのリクエスト：{request}",
   "You build.": "あなたがつくる。",
   "You can ask about Harness and its improvements here. Games are built in their own chats.":
     "ここではHarnessとその改善について質問できます。ゲームはそれぞれのチャットでつくります。",
@@ -4682,7 +4638,6 @@ export default {
   "Your Nex arrived. Review the purchase, then pay.": "Nexが届きました。購入内容を確認して支払ってください。",
   "Your files": "あなたのファイル",
   "Your game appears here": "ここにゲームが表示されます",
-  "Your game as it was when the run started.": "ビルドを始めたときのゲームの状態です。",
   "Your game folder has edits of its own, and the studio will not write over them — save or undo them, then try again.":
     "ゲームフォルダーに別の編集が入っていて、Studioはそれを上書きしません。保存するか元に戻してから、もう一度試してください。",
   "Your game is as you left it — {why}": "ゲームは元のままです（{why}）",
@@ -4717,8 +4672,6 @@ export default {
   "Your profile, friends and Publish stay.": "プロフィール、フレンド、公開はそのまま使えます。",
   "Your profile, friends and Publish wait until you sign in again, and the Genex plugin’s tools stop.":
     "プロフィール、フレンド、公開はもう一度サインインするまで使えなくなり、Genexプラグインのツールも止まります。",
-  "Your reference": "参考画像",
-  "Your references": "参考画像",
   "Your saved sign-in couldn’t be opened on this Mac. Sign in again in your browser.":
     "保存したサインイン情報をこのMacで開けませんでした。ブラウザでもう一度サインインしてください。",
   "Your stats start with your first game": "最初のゲームから統計が始まります",
@@ -4739,7 +4692,6 @@ export default {
   "Zoom into the assets canvas": "アセットキャンバスを拡大",
   "Zoom out": "縮小",
   "Zoom out of the assets canvas": "アセットキャンバスを縮小",
-  "Zoom {percent}%": "ズーム{percent}%",
   "[Long login output omitted]": "[長いサインイン出力は省略しました]",
   "a 2D canvas game": "2Dキャンバスゲーム",
   "a 3D game that runs as written": "書かれたまま動く3Dゲーム",
@@ -4776,7 +4728,6 @@ export default {
   "after a save point": "セーブポイントの後",
   "after its tools run": "ツールの実行後",
   "after paying": "支払い後",
-  "age and weather on things": "物に刻まれた時間と天候",
   "all but {steps} landed": "{steps}以外は反映されました",
   "an actor": "オブジェクト",
   "an asset": "アセット",
@@ -4785,8 +4736,6 @@ export default {
   "an empty folder": "空のフォルダー",
   "an input": "入力",
   "when the lead asks for one": "メインエージェントが求めたときに",
-  "and {count} more": "ほか{count}件",
-  "another project or no recorded preview": "別のプロジェクト、またはプレビューの記録なし",
   "app update left every harness file as it was": "アプリのアップデートでHarnessファイルは変更されませんでした",
   "app update refreshed {count, plural, one {# harness file} other {# harness files}}":
     "アプリのアップデートで{count, plural, other {Harnessファイル#個}}を更新しました",
@@ -4802,19 +4751,15 @@ export default {
   "asks for a key": "キーが必要",
   asset: "アセット",
   "asset group\u0004Delivered": "完成済み",
-  attempts: "試行",
   back: "背面",
   "badge\u0004Set up": "要セットアップ",
-  "badge\u0004Update": "アップデート",
   "balance couldn’t be read": "残高を読み込めませんでした",
-  "base commit": "ベースコミット",
   "before a Loop starts": "Loopの開始前",
   "before a project of its kind is made": "その種類のプロジェクトが作られる前",
   "before a restore": "復元の前",
   "before a save point": "セーブポイントの前",
   "before its tools run": "ツールの実行前",
   "began finishing the build": "ビルドの仕上げを始めました",
-  "budget share": "予算の割合",
   "build with": "つくるモデル",
   "build {commit} changes the game's .claude folder ({files}), Claude Code's own settings, so it was not landed":
     "ビルド{commit}はゲームの.claudeフォルダー（{files}）、つまりClaude Code自身の設定を変更するため、取り込みませんでした",
@@ -4830,7 +4775,6 @@ export default {
   by: "作成者",
   "by {owner}": "作成者：{owner}",
   "camera: {camera}": "カメラ：{camera}",
-  cameras: "カメラ",
   "can't call tools, so it can't build": "ツールを呼び出せないため、つくれません",
   "captured the game": "ゲームをキャプチャしました",
   "change files in your games": "ゲーム内のファイルを変更する",
@@ -4848,9 +4792,7 @@ export default {
   close: "閉じる",
   cold: "冷たい",
   "column\u0004Change": "変化",
-  "commit not recorded": "コミットの記録なし",
   compact: "圧縮",
-  conflict: "競合",
   connected: "接続済み",
   "connecting…": "接続中…",
   "continued the build": "ビルドを続けました",
@@ -4883,7 +4825,6 @@ export default {
   "effort\u0004xHigh": "超高",
   eighth: "8回目",
   ended: "終了",
-  "every object has a reason to be there": "どの物にも置かれた理由があること",
   "on parts at the same time": "いくつもの部分を同時に",
   "every step landed": "すべてのステップが反映されました",
   "exit {code}": "終了コード{code}",
@@ -4895,7 +4836,6 @@ export default {
   "failed · {time}": "失敗 · {time}",
   "feedback text is empty": "フィードバックの本文が空です",
   fifth: "5回目",
-  files: "ファイル",
   "files of its own, no web page": "独自のファイルあり、Webページなし",
   "files on {host} do not open from the studio": "{host}上のファイルはStudioから開けません",
   "finish sign-in in your browser": "ブラウザでサインインを完了してください",
@@ -4903,7 +4843,6 @@ export default {
   "finished · {time}": "完了 · {time}",
   first: "1回目",
   fixed: "修正済み",
-  flags: "フラグ",
   "forgot something": "何かを忘れました",
   fourth: "4回目",
   "from <b>{price}</b>": "<b>{price}</b>から",
@@ -4929,7 +4868,6 @@ export default {
   "how alive it feels": "どれだけ生き生きしているか",
   "how alive it feels {score}": "どれだけ生き生きしているか：{score}",
   "how alive it feels {score} out of {max}": "どれだけ生き生きしているか：{max}点中{score}点",
-  "how far the world goes": "世界の広がり",
   "how well the screen reads": "画面がどれだけわかりやすいか",
   "how well the screen reads {score}": "画面がどれだけわかりやすいか：{score}",
   "how well the screen reads {score} out of {max}": "画面がどれだけわかりやすいか：{max}点中{score}点",
@@ -4938,7 +4876,15 @@ export default {
   "in {game} and {count} more": "{game}ほか{count}本でプレイ中",
   "install and run the apps it names, such as Blender": "Blenderなど、指定したアプリをインストールして実行する",
   "installs Genex packages in the game": "ゲームにGenexパッケージをインストールする",
-  integrations: "統合",
+  "The room module imports {file}, in a folder the publish copy keeps for itself; move it to src/":
+    "ルームモジュールが、公開用コピーが自分用に使うフォルダーにある {file} をインポートしています。src/ に移動してください",
+  "The room module imports {file}, outside the game's folders; keep shared code in a folder like src/":
+    "ルームモジュールが、ゲームのフォルダー外にある {file} をインポートしています。共有コードは src/ などのフォルダーに置いてください",
+  "The room module reaches {file} through a link; publish needs the real file":
+    "ルームモジュールがリンク経由で {file} を参照しています。公開には実際のファイルが必要です",
+  "The room module's server/ folder and imports are too large to publish as a room module":
+    "ルームモジュールの server/ フォルダーとインポートが大きすぎて、ルームモジュールとして公開できません",
+  "runs the game's multiplayer room on this computer": "このコンピューターでゲームのマルチプレイヤールームを実行する",
   "it finished": "終了しました",
   "it landed": "反映されました",
   "it ran out of time": "時間切れになりました",
@@ -4946,16 +4892,13 @@ export default {
   "it was not clearly better than the round before": "前のラウンドよりはっきり良くはなりませんでした",
   "its own craft": "自分のつくり方",
   "its work was kept": "作業は残っています",
-  jobs: "ジョブ",
   "just now": "たった今",
   "just started": "開始したばかり",
   "keep its own settings": "独自の設定を保存する",
   kept: "採用",
   "latest release": "最新リリース",
   "latest release, {date}": "最新リリース（{date}）",
-  lead: "メインエージェント",
   left: "左",
-  light: "光",
   "listed its own files": "自分のファイルを一覧表示しました",
   "listed the files": "ファイルを一覧表示しました",
   "listed your games": "ゲームを一覧表示しました",
@@ -4979,17 +4922,13 @@ export default {
     "mcp add：{option}はインポートされません。保存する前にサーバーを確認してください。",
   menace: "威圧",
   "menu\u0004Edit": "編集",
-  merged: "マージ",
   "merged a worker's work": "ワーカーの作業を統合しました",
   "mobile support\u0004Auto": "自動",
-  model: "モデル",
-  "movement and inhabitants": "動きと住人",
   "must be fixed — a round that leaves it cannot be kept": "必須の修正 — これが残るラウンドは採用されません",
   "native games are not available on this computer": "このコンピューターではネイティブゲームを利用できません",
   navigate: "移動",
   "new": "新規",
   "new: nothing before to compare": "新規：比較できる前の期間がありません",
-  "newly passing": "新たに合格",
   "next gap: {gap}": "次の課題：{gap}",
   "nickname\u0004Free": "使用可能",
   ninth: "9回目",
@@ -5030,11 +4969,7 @@ export default {
   "opens {entry} directly, with no build step": "ビルドなしで{entry}を直接開きます",
   or: "または",
   "or use": "ほかの方法",
-  outage: "障害",
-  outages: "障害",
   "painted the game's cover": "ゲームのカバーを描きました",
-  parallel: "並列数",
-  part: "パート",
   "passed on your guidance": "指示を伝えました",
   paused: "一時停止中",
   "permission mode\u0004Auto": "Auto",
@@ -5050,7 +4985,6 @@ export default {
   "playing now": "プレイ中",
   "pressed keys": "キーを押しました",
   "programs on this Mac": "このMacのプログラム",
-  project: "プロジェクト",
   "put the build in your game": "ビルドをゲームに反映しました",
   "ran a command": "コマンドを実行しました",
   "reach the internet": "インターネットに接続する",
@@ -5075,11 +5009,8 @@ export default {
   "resume from chat": "チャットから再開",
   "resumed the saved build": "保存したビルドを再開しました",
   "reviewed a build": "ビルドをレビューしました",
-  "revision unknown ({state})": "バージョン不明（{state}）",
   right: "右",
-  round: "ラウンド",
   "round {round}: {verdict} · next gap: {gap}": "ラウンド{round}：{verdict} · 次の課題：{gap}",
-  run: "ビルド",
   "run background jobs": "バックグラウンドジョブを実行する",
   "run long jobs and report their progress": "長い処理を実行して進捗を報告する",
   "run {runId} already finished — nothing to resume": "ビルド{runId}はすでに終了しています。再開するものはありません",
@@ -5098,7 +5029,6 @@ export default {
   "section\u0004Play": "プレイ",
   "see the running game": "実行中のゲームを見る",
   "sees images": "画像を認識",
-  session: "セッション",
   "set out the plan": "プランを立てました",
   seventh: "7回目",
   "showed you a build": "ビルドを見せました",
@@ -5108,14 +5038,13 @@ export default {
   "since {when}": "{when}から",
   sixth: "6回目",
   slit: "細目",
+  slower: "低速",
   squint: "ジト目",
-  started: "開始",
   "started a new game": "新しいゲームをつくりました",
   "started a worker": "ワーカーを起動しました",
   "started background work": "バックグラウンド作業を開始しました",
   "started the build": "ビルドを開始しました",
   "starts in {minutes}m": "{minutes}分後に開始",
-  state: "状態",
   steady: "まっすぐ",
   "step\u0004Check": "確認",
   "still there": "まだ残っています",
@@ -5199,6 +5128,7 @@ export default {
   "the plan": "プラン",
   "the plan is ready — {parts}.": "プランができました：{parts}。",
   "the plan is ready.": "プランができました。",
+  "the player": "プレイヤー",
   "the player's word": "プレイヤーの申告",
   "the preview shows the current build": "プレビューには現在のビルドが表示されています",
   "the reviewer preferred it to the round before": "レビュアーが前のラウンドよりこちらを選びました",
@@ -5221,7 +5151,6 @@ export default {
   "the web": "Web",
   'there is no "{child}" folder in {where}': "{where}に「{child}」フォルダーはありません",
   'there is no game called "{game}"': "「{game}」というゲームはありません",
-  "things at every size": "いろいろなサイズのもの",
   third: "3回目",
   "this build": "このビルド",
   "this build is split into {count, plural, one {# part} other {# parts}} ({names}) — {pace}, each reviewed on its own":
@@ -5240,14 +5169,10 @@ export default {
   "under a minute": "1分未満",
   "under a minute left": "残り1分未満",
   undone: "取り消し済み",
-  union: "ユニオン",
   unknown: "不明",
   "unknown error": "不明なエラー",
   "unknown project {name}": "不明なプロジェクト：{name}",
-  "until about {end}": "{end}ごろまで",
-  "until satisfied · by ~{end}": "完成まで · {end}ごろ終了",
   "up to {count, plural, one {# worker} other {# workers}} at once": "同時に最大{count, plural, other {#人のワーカー}}",
-  "up to {time}": "最大{time}",
   "up {percent}%": "{percent}%増",
   "use your {publisher} account": "{publisher}のアカウントを使う",
   "used a tool": "ツールを使いました",
@@ -5256,7 +5181,6 @@ export default {
   "uses ~{need} of {usable} GB": "{usable} GB中、約{need} GBを使用",
   "using CLAUDE_CONFIG_DIR ({home})": "CLAUDE_CONFIG_DIR（{home}）を使用中",
   "using your existing Claude Code sign-in on this Mac": "このMacの既存のClaude Codeのサインインを使用中",
-  "verdict by": "判定者",
   "verified by the studio": "Studioが検証済み",
   "version history, so any change can be undone": "バージョン履歴。どの変更も元に戻せます",
   "vs previous {days} days": "前の{days}日間と比較",
@@ -5272,10 +5196,10 @@ export default {
   "when a turn starts": "ターンの開始時",
   "when a worker ends": "ワーカーの終了時",
   "when a worker starts": "ワーカーの開始時",
+  "while a job one of its tools started runs, to see whether it has ended":
+    "ツールが始めたジョブの実行中、終わったかどうかを確かめるため",
   "while it holds a lock, to see whether you are using it": "ロックを持っている間、使用中かどうかを確かめるため",
   wide: "見開き",
-  worker: "ワーカー",
-  workers: "ワーカー",
   working: "作業中",
   "working on {part}": "{part}に取り組み中",
   "wrapped up the build": "ビルドをまとめました",
@@ -5292,8 +5216,6 @@ export default {
   "{action} {name}": "{name}を{action}",
   "{action}: done": "{action}：完了",
   "{added} of {total} added": "{total}件中{added}件を追加",
-  "{added} of {total} parts added": "{total}個中{added}個のパートを追加",
-  "{added} of {total} parts added · {working} working": "{total}個中{added}個のパートを追加 · {working}個作業中",
   "{amount} Nex": "{amount} Nex",
   "{amount} more needed": "あと{amount}必要",
   "{app} settings": "{app}の設定",
@@ -5316,7 +5238,6 @@ export default {
     "{caption} · スクリーンショットだけでは、ゲームプレイのチェックに合格したことにはなりません。",
   "{change} {names}": "{change}：{names}",
   "{chart}: {readings}": "{chart}：{readings}",
-  "{check}: {name} · {status}": "{check}：{name} · {status}",
   "{chosen} of {total}": "{chosen}/{total}",
   "{coins} of your Nex is on hold until {date}.": "Nexのうち{coins}は{date}まで保留中です。",
   "{command} (exit {code})": "{command}（終了コード{code}）",
@@ -5379,9 +5300,6 @@ export default {
   "{count, plural, one {# save point} other {# save points}}": "{count, plural, other {セーブポイント#個}}",
   "{count, plural, one {# self-edited file} other {# self-edited files}} kept":
     "{count, plural, other {エージェントが編集したファイル#個を保持}}",
-  "{count, plural, one {# step} other {# steps}}": "{count, plural, other {#ステップ}}",
-  "{count, plural, one {# structural check} other {# structural checks}} passed.":
-    "{count, plural, other {#件の構造チェック}}に合格しました。",
   "{count, plural, one {# thing} other {# things}} left": "{count, plural, other {残り#件}}",
   "{count, plural, one {# tool call} other {# tool calls}}": "{count, plural, other {ツール呼び出し#回}}",
   "{count, plural, one {# tool source} other {# tool sources}} enabled · permissions checked when used":
@@ -5392,6 +5310,9 @@ export default {
   "{count, plural, one {# try} other {# tries}}": "{count, plural, other {#回試行}}",
   "{count, plural, one {# update from your games} other {# updates from your games}}":
     "{count, plural, other {ゲームの更新が#件あります}}",
+  "Working now": "作業中",
+  "{count, plural, one {# earlier step} other {# earlier steps}}": "{count, plural, other {以前のステップ #件}}",
+  "{count, plural, one {# version} other {# versions}}": "{count, plural, other {#バージョン}}",
   "{count, plural, one {# worker didn't deliver} other {# workers didn't deliver}}":
     "{count, plural, other {#人のワーカーが提出なし}}",
   "{count, plural, one {# worker} other {# workers}} on it": "{count, plural, other {ワーカー#人が作業中}}",
@@ -5412,10 +5333,6 @@ export default {
     "{count, plural, other {元の履歴は.git.studio-backupという名前に変えて、すぐ横に保存してあります。}}",
   "{count, plural, one {Restored # game file.} other {Restored # game files.}}":
     "{count, plural, other {ゲームのファイルを#個復元しました。}}",
-  "{count, plural, one {Rewind can’t bring back # file from this change: it was over {size} at once, so the largest stayed out: {files}.} other {Rewind can’t bring back # files from this change: it was over {size} at once, so the largest stayed out: {files}.}}":
-    "{count, plural, other {この変更は一度に{size}を超えたため、大きいファイル#件が保存されず、巻き戻しで元に戻せません：{files}。}}",
-  "{count, plural, one {Rewind can’t bring back # file that is too large to save: {files}.} other {Rewind can’t bring back # files that are too large to save: {files}.}}":
-    "{count, plural, other {保存するには大きすぎるファイル#件は、巻き戻しで元に戻せません：{files}。}}",
   "{count, plural, one {The chat went back, and # game file with it.} other {The chat went back, and # game files with it.}}":
     "{count, plural, other {チャットを巻き戻し、ゲームファイル#個も一緒に戻しました。}}",
   "{count, plural, one {Working on # task} other {Working on # tasks}}":
@@ -5426,7 +5343,6 @@ export default {
   "{count, plural, one {play} other {plays}}": "{count, plural, other {回プレイ}}",
   "{count, plural, one {{names} is a repository of its own — Genex adds its files to this folder's history the first time a build goes live, so work inside it is not lost.} other {{names} are repositories of their own — Genex adds their files to this folder's history the first time a build goes live, so work inside them is not lost.}}":
     "{count, plural, other {{names}は独立したリポジトリです。ビルドが初めてゲームに反映されるときに、Genexがそのファイルをこのフォルダーの履歴に追加するので、中での作業は失われません。}}",
-  "{count, plural, other {# added by the reviewers}}": "{count, plural, other {レビュアーが#件追加}}",
   "{count, plural, other {# added so far}}": "{count, plural, other {これまでに#件追加}}",
   "{count, plural, other {# bytes}}": "{count, plural, other {#バイト}}",
   "{count, plural, other {# delivered}}": "{count, plural, other {#件完成}}",
@@ -5436,13 +5352,10 @@ export default {
   "{count, plural, other {# in game}}": "{count, plural, other {#件がゲーム内}}",
   "{count, plural, other {# kept}}": "{count, plural, other {#個保存済み}}",
   "{count, plural, other {# made for this build}}": "{count, plural, other {このビルド用に#個作成}}",
-  "{count, plural, other {# modelled}}": "{count, plural, other {#個モデリング済み}}",
   "{count, plural, other {# not confirmed}}": "{count, plural, other {#件未確認}}",
   "{count, plural, other {# not downloaded}}": "{count, plural, other {#件未ダウンロード}}",
   "{count, plural, other {# not in your game}}": "{count, plural, other {#件がゲームに未追加}}",
-  "{count, plural, other {# planned}}": "{count, plural, other {予定#件}}",
   "{count, plural, other {# polygons}}": "{count, plural, other {ポリゴン#個}}",
-  "{count, plural, other {# re-pointed}}": "{count, plural, other {#件を見直し}}",
   "{count, plural, other {# stopped}}": "{count, plural, other {#件停止}}",
   "{count, plural, other {# triangles}}": "{count, plural, other {三角形#個}}",
   "{count, plural, other {# tries}}": "{count, plural, other {#回試行}}",
@@ -5461,7 +5374,6 @@ export default {
   "{count} files couldn’t be added": "{count}個のファイルを追加できませんでした",
   "{count} files didn’t go in": "{count}個のファイルが入りませんでした",
   "{count} finished": "{count}件完了",
-  "{count} likes": "いいね{count}件",
   "{count} more": "ほか{count}件",
   "{count} more waiting": "ほかに{count}件待機中",
   "{count} newly passing": "新たに{count}件合格",
@@ -5474,17 +5386,19 @@ export default {
   "{count} selected": "{count}件選択中",
   "{cpu} · {memory} GB memory · about {usable} GB available for models":
     "{cpu} · メモリ{memory} GB · モデルに使えるのは約{usable} GB",
+  "{cpu} · {memory} GB memory · {gpu} ({gpuMemory} GB) · about {usable} GB available for models":
+    "{cpu} · メモリ{memory} GB · {gpu}（{gpuMemory} GB） · モデルに使えるのは約{usable} GB",
   "{days} days": "{days}日間",
   "{days}d": "{days}日",
   "{day} {value}": "{day}：{value}",
   "{does}, asks you each time": "{does}（毎回確認します）",
   "{doing} in {where}": "{where}で{doing}",
   "{done} MB": "{done} MB",
+  "{done} done": "{done}個完了",
+  "{done} done · {working} working": "{done}個完了 · {working}個作業中",
   "{done} of {size} GB": "{done} / {size} GB",
   "{done} of {total}": "{done} / {total}",
   "{done} of {total} MB": "{done} / {total} MB",
-  "{elapsed} of {budget}": "{elapsed}/{budget}",
-  "{elapsed} of {budget} min": "{elapsed}/{budget}分",
   "{engine} always uses its sandbox": "{engine}は常に自分のサンドボックスを使います",
   "{engine} can’t stop to ask yet": "{engine}はまだ途中で確認できません",
   "{engine} default": "{engine}のデフォルト",
@@ -5534,16 +5448,12 @@ export default {
   "{game} {number}": "{game} {number}",
   "{game} · started {time}": "{game} · {time}に開始",
   "{health} · {count, plural, one {# tool} other {# tools}}": "{health} · {count, plural, other {ツール#個}}",
-  "{hours, plural, one {# hour} other {# hours}}": "{hours, plural, other {#時間}}",
-  "{hours, plural, one {# hour} other {# hours}} {minutes, plural, one {# minute} other {# minutes}}":
-    "{hours, plural, other {#時間}}{minutes, plural, other {#分}}",
   "{hours} h": "{hours}時間",
   "{hours} h {minutes} m": "{hours}時間{minutes}分",
   "{hours} h {minutes} min": "{hours}時間{minutes}分",
   "{hours}+ h": "{hours}時間以上",
   "{hours}h": "{hours}時間",
   "{hours}h {minutes}m": "{hours}時間{minutes}分",
-  "{hours}h{minutes}": "{hours}時間{minutes}分",
   "{hours}h {minutes}m": "{hours}時間{minutes}分",
   "{input} in / {output} out per M tokens": "100万トークンあたり入力{input}／出力{output}",
   "{kept} · {count} finished.": "{kept} · {count}件完了。",
@@ -5553,7 +5463,6 @@ export default {
   "{kind} from {tool}: {title}": "{tool}の{kind}：{title}",
   "{kind} queued for {tool}": "{tool}で{kind}の作成待ち",
   "{kind}, failed": "{kind}（失敗）",
-  "{kind}: {name}, {status}": "{kind}：{name}、{status}",
   "{kind}: {title}": "{kind}：{title}",
   "{landing} — open Live to play it.": "{landing}。「ライブ」を開いてプレイしましょう。",
   "{lastChange}: {change}": "{lastChange}：{change}",
@@ -5570,7 +5479,6 @@ export default {
   "{max} files at most": "ファイルは最大{max}個まで",
   "{max} pictures at most": "画像は最大{max}枚まで",
   "{millions}M": "{millions}M",
-  "{minutes, plural, one {# minute} other {# minutes}}": "{minutes, plural, other {#分}}",
   "{minutes} m": "{minutes}分",
   "{minutes} min": "{minutes}分",
   "{minutes} min left": "残り{minutes}分",
@@ -5614,6 +5522,7 @@ export default {
   "{name} isn’t on this computer any more.": "{name}はもうこのコンピューターにありません。",
   "{name} needs Studio {version} or newer": "{name}にはStudio {version}以降が必要です",
   "{name} needs a sign-in": "{name}へのサインインが必要です",
+  "{name} opens in Unreal {to} from now on.": "{name} は今後 Unreal {to} で開きます。",
   "{name} settings": "{name}の設定",
   "{name} was never saved to a file, so Genex can't open it. Open it in Roblox Studio, or choose another place.":
     "{name}は一度もファイルに保存されていないので、Genexは開けません。Roblox Studioで開くか、別のプレイスを選んでください。",
@@ -5633,8 +5542,9 @@ export default {
     "{name}：{key}はインポートされません。保存する前にコネクタを確認してください。",
   "{name}: {state}": "{name}：{state}",
   "{name}: {status}": "{name}：{status}",
-  "{name}: {status}, {count, plural, other {# tries}}": "{name}：{status}、{count, plural, other {#回試行}}",
   "{name}’s friends": "{name}のフレンド",
+  "{open, plural, =1 {One step left so Unreal can build C++ on this PC.} other {# steps left so Unreal can build C++ on this PC.}}":
+    "{open, plural, =1 {あと1ステップで、このPCでUnrealがC++をビルドできるようになります。} other {あと#ステップで、このPCでUnrealがC++をビルドできるようになります。}}",
   "{open, plural, =1 {One step left so the agent can add C++ to this game.} =2 {Two steps left so the agent can add C++ to this game.} =3 {Three steps left so the agent can add C++ to this game.} other {# steps left so the agent can add C++ to this game.}}":
     "{open, plural, =1 {あと1ステップで、エージェントがこのゲームにC++を追加できるようになります。} =2 {あと2ステップで、エージェントがこのゲームにC++を追加できるようになります。} =3 {あと3ステップで、エージェントがこのゲームにC++を追加できるようになります。} other {あと#ステップで、エージェントがこのゲームにC++を追加できるようになります。}}",
   "{owners} came with setup scripts written by their authors. Genex skipped them when it made your copy, and the game may need them to build. Run them only if you trust this game.":
@@ -5727,7 +5637,6 @@ export default {
   "{scheme, select, light {light} other {dark}} {color} hex":
     "{scheme, select, light {ライト} other {ダーク}}テーマの{color}のHEX値",
   "{scheme} links do not open from the studio": "{scheme}リンクはStudioから開けません",
-  "{score} of {max}": "{score}/{max}",
   "{seconds}s": "{seconds}秒",
   "{seconds}s ago": "{seconds}秒前",
   "{server} asks for an API key.": "{server}がAPIキーを求めています。",
@@ -5796,7 +5705,6 @@ export default {
     "{total, plural, other {#ステップ中{landed}個が反映}}",
   "{undone, plural, one {The reviewers undid {count} try.} other {The reviewers undid {count} tries.}}":
     "{undone, plural, other {レビュアーが{count}回の試行を取り消しました。}}",
-  "{verdict} — show what they said": "{verdict}：レビュアーの意見を見る",
   "{version} · bundled with Studio": "{version} · Studioに同梱",
   "{what} links somewhere else, so Genex won't use it.": "{what}は別の場所へのリンクなので、Genexは使いません。",
   "{where} in this project links somewhere else, so Genex won't write through it.":
@@ -5825,8 +5733,6 @@ export default {
   "{worker} didn't deliver": "{worker}：提出なし",
   "{worker} wants to run {job} in the background": "{worker}が{job}をバックグラウンドで実行しようとしています",
   "~{minutes} min": "約{minutes}分",
-  "×{count} during {phase}": "{phase}中に×{count}",
-  "— the biggest of them: {problem}": "— いちばん大きな問題：{problem}",
   "… Preview truncated at 256 KiB; original unchanged.":
     "… プレビューは256 KiBで切り詰めました。元のファイルは変わりません。",
   "On this computer": "このコンピューターで",
@@ -5890,6 +5796,43 @@ export default {
   "Your game is on Roblox": "ゲームがRobloxに公開されました",
   "Your game's agent publishes it in Roblox Studio while you keep working.":
     "作業を続けている間に、ゲームのエージェントがRoblox Studioで公開します。",
+  "Asked Genex": "Genexに依頼済み",
+  "Build on Genex": "Genexでつくる",
+  "Build the {app} on Genex": "{app}をGenexでつくる",
+  "Build the {app} on Genex again": "{app}をもう一度Genexでつくる",
+  "Building on Genex": "Genexでビルド中",
+  "Building…": "ビルド中…",
+  "Couldn’t build the {app} on Genex: {error}": "{app}をGenexでつくれませんでした：{error}",
+  "Genex builds only Windows apps on its own computers":
+    "Genexが自分のコンピューターでつくれるのはWindowsアプリだけです",
+  "Genex can build it on Windows for you": "GenexがWindowsで代わりにつくれます",
+  "Genex can’t build this Unreal version yet": "GenexはこのUnrealバージョンにまだ対応していません",
+  "Genex couldn’t compile the game’s code": "Genexがゲームのコードをコンパイルできませんでした",
+  "Genex couldn’t cook the game’s content": "Genexがゲームのコンテンツをクックできませんでした",
+  "Open the game to build its app on Genex": "ゲームを開いてからGenexでアプリをつくってください",
+  "Publish the game first, then Genex can build it": "先にゲームを公開すると、Genexがつくれます",
+  "The build on Genex failed": "Genexでのビルドに失敗しました",
+  "The build on Genex took too long": "Genexでのビルドに時間がかかりすぎました",
+  "The project is too big for Genex to build": "プロジェクトが大きすぎてGenexでつくれません",
+  "This version of Genex can’t build apps on Genex yet": "このバージョンのGenexではまだGenexでアプリをつくれません",
+  "You’ve used this month’s builds on Genex": "今月のGenexでのビルド回数を使い切りました",
+  notarized: "公証済み",
+  "The Mac app went without notarization: Apple’s notary couldn’t be reached with your saved notary profile.":
+    "Macアプリは公証なしで公開されました：保存した公証プロファイルでAppleの公証サービスに接続できませんでした。",
+  "The Mac app went without notarization: Apple’s notary rejected it.":
+    "Macアプリは公証なしで公開されました：Appleの公証サービスに却下されました。",
+  "The Mac app went without notarization: Apple’s ticket couldn’t be attached to it.":
+    "Macアプリは公証なしで公開されました：Appleのチケットを添付できませんでした。",
+  "The Mac app went without notarization: codesign couldn’t sign it.":
+    "Macアプリは公証なしで公開されました：codesignで署名できませんでした。",
+  "The Mac app went without notarization: it isn’t a Mac app bundle.":
+    "Macアプリは公証なしで公開されました：Macアプリのバンドルではありません。",
+  "The Mac app went without notarization: no Developer ID Application certificate is in your keychain.":
+    "Macアプリは公証なしで公開されました：キーチェーンにDeveloper ID Application証明書がありません。",
+  "The Mac app went without notarization: notarizing was stopped.":
+    "Macアプリは公証なしで公開されました：公証が中止されました。",
+  "The Mac app went without notarization: your keychain has several Developer ID certificates. Name one in Genex’s settings.":
+    "Macアプリは公証なしで公開されました：キーチェーンにDeveloper ID証明書が複数あります。Genexの設定で1つ指定してください。",
   "Anything else we should know? (optional)": "ほかに伝えたいことはありますか？（任意）",
   "Balance {amount}": "残高 {amount}",
   "Balance {now} → {after}": "残高 {now} → {after}",
@@ -5897,6 +5840,8 @@ export default {
   "Drag to turn": "ドラッグで回転",
   "Genex hasn’t confirmed it yet. It shows under My items once it does. You won’t be charged twice.":
     "Genexでまだ確認できていません。確認されるとマイアイテムに表示されます。二重に請求されることはありません。",
+  "Genex’s agents didn’t start, so this message went nowhere. Press Try again beside “Agents didn’t start”, then send it again.":
+    "Genex のエージェントが起動しなかったため、このメッセージはどこにも届きませんでした。「エージェントが起動しませんでした」の横の「もう一度試す」を押してから、もう一度送信してください。",
   "Genex’s protected space needs an update": "Genexの保護スペースを更新する必要があります",
   Get: "入手",
   "Get in {game}": "{game}で入手",
@@ -6050,7 +5995,8 @@ export default {
   "Let the agent see your screen in this chat?": "このチャットでエージェントに画面を見せますか？",
   "Let the agent use this app?": "エージェントにこのアプリを使わせますか？",
   "Let the agent use {app}?": "エージェントに{app}を使わせますか？",
-  "They ask before each app.": "エージェントはアプリごとに先に確認します。",
+  "They ask before each app, except in Auto and Bypass.":
+    "エージェントはアプリごとに先に確認します（Auto と Bypass では確認しません）。",
   "Turn on computer control?": "コンピューター操作をオンにしますか？",
   "{plugin} asks: {task}": "{plugin}からの依頼：{task}",
   "Add an icon and a thumbnail, or Roblox shows a grey square.":
@@ -6086,6 +6032,39 @@ export default {
   "Show us where Genex gets in your way.": "Genexで困っているところを教えてください。",
   "Where you go, what fails and how long it takes": "どこへ行き、何が失敗し、どれだけ時間がかかったか",
   "usage data\u0004Share": "共有する",
+  "Building with Genex is paused for now.": "Genexでつくる機能は今は一時停止中です。",
+  "Building with Genex isn’t available yet.": "Genexでつくる機能はまだ使えません。",
+  "Builds with your Genex credits.": "Genexのクレジットでつくります。",
+  "Choose how Genex builds": "Genexのつくり方を選ぶ",
+  "Connect Codex": "Codexを接続",
+  "Connect the Claude or ChatGPT plan you already pay for, or build with Genex credits.":
+    "すでに払っているClaudeかChatGPTのプランを接続するか、Genexのクレジットでつくりましょう。",
+  "Continue in browser": "ブラウザで続ける",
+  "Continue on ChatGPT plan": "ChatGPTプランで続ける",
+  "Continue on {name}": "{name}で続ける",
+  "Continue on Claude plan": "Claudeプランで続ける",
+  "Everything so far is saved.": "ここまでの内容は保存されています。",
+  "Finish on genex.games in your browser.": "ブラウザでgenex.gamesの手続きを済ませてください。",
+  "Genex needs a minute to get ready on this computer.": "このコンピューターでGenexの準備に1分ほどかかります。",
+  "Genex ready": "Genexの準備完了",
+  "Getting Genex ready on this computer. This takes a minute.":
+    "このコンピューターでGenexを準備しています。1分ほどかかります。",
+  "Getting Genex ready…": "Genexを準備中…",
+  "Monthly credits": "月間クレジット",
+  "No credits yet": "クレジットはまだありません",
+  "Out of credits": "クレジット切れ",
+  "Pick Pro or a credit pack on genex.games to start building.":
+    "genex.gamesでProかクレジットパックを選ぶと、つくり始められます。",
+  "Pro or a credit pack on genex.games": "genex.gamesのProかクレジットパック",
+  "Setting up…": "セットアップ中…",
+  "Sign in to Genex and pick Pro or a credit pack to start building.":
+    "Genexにサインインして、Proかクレジットパックを選ぶと、つくり始められます。",
+  "Use Genex": "Genexを使う",
+  "Verify email": "メール確認",
+  "Verify your email on genex.games to start building.": "genex.gamesでメールを確認すると、つくり始められます。",
+  "Your idea waits here.": "アイデアはここで待っています。",
+  "You’re out of Genex credits.": "Genexのクレジットがなくなりました。",
+  "genex.games couldn’t be reached.": "genex.gamesに接続できませんでした。",
   "Reviewers give a second opinion when the lead asks for one.":
     "メインエージェントが求めたとき、レビュアーがセカンドオピニオンを出します。",
   "Workers take parts of the build, several at once.": "ワーカーがビルドの各パートを分担し、いくつも同時に進めます。",
@@ -6095,24 +6074,384 @@ export default {
   "Compare with the earlier version": "前のバージョンと比べる",
   "Did not pass": "不合格",
   Errors: "エラー",
-  "Merged into Build {number}": "ビルド {number} にマージ済み",
-  "Started before the first build": "最初のビルドより前に開始",
-  "Started from Build {number}": "ビルド {number} から開始",
   "The main agent's own changes": "メインエージェント自身の変更",
   "The page crashed.": "ページがクラッシュしました。",
   "The page did not load.": "ページが読み込まれませんでした。",
   "The page threw an error it did not catch.": "ページが処理されないエラーを出しました。",
-  "The picture did not visibly change from Build {number}.": "ビルド {number} から画像は目に見えて変わっていません。",
   "The picture did not visibly change from the earlier version.":
     "前のバージョンから画像は目に見えて変わっていません。",
   "The screen was blank: one flat colour, nothing drawn.": "画面が空でした：単色で、何も描かれていません。",
   "What the check found": "チェックで見つかったこと",
-  commit: "コミット",
   found: "検出",
-  "{count, plural, one {+# worker} other {+# workers}}": "{count, plural, other {+# ワーカー}}",
-  "{count, plural, one {Show # more worker} other {Show # more workers}}":
-    "{count, plural, other {ワーカーをあと # 件表示}}",
   "In the running build": "実行中のビルド内",
   "Not in your game yet. It arrives when the build lands.":
     "まだゲームには入っていません。ビルドが反映されると入ります。",
+  "Couldn't reach TypeSafe to check the key: {why}": "キーを確認するために TypeSafe に接続できませんでした：{why}",
+  Key: "キー",
+  "Optional. With a key, Unreal play-tests pick their moves with Jev, several times a second.":
+    "任意です。キーがあると、Unreal のプレイテストが Jev で 1 秒に数回ムーブを選びます。",
+  "That doesn't look like a TypeSafe key. Copy it again from TypeSafe's console.":
+    "TypeSafe のキーではなさそうです。TypeSafe のコンソールからもう一度コピーしてね。",
+  "TypeSafe API key": "TypeSafe API キー",
+  "TypeSafe didn't accept that key. Check it and paste it again.":
+    "TypeSafe がそのキーを受け付けませんでした。確認してもう一度貼り付けてね。",
+  "TypeSafe key": "TypeSafe キー",
+  "Unreal play-tests pick their moves with Jev": "Unreal のプレイテストが Jev でムーブを選びます",
+  "Made with": "エンジン",
+  "Runs on": "対応OS",
+  Shots: "スクリーンショット",
+  "{n, plural, one {{count} play} other {{count} plays}}": "{n, plural, other {{count}回プレイ}}",
+  "{n, plural, one {{count} like} other {{count} likes}}": "{n, plural, other {いいね{count}件}}",
+  "Genex can't install {name} on this computer. Install it with its guide, then check again.":
+    "Genex はこのパソコンに {name} をインストールできません。ガイドに沿ってインストールしてから、もう一度確認してね。",
+  "Install {name} with its guide, then check again.":
+    "ガイドに沿って {name} をインストールしてから、もう一度確認してね。",
+  "Open install guide": "インストールガイドを開く",
+  "On Windows, OpenCode installs from its guide with Chocolatey, Scoop or npm. Then check again.":
+    "Windows では、OpenCode はガイドに沿って Chocolatey、Scoop、npm のどれかでインストールします。そのあともう一度確認してね。",
+  "A web version is on Genex": "Genex にウェブ版があります",
+  "Genex keeps this web version: the game has no app on Genex yet, so players would have nothing to play.":
+    "このウェブ版は Genex に残ります。ゲームにはまだ Genex 上のアプリがないので、消すとプレイヤーが遊べるものがなくなります。",
+  "Remove the web version from Genex": "Genex からウェブ版を削除",
+  "The game’s page plays its web version until you remove it, so players don’t see the apps.":
+    "ウェブ版を削除するまで、ゲームのページはウェブ版を表示するので、プレイヤーにはアプリが見えません。",
+  "Publish makes this web version the game’s page, in place of its apps.":
+    "公開すると、このウェブ版がアプリの代わりにゲームのページになります。",
+  "This game was taken down, so Genex keeps its web version for now.":
+    "このゲームは公開停止中のため、Genex はウェブ版をしばらく残します。",
+  "Genex couldn’t finish removing the web version. Press Remove again.":
+    "Genex はウェブ版を最後まで削除できませんでした。もう一度「削除」を押してください。",
+  "Change link": "リンクを変更",
+  "Change the link": "リンクを変更",
+  "Change the link of {title}": "{title}のリンクを変更",
+  "Couldn’t change Players.": "プレイヤー設定を変更できませんでした。",
+  "Couldn’t change the link.": "リンクを変更できませんでした。",
+  "Couldn’t rename the game.": "ゲーム名を変更できませんでした。",
+  "Link saved": "リンクを保存しました",
+  "New link": "新しいリンク",
+  "Rename {title}": "{title}の名前を変更",
+  "Renamed to {title}": "{title}に名前を変更しました",
+  "The game is at {address} now": "ゲームは{address}に移りました",
+  "The name players see on Play and genex.games.": "プレイヤーがPlayとgenex.gamesで見る名前です。",
+  "The old link will still open the game": "古いリンクでも引き続きゲームが開きます",
+  "The old link will still open the game, for players who already have it too.":
+    "古いリンクでも引き続きゲームが開きます。すでに持っているプレイヤーも同じです。",
+  "{count, plural, one {# change left} other {# changes left}}": "{count, plural, other {あと#回変更できます}}",
+  "Genex can copy {model} to run with a 16K context. The copy shares its files, so nothing is downloaded.":
+    "Genex は {model} をコンテキスト 16K で動くようにコピーできます。コピーは同じファイルを使うので、何もダウンロードしません。",
+  "Ollama is unavailable": "Ollama を利用できません",
+  "Raise context to 16K": "コンテキストを 16K に上げる",
+  "Raising…": "上げています…",
+  "The chat now uses {model}. Send your message again.":
+    "チャットは {model} を使うようになりました。メッセージをもう一度送ってください。",
+  "Couldn’t send the project to Genex: {error}": "プロジェクトをGenexに送れませんでした：{error}",
+  "Genex builds Unreal {builds} games for now, and this project names no version of it. Open it in Unreal, save it, then build again.":
+    "今のところGenexがつくれるのはUnreal {builds}のゲームです。このプロジェクトにはバージョンの指定がありません。Unrealで開いて保存してから、もう一度つくってください。",
+  "Sending the project to Genex stopped": "プロジェクトのGenexへの送信が止まりました",
+  "Sending to Genex. Keep Genex open": "Genexに送信中。Genexは開いたままにしてください",
+  "This game uses Unreal {version}. Genex builds Unreal {builds} games for now, so it can’t build this one yet.":
+    "このゲームはUnreal {version}です。今のところGenexがつくれるのはUnreal {builds}のゲームなので、このゲームはまだつくれません。",
+  "Run the game": "ゲームを起動して",
+  "The agent is packaging the game. It starts it once the package is ready.":
+    "エージェントがゲームをパッケージしています。完成したら起動します。",
+  "Genex can’t play this game’s app on this computer.":
+    "Genex はこのコンピュータでこのゲームのアプリを起動できません。",
+  "Open the game’s chat to have the agent package it.":
+    "エージェントにパッケージしてもらうには、ゲームのチャットを開いてください。",
+  "Not open in Unreal": "Unrealで開いていません",
+  "A person at Genex already decided this build. Change it and publish it again.":
+    "このビルドはGenexのスタッフがすでに判断しました。変更してからもう一度公開してね。",
+  "A person at Genex is already reviewing it.": "Genexのスタッフがすでに確認しています。",
+  "A person at Genex is reviewing it": "Genexのスタッフが確認中です",
+  "A person at Genex reviewed it.": "Genexのスタッフが確認しました。",
+  "After the fix, Studio asks a person at Genex to look again. Usually within a day.":
+    "修正後、StudioがGenexのスタッフにもう一度確認を頼みます。通常1日以内です。",
+  "After the fix, Studio asks a person at Genex to put it back. Usually within a day.":
+    "修正後、StudioがGenexのスタッフに公開の再開を頼みます。通常1日以内です。",
+  "After the fix, it publishes by itself and Genex checks it again.":
+    "修正後は自動で公開され、Genexがもう一度チェックします。",
+  "Anyone can find it on Genex.": "誰でもGenexで見つけられます。",
+  "Anything we should know? (optional)": "伝えておきたいことは？（任意）",
+  "Checking your fixes": "修正をチェック中",
+  "Checking your {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}}":
+    "{app, select, mac {Macアプリをチェック中} windows {Windowsアプリをチェック中} linux {Linuxアプリをチェック中} other {アプリをチェック中}}",
+  "Checking · {elapsed}": "チェック中 · {elapsed}",
+  "Don't ask automatically": "自動で依頼しない",
+  "Don't publish it automatically": "自動で公開しない",
+  "Fix again": "もう一度修正",
+  "Fix with agent": "エージェントで修正",
+  "Fixed. Publish it, then ask a person at Genex to put it back.":
+    "修正済み。公開してから、Genexのスタッフに公開の再開を頼んでね。",
+  "For example: the coin page is our own shop, not a third party.":
+    "例：コインのページは自分たちのショップで、外部のものではありません。",
+  "Genex checks your app before players get it. Usually a few minutes.":
+    "プレイヤーに届く前にGenexがアプリをチェックします。通常数分です。",
+  "Genex has nothing for this game's agent to fix": "このゲームのエージェントが直すべき点はGenexにはありません",
+  "Genex reads your app before players get it. Usually a few minutes.":
+    "プレイヤーに届く前にGenexがアプリを確認します。通常数分です。",
+  "Genex review": "Genexのチェック",
+  "Hidden from players until it's fixed and a person at Genex puts it back.":
+    "修正されてGenexのスタッフが戻すまで、プレイヤーには表示されません。",
+  "Human review agreed with the check.": "スタッフの確認も自動チェックと同じ判断でした。",
+  "Human review agreed with the takedown.": "スタッフの確認も公開停止と同じ判断でした。",
+  "Human review requested": "スタッフによる確認を依頼済み",
+  "Human review requested. A person reviews the next {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}} you send.":
+    "スタッフによる確認を依頼しました。次に送る{app, select, mac {Macアプリ} windows {Windowsアプリ} linux {Linuxアプリ} other {アプリ}}をスタッフが確認します。",
+  "Human review requested. Usually within a day. You can still fix it yourself.":
+    "スタッフによる確認を依頼しました。通常1日以内です。自分で直すこともできます。",
+  "If Genex ever takes it down, you'll hear it here and by email.":
+    "もしGenexが公開を停止したら、こことメールでお知らせします。",
+  "Keep the note under {max} characters.": "メモは{max}文字以内にしてね。",
+  "Nothing went public. After the fix, it publishes by itself and Genex checks it again.":
+    "何も公開されていません。修正後は自動で公開され、Genexがもう一度チェックします。",
+  "Open a game": "ゲームを開いてね",
+  "Players keep the version they have. After the fix, it publishes by itself and Genex checks it again.":
+    "プレイヤーは今のバージョンのままです。修正後は自動で公開され、Genexがもう一度チェックします。",
+  "Players keep the {date} version.": "プレイヤーは{date}のバージョンのままです。",
+  "Public again": "再公開",
+  Published: "公開済み",
+  "Request human review": "スタッフに確認を依頼",
+  "Send request": "依頼を送る",
+  "Sending the {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}} again so a person can read it…":
+    "スタッフが確認できるよう{app, select, mac {Macアプリ} windows {Windowsアプリ} linux {Linuxアプリ} other {アプリ}}をもう一度送信中…",
+  "Sent for review": "チェックに送信",
+  "Sent to your agent. Publish it yourself when it's ready.":
+    "エージェントに送りました。準備ができたら自分で公開してね。",
+  "Sent to your agent. When it's done, Studio asks a person at Genex to put it back.":
+    "エージェントに送りました。終わったら、StudioがGenexのスタッフに公開の再開を頼みます。",
+  "Sent to your agent. When it's done, Studio publishes it and Genex checks it again.":
+    "エージェントに送りました。終わったらStudioが公開し、Genexがもう一度チェックします。",
+  "Show {n} more": "あと{n}件を表示",
+  "Sign in to see what to fix": "サインインして直す点を見る",
+  "Someone from the Genex team agreed it's fine.": "Genexチームのスタッフが問題ないと判断しました。",
+  "Taken down": "公開停止",
+  "Taking longer than usual. If the check can't finish, a person at Genex reviews it.":
+    "いつもより時間がかかっています。チェックが終わらない場合はGenexのスタッフが確認します。",
+  "Tell us why (at least {min} characters)": "理由を教えてね（{min}文字以上）",
+  "Tell us why in at least {min} characters.": "理由を{min}文字以上で教えてね。",
+  "That fix isn't the game's latest one": "それはこのゲームの最新の修正ではありません",
+  "Sent to your agent. When it's done, Studio publishes it.":
+    "エージェントに送りました。終わったら、Studioが公開します。",
+  "Sent to your agent. When it's done, publish it, then ask a person at Genex to put it back.":
+    "エージェントに送りました。終わったら公開して、Genexのスタッフに公開の再開を頼んでください。",
+  "After the fix, publish it, then ask a person at Genex to put it back. Usually within a day.":
+    "修正後に公開して、Genexのスタッフに公開の再開を頼んでください。通常1日以内です。",
+  "This game's latest fix isn't waiting for a build": "このゲームの最新の修正はビルド待ちではありません",
+  "The Genex team is reviewing this game.": "Genexチームがこのゲームを確認しています。",
+  "The fix isn't built yet. Build the {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}} again and it publishes.":
+    "修正はまだビルドされていません。{app, select, mac {Macアプリ} windows {Windowsアプリ} linux {Linuxアプリ} other {アプリ}}をビルドし直すと公開されます。",
+  "There's nothing to ask about right now.": "今は依頼することがありません。",
+  "Think we got it wrong? Someone from the Genex team will check your app, usually within a day. Players don't get it until then.":
+    "判断が間違っていると思う？Genexチームのスタッフがアプリを確認します。通常1日以内です。それまでプレイヤーには届きません。",
+  "Think we got it wrong? Someone from the Genex team will check your game, usually within a day. It stays taken down until then.":
+    "判断が間違っていると思う？Genexチームのスタッフがゲームを確認します。通常1日以内です。それまで公開停止のままです。",
+  "This decision can't be reviewed again.": "この判断は再確認できません。",
+  "Turned down 3 times this week, so a person at Genex reviews the next build. Usually within a day.":
+    "今週3回却下されたので、次のビルドはGenexのスタッフが確認します。通常1日以内です。",
+  "Usually within a day. You'll hear here and by email.": "通常1日以内です。こことメールでお知らせします。",
+  "Version {version} is live": "バージョン{version}を公開中",
+  "Version {version} is live for {app, select, mac {Mac} windows {Windows} linux {Linux} other {desktop}} players.":
+    "バージョン{version}を{app, select, mac {Mac} windows {Windows} linux {Linux} other {デスクトップ}}のプレイヤーに公開中です。",
+  "You already asked. A person will look at it, usually within a day.":
+    "すでに依頼済みです。スタッフが確認します。通常1日以内です。",
+  "You can close this. Studio tells you when it's done.": "閉じても大丈夫。終わったらStudioがお知らせします。",
+  "Your agent stopped before it finished.": "エージェントが終わる前に止まりました。",
+  "usually a few minutes": "通常数分",
+  "{app, select, mac {Mac} windows {Windows} linux {Linux} other {Desktop}} players get it now.":
+    "{app, select, mac {Mac} windows {Windows} linux {Linux} other {デスクトップ}}のプレイヤーに届いています。",
+  "{count}/{max}": "{count}/{max}",
+  "{minutes}m {seconds}s": "{minutes}分{seconds}秒",
+  "{n, plural, one {# fix sent} other {# fixes sent}}": "{n, plural, other {修正を#件送信}}",
+  "{n, plural, one {Can't publish yet: # thing to fix} other {Can't publish yet: # things to fix}}":
+    "{n, plural, other {まだ公開できません：直す点が#件}}",
+  "{n, plural, one {Not approved: # thing still to fix after the re-check} other {Not approved: # things still to fix after the re-check}}":
+    "{n, plural, other {承認されませんでした：再チェック後も直す点が#件}}",
+  "{n, plural, one {Not approved: # thing to fix} other {Not approved: # things to fix}}":
+    "{n, plural, other {承認されませんでした：直す点が#件}}",
+  "{n, plural, one {Taken down: # thing to fix} other {Taken down: # things to fix}}":
+    "{n, plural, other {公開停止：直す点が#件}}",
+  "{n, plural, one {Update not approved: # thing to fix} other {Update not approved: # things to fix}}":
+    "{n, plural, other {アップデートは承認されませんでした：直す点が#件}}",
+  "{state, select, taken_down {Taken down} not_approved {Not approved} other {In review}} · reconnect to see what to fix":
+    "{state, select, taken_down {公開停止} not_approved {未承認} other {チェック中}} · 再接続して直す点を見る",
+  "{title} is live!": "{title}を公開しました！",
+  "{title} is public again": "{title}が再公開されました",
+  "A person at Genex is reviewing the {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}}. Usually within a day.":
+    "Genexのスタッフが{app, select, mac {Macアプリ} windows {Windowsアプリ} linux {Linuxアプリ} other {アプリ}}を確認中です。ふつうは1日以内です。",
+  "Checking fixes": "修正をチェック中",
+  "Genex is checking the {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}}. Usually a few minutes.":
+    "Genexが{app, select, mac {Macアプリ} windows {Windowsアプリ} linux {Linuxアプリ} other {アプリ}}をチェック中です。ふつうは数分です。",
+  "Human review": "スタッフが確認中",
+  "Human review, usually within a day.": "スタッフが確認中。ふつうは1日以内です。",
+  Public: "公開中",
+  "{n, plural, one {# thing to fix. Click to see it and fix it with your agent.} other {# things to fix. Click to see them and fix them with your agent.}}":
+    "{n, plural, other {直す点が#件。クリックして確認し、エージェントで直そう。}}",
+  "{n, plural, one {# thing to fix. Open Publish to see it.} other {# things to fix. Open Publish to see them.}}":
+    "{n, plural, other {直す点が#件。「公開」を開いて確認しよう。}}",
+  "{n, plural, one {# thing to fix} other {# things to fix}}": "{n, plural, other {直す点が#件}}",
+  "{n, plural, one {Fixing # thing} other {Fixing # things}}": "{n, plural, other {#件を修正中}}",
+  "{title} was taken down": "{title}は公開停止になりました",
+  "{title}'s {app, select, mac {Mac app} windows {Windows app} linux {Linux app} other {apps}} wasn't approved":
+    "{title}の{app, select, mac {Macアプリ} windows {Windowsアプリ} linux {Linuxアプリ} other {アプリ}}は承認されませんでした",
+  "{title}: human review kept it down": "{title}：スタッフの確認でも公開停止のままです",
+  "{count, plural, one {and # more error} other {and # more errors}}": "{count, plural, other {ほか#件のエラー}}",
+  "Ask the agent to fix these errors": "これらのエラーの修正をエージェントに頼む",
+  "Genex couldn’t build the {players} app of “{title}”. Fix these errors in the game’s code so it builds there, and keep the game working as it does on other systems. This computer can’t build for {players}, so check each fix carefully. Then tell me to press Build on Genex again.\n\n{errors}":
+    "Genexは「{title}」の{players}アプリをつくれませんでした。そこでつくれるようにゲームのコードのエラーを直し、ほかのシステムでの動きは今のままにしてください。このコンピュータでは{players}向けにつくれないので、修正はひとつずつ慎重に確認してください。終わったら、もう一度Build on Genexを押すよう教えてください。\n\n{errors}",
+  "The same project fails the same way: change it first, then try again.":
+    "同じプロジェクトは同じように失敗します。先に変更してから、もう一度試してください。",
+  "Build on Genex Cloud": "Genex Cloudでビルド",
+  "Build on Mac": "Macでビルド",
+  "Build on PC": "PCでビルド",
+  "Builds after {platform}": "{platform}のあとにビルド",
+  "Builds {platforms} again, then updates {count, plural, one {it} other {them}} by itself.":
+    "{platforms}をビルドし直して、{count, plural, other {自動で更新します}}。",
+  "Builds {platforms} first. {slow} can take up to an hour.":
+    "まず{platforms}をビルドします。{slow}は最大1時間ほどかかることがあります。",
+  "Builds {platforms} too. {slow} can take up to an hour.":
+    "{platforms}もビルドします。{slow}は最大1時間ほどかかることがあります。",
+  "Builds {platforms}, then publishes {count, plural, one {it} other {them}} by itself.":
+    "{platforms}をビルドして、{count, plural, other {自動で公開します}}。",
+  "Builds {platform} first. It can take up to an hour.":
+    "まず{platform}をビルドします。最大1時間ほどかかることがあります。",
+  "Builds {platform} too. It can take up to an hour.": "{platform}もビルドします。最大1時間ほどかかることがあります。",
+  "Each one goes live as soon as it’s ready. You can close this window.":
+    "準備ができたものから公開されます。このウィンドウは閉じても大丈夫です。",
+  "More for {platform}": "{platform}のその他の操作",
+  "On Genex Cloud": "Genex Cloudで",
+  "On this PC": "このPCで",
+  "Publish to all platforms": "すべてのプラットフォームに公開",
+  "Publishes {now} now, {later} once {count, plural, one {it is} other {they are}} built.":
+    "{now}は今すぐ、{later}は{count, plural, other {ビルドができたら}}公開します。",
+  "Publishes {platforms} once {count, plural, one {it is} other {they are}} built.":
+    "{platforms}は{count, plural, other {ビルドができたら}}公開します。",
+  "Publishing to all platforms · {live} of {count} live":
+    "すべてのプラットフォームに公開中 · {count}件中{live}件が公開中",
+  "Update all platforms": "すべてのプラットフォームを更新",
+  "Updates {now} now, {later} once {count, plural, one {it is} other {they are}} built.":
+    "{now}は今すぐ、{later}は{count, plural, other {ビルドができたら}}更新します。",
+  "Updates {platforms} once {count, plural, one {it is} other {they are}} built.":
+    "{platforms}は{count, plural, other {ビルドができたら}}更新します。",
+  Updating: "更新中",
+  "Updating all platforms · {done} of {count} updated":
+    "すべてのプラットフォームを更新中 · {count}件中{done}件を更新済み",
+  "{hours}h {minutes}m left": "残り{hours}時間{minutes}分",
+  "{minutes}m left": "残り{minutes}分",
+  "Couldn’t build": "ビルドできませんでした",
+  "Couldn’t build · the older one is still live": "ビルドできませんでした · 以前の版が公開中のままです",
+  "Couldn’t send": "送信できませんでした",
+  "Live · older than your game": "公開中 · ゲームより古い版",
+  "Live · up to date": "公開中 · 最新",
+  "Only a Mac, Windows or Linux app can be taken off Genex this way.":
+    "この方法でGenexから外せるのはMac・Windows・Linuxのアプリだけです。",
+  "Sending to Genex": "Genexに送信中",
+  "Sending to Genex Cloud": "Genex Cloudに送信中",
+  "Take {platforms} down": "{platforms}を取り下げ",
+  "coming soon": "近日対応",
+  "{minutes} min ago": "{minutes}分前",
+  "Agent is fixing the {platform} build": "エージェントが{platform}のビルドを修正中",
+  "Copy the error": "エラーをコピー",
+  "Send the {platform} error to the agent": "{platform}のエラーをエージェントに送る",
+  "Send to agent": "エージェントに送る",
+  "{platform} app didn’t send": "{platform}アプリを送信できませんでした",
+  "{platform} build error": "{platform}のビルドエラー",
+  "Genex reads no settings of this game, so genex.json's authority block is ignored: it needs an index.html, a package.json, or Genex's multiplayer in its engine project":
+    "Genexはこのゲームの設定を読み取れないため、genex.jsonのauthorityブロックは無視されます。index.html、package.json、またはエンジンプロジェクト内のGenexマルチプレイヤーが必要です",
+  "Genex reads this game's package.json, not its genex.json, so genex.json's authority block is ignored. Move the block into package.json as genex.authority, or remove package.json":
+    "Genexはこのゲームのgenex.jsonではなくpackage.jsonを読むため、genex.jsonのauthorityブロックは無視されます。ブロックをgenex.authorityとしてpackage.jsonに移すか、package.jsonを削除してください",
+  "package.json's genex is not an object, so no authority block reaches Genex and the game would publish with no room":
+    "package.jsonのgenexがオブジェクトではないため、authorityブロックがGenexに届かず、ゲームはルームなしで公開されます",
+  "{file} is not a JSON object, so its authority block never reaches Genex and the game would publish with no room. Fix {file}":
+    "{file}がJSONオブジェクトではないため、authorityブロックがGenexに届かず、ゲームはルームなしで公開されます。{file}を直してください",
+  "Genex couldn't read whether the Mac app {app} may use the network. If players can't connect, package it again in Genex and publish.":
+    "Macアプリ {app} がネットワークを使えるかどうかをGenexで読み取れませんでした。プレイヤーが接続できない場合は、Genexでもう一度パッケージ化して公開してください。",
+  "The Mac app {app} can't reach the internet: it is sandboxed without network access, so no player could connect. Package it again in Genex, then publish. Nothing was sent.":
+    "Macアプリ {app} はインターネットに接続できません。ネットワークアクセスのないサンドボックスで動くため、どのプレイヤーも接続できません。Genexでもう一度パッケージ化してから公開してください。何も送信されていません。",
+  "Live · update ready": "公開中 · 更新の準備完了",
+  "Not built": "未ビルド",
+  "Built · older than your game": "ビルド済み · ゲームより古い版",
+  "Ready to publish": "公開できます",
+  "{platform} build didn’t start": "{platform}のビルドを開始できませんでした",
+  "Checking the archive": "アーカイブを確認中",
+  Packing: "まとめています",
+  "Sending the project for Remix": "Remix用にプロジェクトを送信中",
+  "{done} of {total} · {speed}/s": "{done} / {total} · {speed}/秒",
+  "{done} of {total} · {speed}/s · under a minute left": "{done} / {total} · {speed}/秒 · 残り1分未満",
+  "{done} of {total} · {speed}/s · about {minutes} min left": "{done} / {total} · {speed}/秒 · 残り約{minutes}分",
+  "{done} of {total} · {speed}/s · about {hours} h left": "{done} / {total} · {speed}/秒 · 残り約{hours}時間",
+  "{done} of {total} · {speed}/s · about {hours} h {minutes} min left":
+    "{done} / {total} · {speed}/秒 · 残り約{hours}時間{minutes}分",
+  "{size} MB/s": "{size} MB/s",
+  "{size} KB/s": "{size} KB/s",
+  "Verifying…": "検証中…",
+  "Unpacking…": "展開中…",
+  "This plugin stopped several times in a row, so it starts again in {seconds, plural, one {# second} other {# seconds}}. Try again then.":
+    "このプラグインが何度も続けて止まったため、{seconds, plural, other {#秒}}後に再起動します。そのあとでもう一度試してね。",
+  "Add Genex to {name}?": "{name}にGenexを追加しますか？",
+  "Another Genex game builds in this project too, so it stays where it is.":
+    "このプロジェクトでは別のGenexゲームもつくられているため、そのままにします。",
+  "Exported. Play it in Live's Web game tab, or publish it.":
+    "エクスポートしました。ライブの「Webゲーム」タブでプレイするか、公開してください。",
+  "Genex moves its folder from {from} to {to}. Rewind and Loops reach it there.":
+    "Genexがフォルダーを{from}から{to}に移動します。そこなら巻き戻しとLoopが届きます。",
+  "Genex moves its folder from {from} to {to}. Rewind, Loops and Publish reach it there.":
+    "Genexがフォルダーを{from}から{to}に移動します。そこなら巻き戻し、Loop、公開が届きます。",
+  "Move {name} into this game?": "{name}をこのゲームに移動しますか？",
+  "Only the project this game builds in can move into it.":
+    "移動できるのは、このゲームをつくっているプロジェクトだけです。",
+  "Quit Godot first: a project can't move while it is open.":
+    "先にGodotを終了してください。開いているプロジェクトは移動できません。",
+  "Quit Unreal first: a project can't move while it is open.":
+    "先にUnrealを終了してください。開いているプロジェクトは移動できません。",
+  "Remove Genex from {name}?": "{name}からGenexを削除しますか？",
+  "This game already has a godot folder.": "このゲームにはすでにgodotフォルダーがあります。",
+  "This game already has an unreal folder.": "このゲームにはすでにunrealフォルダーがあります。",
+  "This project is already in this game's folder.": "このプロジェクトはすでにこのゲームのフォルダーにあります。",
+  "This project is on another disk, so Genex leaves it there.":
+    "このプロジェクトは別のディスクにあるため、Genexはそのままにします。",
+  "This project's folder holds other things too, so Genex leaves it where it is.":
+    "このプロジェクトのフォルダーには他のものも入っているため、Genexはそのままにします。",
+  "Antigravity didn't answer. Check the installation, then try again.":
+    "Antigravityから応答がありません。インストールを確認して、もう一度試してください。",
+  "Antigravity isn't installed on this computer.": "このコンピューターにAntigravityがインストールされていません。",
+  "Antigravity sign-in": "Antigravityへのサインイン",
+  "Antigravity {version}": "Antigravity {version}",
+  "Antigravity's model list could not be read.": "Antigravityのモデル一覧を読み取れませんでした。",
+  "Install Antigravity": "Antigravityをインストール",
+  "Install Antigravity from Settings › Model Providers.":
+    "設定 › モデルプロバイダーからAntigravityをインストールしてください。",
+  "Install Antigravity's CLI to build with your Google AI plan.":
+    "AntigravityのCLIをインストールすると、Google AIのプランでつくれます。",
+  "Installing Antigravity. This can take a minute.":
+    "Antigravityをインストールしています。1分ほどかかることがあります。",
+  "Not signed in to Antigravity.": "Antigravityにサインインしていません。",
+  "Open the sign-in page, then paste the code it gives you here. Antigravity keeps the sign-in.":
+    "サインインページを開き、表示されたコードをここに貼り付けてください。サインイン情報はAntigravityが保持します。",
+  "Sign in to Antigravity from Settings › Model Providers.":
+    "設定 › モデルプロバイダーからAntigravityにサインインしてください。",
+  "Sign in with your Google account to build with your plan.":
+    "Googleアカウントでサインインすると、あなたのプランでつくれます。",
+  "Switch to another Google account": "別のGoogleアカウントに切り替える",
+  "Update Antigravity": "Antigravityをアップデート",
+  "Uses your Google AI plan": "Google AIのプランを使います",
+  "Your Google account has no model Antigravity can run.":
+    "GoogleアカウントにAntigravityで実行できるモデルがありません。",
+  Model: "モデル",
+  "{count, plural, one {# sound} other {# sounds}}": "{count, plural, other {サウンド # 件}}",
+  "{count, plural, one {# video} other {# videos}}": "{count, plural, other {動画 # 件}}",
+  "{count, plural, other {# left out}}": "{count, plural, other {使われなかった # 件}}",
+  Design: "デザイン",
+  "No design pages yet": "デザインページはまだありません",
+  "Concepts, maps and choices land here.": "コンセプト、マップ、選べる案がここに並びます。",
+  "Ask for a design": "デザインを頼む",
+  "showed you a design page": "デザインページを見せました",
+  "Game design": "ゲームデザイン",
+  "{count, plural, one {# artboard} other {# artboards}}": "{count, plural, other {アートボード#枚}}",
+  "Turn the model": "モデルを回す",
+  "Open in Design": "「デザイン」で開く",
+  "{title} was removed from Design": "{title} は「デザイン」から削除されました",
+  "Opens in Design": "「デザイン」で開きます",
+  "Question {step} of {of}": "質問{step}/{of}",
+  "Step {n} of {total} · {name}": "ステップ {n}/{total} · {name}",
+  "Version {version} is in your game": "バージョン {version} がゲームに入りました",
 } satisfies LocaleCatalog;

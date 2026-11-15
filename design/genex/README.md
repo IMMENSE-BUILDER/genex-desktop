@@ -89,7 +89,7 @@ Chat uses one 15px/22px reading size for replies, activity headings and tool ste
 14px/20px is reserved for descriptions and metadata. Headings use weight and spacing at
 the same reading size. Keep Genex fonts and palette. The transcript sits 20px in from the column's sides and
 scrolls flush under the composer, with no strip between its last line and the composer's edge. Soft user bubbles use 12px horizontal and 8px vertical
-padding; images sent with a message sit right-aligned above it as 120×84 tiles with a 12px radius (placeholders hold their place while loading), and a tile opens the image beside the chat. Names of files that exist link wherever the chat shows them; names that are not files stay plain text. In Markdown prose (inline code paths, links without a scheme, bare paths) they are 6px-radius field chips with a 13px file icon in the body font. In plain text, code and tool rows they are underlined words in their own font and colour (underline 40% of the text colour, 3px offset, full colour and ink on hover); a focused link in a user bubble takes the line-strong fill, and one reached by keyboard in a folded bubble unfolds it. A tool row's path is a link beside its disclosure toggle, which stretches over the row; the path gives up its folders before its file name. The tooltip says what a click does — "Opens beside the chat", "Opens in its default app", "Opens in Finder" or "Shows in Finder" (Explorer on Windows) — then the path when the label hides it, and "In the build · not in your game folder yet" for build-only files. Game Markdown and images open a file tab in the stage: a 60px header with the name at 15px medium, "In the build · not in your game folder yet" at 13px ink-3 only for build-only files, Show in Finder (folder files only) and Close; Markdown reads at 15px/24px in a 700px column with 28px/44px insets, text as highlighted 13px mono, images centered. The stage returns to the previous tab on Close. User messages longer than seven rendered lines fold with a 32px fade and a left-aligned, unpadded Show more text button; Show less restores the compact view. Short messages have no toggle. One disclosure groups neighboring tools and routine updates, with a trailing
+padding; images sent with a message sit right-aligned above it as 120×84 tiles with a 12px radius (placeholders hold their place while loading), and a tile opens the image beside the chat. Names of files that exist link wherever the chat shows them; names that are not files stay plain text. In Markdown prose (inline code paths, links without a scheme, bare paths) they are 6px-radius field chips with a 13px file icon in the body font. In plain text, code and tool rows they are underlined words in their own font and colour (underline 40% of the text colour, 3px offset, full colour and ink on hover); a focused link in a user bubble takes the line-strong fill, and one reached by keyboard in a folded bubble unfolds it. A tool row's path is a link beside its disclosure toggle, which stretches over the row; the path gives up its folders before its file name. The tooltip says what a click does — "Opens beside the chat", "Opens in its default app", "Opens in Finder" or "Shows in Finder" (Explorer on Windows) — then the path when the label hides it, and "In the build · not in your game folder yet" for build-only files; a page of the design board says "Opens in Design". A design artboard the agent showed is one block built as the build card: on the left a stack of up to three of the board's artboards (88×55, 8px radius, edged in the card's colour; the shown one on top and straight, two behind it leaning 6°; a picture as itself, a page as a sheet of lines, never its text), then a 12px mono "Game design" tag, the title and chevron, and one ink-3 line (the agent's note, else the count of artboards); the whole block is one button (tooltip "Open in Design"), an artboard has one block where it was last shown, and one removed from the board leaves one ink-3 line. Game Markdown and images open a file tab in the stage: a 60px header with the name at 15px medium, "In the build · not in your game folder yet" at 13px ink-3 only for build-only files, Show in Finder (folder files only) and Close; Markdown reads at 15px/24px in a 700px column with 28px/44px insets, text as highlighted 13px mono, images centered. The stage returns to the previous tab on Close. User messages longer than seven rendered lines fold with a 32px fade and a left-aligned, unpadded Show more text button; Show less restores the compact view. Short messages have no toggle. One disclosure groups neighboring tools and routine updates, with a trailing
 right/down chevron, 6px gap and regular weight. Failures stay visible in a muted amber count;
 the failed step itself uses the error color. Expanded tools sit in a shared 10px-radius frame with row dividers and 8px top spacing.
 Tool rows have 36px minimum height, 10px horizontal padding, 12px icons and 8px gaps.
@@ -122,7 +122,7 @@ Workers remain compact 32px rows with 6px insets/gaps, named tasks and disclosed
 Successful tools need no repeated status. Code uses mono; tool labels, filenames and prose
 use the body font. A shown path is not repeated in the result.
 
-Working status belongs to the chat's own work (a turn, a plan, Stop, a pending permission). While only a build runs, chat shows one build card instead, and nothing under it: an 8px-inset 16px-radius composer-colored surface with the lead's latest non-black frame (88×55, 10px radius, omitted until one exists), "Building" and a chevron at 15px, one line of what is happening now at 14px ink-3 (the part at work, "and N more" when several are, else what the lead is doing — never "Running a tool"), and its clock on the right at 14px: the elapsed time, and under it in ink-3 the most it was given ("up to 10h", a cap, never "of 10h": a build may finish inside it; an ∞ build shows only the clock). The finished build is the same card: its capture, the outcome and chevron, one line of failed checks, parts added and duration ("4 parts added · 5h 17m"; orange and led by "1 check failed" when one failed), and Play on the right in the model pill's fill (`pill-quiet`, as every result button, “See it” included) with a filled play glyph. Nothing wraps under it. The whole card is one button to the build's graph on Builds (its title stretched over the card, tooltip "Open in Builds"): the pointer on it steps the card to composer-panel with a line-strong ring and inks the nudging chevron; keyboard focus rings the card in accent; Play sits above it, and the pointer on Play leaves the card unlit. Studio learning after a build is a static line. The composer placeholder during a build reads "Talk to the lead while it builds…" when its lead takes the chat (live chat), else "Sends when the build finishes…". A message sent during a build never takes the card's place: one the lead takes opens above the card, any other waits below it, and the card holds still. The card stands 32px below the last line above it.
+Working status belongs to the chat's own work (a turn, a plan, Stop, a pending permission). While only a build runs, chat shows one build card instead, and nothing under it: an 8px-inset 16px-radius composer-colored surface with "Building" and a chevron at 15px, one line of where it stands at 14px ink-3 (its steps counted once it has some, "2 done · 1 working", else what is happening now: the part at work, "and N more" when several are, else what the lead is doing — never "Running a tool"), and its clock on the right at 14px: the elapsed time alone (a Loop runs until its lead finishes, so the card names no cap). Open, it lists those steps: the lead's save points by their labels, then each worker's part (added, working or not added), a long title on up to two lines; the lead itself is no row. Past seven steps it shows the latest five under one "N earlier steps" row that opens the rest; pressing a step opens its row on Builds. The finished build is the same card: its capture, the outcome and chevron, one line of failed checks, parts added and duration ("4 parts added · 5h 17m"; orange and led by "1 check failed" when one failed), and Play on the right in the model pill's fill (`pill-quiet`, as every result button, “See it” included) with a filled play glyph. Nothing wraps under it. The whole card is one button to the build's graph on Builds (its title stretched over the card, tooltip "Open in Builds"): the pointer on it steps the card to composer-panel with a line-strong ring and inks the nudging chevron; keyboard focus rings the card in accent; Play sits above it, and the pointer on Play leaves the card unlit. Studio learning after a build is a static line. The composer placeholder during a build reads "Talk to the lead while it builds…" when its lead takes the chat (live chat), else "Sends when the build finishes…". A message sent during a build never takes the card's place: one the lead takes opens above the card, any other waits below it, and the card holds still. The card stands 32px below the last line above it.
 The current status names the latest running tool, falling back to the actual task. Explicit
 reply, tool and waiting phases retain priority. The live status line (home's Naming and Opening
 too) is 12/18 type after a 14px halftone plasma orb (the Live loader's, `ui/StatusOrb.tsx`), 8px
@@ -133,7 +133,7 @@ updates. Long work trails mount 30 steps at a time, workers initially show six, 
 is paged/windowed. Studio build reports and learning use the same `ChatDisclosure` heading, body font and framed expansion as work logs; only genuine decisions get answer controls. Routine build decisions remain activity text, with failures visible. A new running build opens Builds once (after the idea-to-crane hand-off when Live shows the first-idea state); later tab choices remain with the user. There is one elapsed timer, without a second build-total line. Scroll-follow accounts for the composer/question dock changing height and
 never pulls a reader away from history.
 
-Every question waiting on the person uses one surface, asked as Claude asks (`chat/ChatQuestion.tsx`): a full-width composer-colored card; an agent's one-line recap in ink-2 above the question when it wrote one (`ask_user`'s `recap`); the question at 15px semibold; one ink-2 line under it when there is something to know (a plugin's name, what a yes lets the agent do), ending in **Details ›** where the request has more; then the answers as buttons from the card's left edge, wrapping when they do not fit, never more than three. The first answer is the recommended one: filled in ink with two keycaps (⌘ ↩ on a Mac, Ctrl ↵ elsewhere; `aria-keyshortcuts`) that press it from anywhere in the chat, the composer included, unless a dialog is open or another field has the typing (`chat/answer-keys.ts`); the others are outlined in the card's color. A press answers at once: no radios and no Continue; while it sends only a filled "Sending…" stays. A choice's description is its tooltip. The words scroll inside the card (at most 60% of the window); the answers never do. The cross in the corner, or Esc on the card, puts it aside behind its reopener ("Answer question", "Review permission request", "Review plan"), which brings focus back to the first answer; Esc in the composer still stops the turn. The person's own words go in the composer, whose placeholder says what they do: "Write your own answer…" under an agent's question (the next message is its answer), "Tell Claude what to do instead…" or "Keep planning: what should change?" under Claude's (a Deny with those words). Questions survive reload and pagination; any submitted reply settles an agent's question. Model-generated questions must be requested through the tool, not inferred from arbitrary prose or routine progress. Host handoff/session narration stays in diagnostics, including suppression of known older host templates.
+Every question waiting on the person uses one surface, asked as Claude asks (`chat/ChatQuestion.tsx`): a full-width composer-colored card; an agent's one-line recap in ink-2 above the question when it wrote one (`ask_user`'s `recap`); the question at 15px semibold; one ink-2 line under it when there is something to know (a plugin's name, what a yes lets the agent do), ending in **Details ›** where the request has more; then the answers as buttons from the card's left edge, wrapping when they do not fit, never more than three. One of a short run of an agent's questions (`ask_user`'s `step` and `of`, four at most) opens with a counter line above the recap and the question: "Question 2 of 4" in 12px mono ink-3 on the left and, on the right, one 18×4px dash per question (2px radius, 4px apart), accent up to the current question and line-strong after it; a question that names no place has no counter, and nothing else is added for a run (no summary of earlier answers, no Back, no skip). The first answer is the recommended one: filled in ink with two keycaps (⌘ ↩ on a Mac, Ctrl ↵ elsewhere; `aria-keyshortcuts`) that press it from anywhere in the chat, the composer included, unless a dialog is open or another field has the typing (`chat/answer-keys.ts`); the others are outlined in the card's color. A press answers at once: no radios and no Continue; while it sends only a filled "Sending…" stays. An agent's question leaves at the press, as a permission card does, and comes back as it was should its answer not go (a sign-in first); an answer that cannot be pressed (the reply that asked is still ending) dims to 50% only after 600ms, so a short wait never shows. A choice's description is its tooltip. The words scroll inside the card (at most 60% of the window); the answers never do. The cross in the corner, or Esc on the card, puts it aside behind its reopener ("Answer question", "Review permission request", "Review plan"), which brings focus back to the first answer; Esc in the composer still stops the turn. The person's own words go in the composer, whose placeholder says what they do: "Write your own answer…" under an agent's question (the next message is its answer), "Tell Claude what to do instead…" or "Keep planning: what should change?" under Claude's (a Deny with those words). Questions survive reload and pagination; any submitted reply settles an agent's question. Model-generated questions must be requested through the tool, not inferred from arbitrary prose or routine progress. Host handoff/session narration stays in diagnostics, including suppression of known older host templates.
 
 Permission questions use that surface; a busy request blocks duplicate submission, and putting
 one aside only collapses it. Pending plugin and Claude permission questions are pinned above the composer even if
@@ -234,11 +234,15 @@ the chat's tail per frame while something moves.
 A sent message appears at once, with its pictures. In an idle chat it is the next bubble and the
 live status reads **Sending** (no spinner) until it is saved. While the chat's agent works, the
 message goes into that work: it waits below as a muted bubble with a 12px **Sending…** label until
-the agent reads it, then sits where it was read and the reply continues below it. Only where it
+the agent reads it, then sits where it was read and the reply continues below it. Where it
 cannot join — for example during a build, to another model, in Studio's chat or with a local model
-without sessions — does it read **Queued**, with Remove, until its own turn. The saved row takes its
-place, carrying on the bubble's opening; a delivered one closes below the work as it opens where it
-was read. Every sent bubble reveals **Rewind**
+without sessions — it waits for its own turn. While there is work to stop, a 12px **Send now**
+text button (the composer's Stop; tooltip "Stop and send now") takes the label's place, so the
+line still says the message is on its way; then two 24px icon buttons with 12px glyphs: **Edit**
+(`rename`: off the queue, its words and pictures back in the composer) and **Remove** (`trash`).
+Their tooltips open below, 6px clear, off the bubble and never over the glyph as they slide in.
+The saved row takes its place, carrying on the bubble's opening; a delivered one closes below the
+work as it opens where it was read. Every sent bubble reveals **Rewind**
 (the `rewind` glyph, a counter-clockwise arrow that turns back once) as a 24px icon button 4px left
 of the bubble, centred on its last line, on row hover or focus-within and always under `hover: none`,
 including messages before a build and ones read into another's answer; it is absent while the
@@ -490,14 +494,14 @@ stands (a timer while it opens; "Ready in Unreal" once it answers) and at most o
 step the Unreal panel offers (Get Unreal Engine, Open the Unreal panel, Set up and open, Open in
 Unreal, Switch to <project>, Restart Unreal or Quit Unreal); with two editors open it offers no
 quit, only words. The Unreal panel, a plugin frame, wears Genex's type (both faces inlined as data,
-`inlinePanelFonts`) and controls (32px borderless buttons in Geist Mono) and is built as an
-[engine panel](#engine-panels): the project block's head carries its state in the toolbar's words
-and tone (Not set up, Not open, Starting, Ready as the green dot alone, Unreal busy, Not answering,
-Not connected), its foot one primary (held, not hidden, while Unreal is busy), Change project and a
-⋯ menu (Undo setup, Quit Unreal); This computer's block lists the engine and Xcode. The Unity
-panel is the same: its project block (Unity's mark on the tile, `unity/`, state in the button's
-words, the step, Engine, one primary and a quiet action at the foot's end) and This computer (the
-newest Unity, ticked once it is Unity 6); its header button folds to Unity's mark. While Live or
+`inlinePanelFonts`, one sans face on screen) and controls and is built as an
+[engine panel](#engine-panels): the head row carries its state in the toolbar's words
+and tone (Not set up, Not open, Starting, Ready, Unreal busy, Not answering,
+Not connected), one primary (hidden while it can't act) and a
+⋯ menu (Change project, Remove Genex from this project, Quit Unreal); Xcode and the engine update
+are rows of the same list. The Unity
+panel is the same list (Unity's mark, the state in the button's words with its version, one
+primary, ⋯); its header button folds to Unity's mark. While Live or
 Builds loads, a 52×36 halftone plasma in ink at 62% sits over a shimmering 13px line; it appears
 only after 0.4s, stays at least 0.6s and fades out (150ms) before the native view is uncovered.
 
@@ -595,22 +599,20 @@ is a 14px state mark (green check, red cross, ink-3 dash) beside the title, whic
 **Show all** only when it hides words; one 12px line under it says the state in words, who checked and, for
 a check that played, what it rests on ("Passed · Judge who played it · verified by the studio"), red when
 it failed; then the checker's note. No category or revision on a row (`outcome-checks.ts`).
-The Builds graph stays a node graph: every node is one size (208×130), its picture filling it, a
-name and one status on a dark fade at its bottom, and a count in a chip at the top right; a ring
-outside it, never a border, so no state changes its size. Colour means state only (no per-part
-colours); a ring in the graph accent means happening now. The graph draws its rings, live edge
-and live status in the palette's `graph` (`--graph`, scoped to `[data-stage-graph]` in
-`theme.css`), the app accent until set. Words match the chat: Added, Working, Being checked,
-Left out. A part with steps has a row label; a part built in one session is its node. The build
-says "Checking it starts…" (with the newest part's picture, softened) until a picture or a health
-pass shows it runs, then "Ready to play"; node and card use the same words. While no part works
-and nothing waits on a check, a node for the lead follows the build, so the run never looks done.
-A node at work, the lead's included, is its agent's screen: the newest frame with the agent's
-cursor, and a status that is the action in plain words with its age ("Pressing Space · 3s"; a step
-being checked keeps "Being checked · …"). Its card shows that frame live and What it did, the
-window's last frames with the newest as Now. No strip of screens sits above the stage.
-The reviewers are an eye gate on the edge into what they looked at; one 40px bar of the chat's
-builds replaces per-card chips and per-node status boxes: a tab each, oldest on the left, on one
+Builds is a list that fills the panel edge to edge and scrolls: **Working now**, then **What
+changed**, newest first, each under a 14px heading with its count in ink-3; a finished run's build
+heads it, its picture beside its state. Every row is one height (68px): the chat's step mark, the
+name, and one 12px ink-3 line with the time it ended and what it made ("Model · 2 versions", "12
+sounds") or, when its work is not in the build, how it stands; on the right its pictures at 96×60
+(what it made, up to three then "+N", else its own picture). A row at work shows its agent's screen
+in a ring of the graph accent (`--graph`, scoped to `[data-stage-graph]` in `theme.css`) and its
+action in words with its age ("Pressing Space · 3s"), in the chat's shimmer. Steps left out of the
+build gather under one "N left out" row with a chevron at the end of What changed, dim when opened.
+A build check that did not pass is a row with an orange warning mark; the lead is a row only while it
+works itself. Words match the chat: Added, Working, Being checked, Left out. No "You asked", no
+gallery of what was made, no before/after pairs.
+The reviewers' notes open from an eye on the card they looked at; one 40px bar of the chat's
+builds sits over the list: a tab each, oldest on the left, on one
 quiet track with the open tab raised (surface fill, a ring halfway from `line` to `line-strong`) and wider. A tab is what was
 asked, ellipsized, after a bare ✓ once done, a muted dot while paused, or the status line's orb
 while it works, then its clock at 12px in the chat's shimmer. No "Building", budget or progress
@@ -622,13 +624,13 @@ count. Its list is the shared dropdown, newest first, one 32px line per build wi
 (its clock while it works). The open build's row is filled and scrolled into view, and focused when
 the list opens from the keyboard. Past ten rows it scrolls, the last row shown fading under a
 gradient that keeps the menu's shadow. Play keeps its place at the right end and shows for every
-build; one that made nothing yet plays Live as it is. A selected node opens in place: the camera glides to it at 160%, the graph dims to
-40% and stays clickable, and one card (max 560px, centred, scrolling inside) carries the detail —
-never a side panel. Replies go through the chat composer, so the app keeps one input. Semantic zoom
-trades words for pictures below 60% and adds the asked sentence from 135%.
-An Unreal Loop draws in the same grammar: the lead's milestones are rows ("Lead · <milestone>") of
+build; one that made nothing yet plays Live as it is. A pressed row opens its card in its place in
+the list, two columns when wide (what to look at, what to read) and stacked when narrow; arrows
+walk the rows, Esc closes it — never a side panel. Replies go through the chat composer, so the app
+keeps one input.
+An Unreal Loop reads the same way: the lead's milestones are rows ("Lead · <milestone>") of
 the saves it kept itself, which carry no eye and read "Not reviewed — the lead saved it after
-looking at its own captures."; each sub-agent is a node ("Blender: <title>", "Meshy: …", "Sound: …")
+looking at its own captures."; each sub-agent is a row ("Blender: <title>", "Meshy: …", "Sound: …")
 with its asset cards, and once its files are in the game it says Delivered (a green check; card pill
 "Delivered, not used yet") until a save uses it. The critic's advice is a "Critic's advice" row on
 the save it looked at (each defect with "Fix:" beneath in ink-3, one bold move as a quote, its art
@@ -667,7 +669,9 @@ The Live stage, Assets and an empty Activity share one empty state (`ui/EmptySta
 a 128×92 wireframe on a fading floor (an old-school computer drawn as a blueprint — faces in the
 stage's colour, ink edges, hidden edges dashed, an accent screen with a blinking prompt, one turn
 per 9s (`ui/wire-computer.ts`) — then a crane, teapot, the Harness glyph, the stopped game's
-upright plate; theme colours, 30 fps only while visible, a still under Reduce Motion), a one-line
+upright plate, and on the empty Design tab a pencil drawing a design page, the core loop: its frame,
+a title, three steps joined by arrows and two notes, one line after another over 8s, then held and
+faded (`ui/wire-design.ts`); theme colours, 30 fps only while visible, a still under Reduce Motion), a one-line
 15/20 title, a one-line 13/18 subtitle of at most 40 characters and a fixed 48px button slot. A
 title-only state (Game stopped) keeps no subtitle room: its title sits 6px under the art and its
 button 15px under the title. Idea → building turns the computer to face you, boots its screen and
@@ -678,7 +682,7 @@ new drawing (a loading, empty or being-made state, an icon with depth) follows t
 With no runs, Activity shows only that empty state, centred: **A self-improving harness**, “Runs and
 improvements will show up here.” and **Start building** (the last game chat, composer focused), or
 **New game** when the library is empty.
-Timed runs start from the composer's Mode menu. **Settings → Harness** holds **Maximum concurrent workers**
+Loops start from a game's chat. **Settings → Harness** holds **Maximum concurrent workers**
 and **Apply suggestions automatically** with how suggestions are tested. The evaluation explanation
 distinguishes instruction comparisons from game-quality evidence.
 Use the existing content font for Harness prose and controls, code font only for technical text,
@@ -697,27 +701,27 @@ once, with no second padding or scrollbar inside. Three views: **this game's pro
 lives, the one next step), **setup** only while something it needs is missing, and **choose a
 project** behind Change project (New project on top, Back to the project).
 
-The panel is built from blocks: one subject per block (the project, this computer, the list), a 1px edge,
-14px corners and a fill one step above the dialog; a 13px third-ink label above each, 24px between
-them, 1px dividers between rows inside, and actions in the block's foot (primary first, Change and
-⋯ at its end). A padded button always has a fill; a rare action for the whole panel (Undo Set up)
-is an underlined link with no padding. A box inside a card (a setup step, in the chat's
-setup card too) has the `line-soft` edge: as quiet as the card's own edge on a light theme, the
-control edge on a dark one. The chat's setup card keeps its buttons in a footer under the steps,
-which scroll above it. List rows are 60px (32px tile, 15px name, 12px mono path, a tag, the version, a
-chevron; the whole row is the button); fact rows 44px, label left and mono value right; 16px side
-padding everywhere. A path starts at `~` with its middle folded to …; a temporary folder says so;
-the full path is the tooltip. Status is a dot and one word, the same in the block's head and on the
-engine's button, except Ready, which is the green dot alone. Tags name the consequence (Outside game),
-explained once under the list.
+The project view is one list in one outlined block (1px edge, 14px corners, a fill one step above
+the dialog, 1px dividers between rows), in a narrow dialog (`panels[].width: "narrow"`, 480px), in
+one font: no mono paths, labels above blocks or fact tables. Its head row carries the engine's own
+mark (never on a disc), the project's name, a dot and one word for its state (the engine's version
+beside it), the one next step as the primary button and ⋯ for the rare actions (Change project,
+Remove Genex, Quit). Each row under it is one thing the person can act on: a short name, at most
+one helper line, and one button at the right; a secondary button has the soft accent tint, and every
+button has a fill. A row or button that cannot act now is hidden, not greyed, and nothing the app
+handles by itself is shown. A choice that is on or off is a switch. A project that lives outside
+its game says so in a row with **Move into game**. Setup steps are rows of the same list: a done
+step shows only its name. Choose a project keeps list rows of 60px (32px tile, 15px name, a tag,
+the version, a chevron; the whole row is the button). A box inside the chat's setup card has the
+`line-soft` edge, and that card keeps its buttons in a footer under the steps, which scroll above
+it. Status is a dot and one word, the same in the head and on the engine's button.
 
 ## First launch
 
 The welcome (`renderer/onboarding/`, styles in `styles/onboarding.css`) is one full-window layer
 in the app's own roles, above the inert shell and below dialogs, so the Codex sign-in window can
 open over it. The Genex wordmark is 142px wide. The welcome's composer is a copy of the game
-composer: the same panel, Add circle, borderless ∞ Loop button (as the bar appears its ∞
-draws itself once and a light passes over the word once) and Send circle. The first step waits
+composer: the same panel, Add circle and Send circle. The first step waits
 1.4 s with a blinking caret, types 50 ms a letter, lets the prompt be read, then the pointer moves
 to Send and presses it. Its stage is a fixed 760×380 drawing scaled between 0.5× and 1.2× to fit;
 the second step shows **Your agent leads** (the prompt lands on a translucent sheet in midair; a pen
@@ -740,7 +744,15 @@ hugs its words, quiet links under it, and OpenCode's sign-in as a terminal card 
 Cancel over the terminal). While OpenCode's free models are all a person can build with, its ready
 screen lists them under a small-caps **build with** as one radio group of 36px rows (the picked one
 on a surface with an accent dot), OpenCode default first and picked; a short window drops the mark
-for it. The marks are the vendors' own paths, unaltered (`ui/provider-marks.ts`). All art is canvas in the empty states' wireframe
+for it. **Use Genex** opens Genex's screen in the same pattern, with the promo card's own pieces in
+place of a mark: the title and its 380px line, the card's 19:10 film at 400px with 16px corners
+(28px under the words; its poster under Reduce Motion), the card's three 18px-glyph rows in the
+same 400px column (20px under the film, text left-aligned), then one accent-tint **Sign in in
+browser ↗** 28px under the rows. Waiting, the button gives way to **Finish in your browser** with
+the LoaderGrid and a cancel ✕, and a quiet **Open sign-in again** under it; signed in, a green
+check and **Genex ready**, with Start building below. The control's place is 80px tall, so
+nothing moves between the three. A window under 860px tall narrows the column to 320px, and under
+760px the film goes. The marks are the vendors' own paths, unaltered (`ui/provider-marks.ts`). All art is canvas in the empty states' wireframe
 language, reads theme colours from CSS and holds a still frame under Reduce Motion. Skip for now
 and Start building fade into home, the welcome's idea waiting in its composer.
 
@@ -800,7 +812,7 @@ this Mac?") with Cancel, which takes focus, and a destructive Delete. Closing or
 jobs. Harness holds **Maximum concurrent workers** (a ceiling the lead chooses under, default 4, maximum 8: the pool's own limit)
 and **Apply suggestions automatically** with how suggestions are tested. The game model list's
 Add more models opens Model Providers. First-launch and Studio setup links open the corresponding
-section. Timed runs start from the composer's Mode menu; MCP stays in Plugins. Permissions lists
+section. Loops start from a game's chat; MCP stays in Plugins. Permissions lists
 the always-allow rules chats saved, under each game's title: one mono rule per row with a ghost
 trash button, **Stop allowing** (focus moves to the rule taking its place); with none, one ink-3
 line says Always allow in a chat adds one. Each chat's mode stays in its composer.
@@ -824,7 +836,7 @@ choice is saved apart from game chats (it starts from the last game pick once) a
 the model new games inherit. It accepts image drop/paste and has no Loop, permission, tool or
 context-ring controls. Provider setup is offered when no model is available.
 
-The game composer has one text area and one toolbar: a filled 30px Add circle, a Mode pill, the
+The game composer has one text area and one toolbar: a filled 30px Add circle, the
 permissions pill (Claude orchestrators only), flexible space, a 16px context ring (2px stroke), a
 model pill naming the orchestrator, an effort pill, and one 30px Send/Stop circle. With no AI model
 at all (home or a game), the model pill's place is **Connect AI model** in the accent tint, which
@@ -842,8 +854,8 @@ Stop replaces Send unless the composer has a sendable draft; typing a follow-up 
 and sending or clearing it restores Stop. Whitespace alone keeps Stop visible. The composer Stop control
 interrupts immediately and send the oldest queued message after the interrupted work settles;
 an empty queue stays stopped. Waiting messages sit below the current work as muted bubbles with a
-12px label: Sending… until the running turn reads them (no Remove), or Queued with a small Remove
-icon beneath, outside the bubble, where they wait for a turn of their own. A delivered message
+12px Sending… label until read: one the running turn took has no actions; one waiting for a turn
+of its own has Send now in the label's place, then Edit and Remove, beneath, outside the bubble. A delivered message
 closes below the work as it opens where it was read. Until stopped work records its end, the
 status reads Stopping. Worker task rows keep one truncated line; the full title is its tooltip.
 Sending follows the latest conversation.
@@ -883,7 +895,7 @@ The permissions pill shows one glyph per mode: shield (Auto), help (Manual), pen
 edits), plan (Plan) and shield-off (Bypass permissions, orange in the pill and its row). Auto is
 the glyph alone, its tooltip "Auto permissions"; another mode adds its label. The model's name keeps
 its room (`ui/toolbar-fit.ts`, measured): when it would be cut short the label goes first (the
-tooltip names the mode), then Mode's ∞ or time, then in the narrowest chat the pill (never Bypass). Its 360px panel opens
+tooltip names the mode), then in the narrowest chat the pill (never Bypass). Its 360px panel opens
 above, start-aligned, and shifts to stay over the chat, never the native game. Under a
 **Permissions** label, five rows in Claude Code's order show glyph, label, one ink-3 description
 line, a check on the current mode and number hints 1–5 (digits pick while it is open; arrows,
@@ -892,17 +904,9 @@ Auto, its line says Claude asks first. Its Plan is Claude Code's plan mode (it r
 separate from Add's Plan mode (the studio's plan review), and shows no bulb. Choosing Bypass opens "Bypass permissions?" (it acts
 anywhere on this Mac, "this computer" on Windows and Linux; Rewind restores only the game folder)
 with ghost Cancel focused and a destructive **Bypass permissions**; focus returns to the pill.
-Mode holds Loop mode, one control: Off, ∞ (until the build passes), 30 m, 1 h, 2 h
-and Custom. Custom shows a ±15-minute stepper that also accepts typed times ("1h 15m", "90m",
-"1:45") from 15 minutes to 24 hours. The trigger says **∞ Loop** (the ∞ draws itself once as
-it is picked), the limit in muted mono before the word (**2h Loop**, **1h15 Loop**) or **Auto** when
-off. Segments and stepper sit in a darker well, in mono.
-While the chat's build runs or is paused, Mode names that build's limit, does not open and is dimmed
-to 45% like a disabled composer icon, in both themes; after a finished build it is the chat's own
-Loop again (Off: "Each message runs one turn."). There is no new-build choice.
 The model panel (300px) lists three jobs as rows: **Main agent**, **Workers** ⓘ and **Reviewers** ⓘ,
 each naming its model with a ›; the ⓘ tooltips say what the job does and close when the pointer
-leaves. Workers and Reviewers always read quieter and stay choosable in Auto and Loop. A row opens
+leaves. Workers and Reviewers always read quieter and stay choosable. A row opens
 its model list (240px) to the right of the panel, else its left, else above; over a running game
 the game hides while the list is open. The list groups
 models under ChatGPT, Claude, then Local models, each group's name
@@ -915,8 +919,8 @@ reviewers use the closest level their models accept.
 The ring panel (340px) shows Context window used/capacity with one meter, "Compacts automatically",
 and, for a model whose chat can be compacted, Compact now (also `/compact` in the composer). Below it, each signed-in subscription has a block titled with
 its plan (e.g. Claude Max plan) that opens the provider's usage page, then each limit with its reset
-time, percent used and meter (amber from 75%, red from 90%); model-scoped weekly limits (such as
-Fable's) stay off the panel. The orchestrator's plan comes first;
+time, percent used and meter (amber from 75%, red from 90%); a model's own weekly limit (such as
+Fable's) follows the plan's when the account reports one. The orchestrator's plan comes first;
 with two plans, each names the roles it serves or says Not in use. While Genex is connected, a
 Genex credits block follows: Used by this game, then Left for all games in ink-3.
 Fresh games inherit the last selected chat model; returning chats retain their own saved model.
@@ -1064,10 +1068,9 @@ It does not sign into a real account or download model weights.
 Use `node tests/e2e/run-promptbar-ui.mjs` for composer behavior changes; a local visual edit
 can use a focused rendered review instead. It uses production components
 with deterministic gallery models and tests the composer metrics (30px Add/Send, 7px bottom
-inset, 26px radius), tooltips, Plan mode, the Loop control (presets, Custom stepper and typed
-times, arrow keys, Off keeping the saved time), toolbar order (ring, model, effort, Send), no Fast
-control, the roles panel (Orchestrator/Workers/Judge rows, ⓘ tooltips, quiet Loop-off rows with
-Turn on), the side model list (focus, groups, Add more models, chat-side placement, arrow keys,
+inset, 26px radius), tooltips, Plan mode, toolbar order (ring,
+model, effort, Send), no Fast control, the roles panel (Orchestrator/Workers/Judge rows, ⓘ tooltips,
+quiet worker and reviewer rows), the side model list (focus, groups, Add more models, chat-side placement, arrow keys,
 Escape closing the list before the panel), the effort slider (keys, pointer snap, nearest level per
 role), context-window preferences and plan limits (order, roles, levels, usage link), Add density,
 plugin status actions and setup route, plugin row hover, Settings and name opening the plugin's
@@ -1075,7 +1078,7 @@ page, full-composer Add anchoring, @ mentions (filter, insert,
 Escape, focus kept in the text),
 Named model rows without search, provider-default or empty local placeholders; High defaults in both displayed and submitted role settings; Send state/payload, the ink-filled Send/Stop cross-fade, exclusive Send/Stop transitions during work (including whitespace, clearing,
 follow-up submission, post-send guard and pointer/keyboard Stop), 200% zoom and reduced motion. Captures and results are in
-`.studio-dev/evidence/composer/` (override with `COMPOSER_EVIDENCE` for a follow-up pass). `promptbar-redesign.test.ts` covers durable Auto/Loop
+`.studio-dev/evidence/composer/` (override with `COMPOSER_EVIDENCE` for a follow-up pass). `promptbar-redesign.test.ts` covers durable plan
 approval, revision, cancellation, retry, duplicate approval and the real host dispatch boundary.
 No fixture authenticates a vendor or starts a paid generation. Native preview layering remains
 covered by the full Build smoke and agentic-readiness gates.

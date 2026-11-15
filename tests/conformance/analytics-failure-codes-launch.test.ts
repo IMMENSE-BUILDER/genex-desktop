@@ -23,10 +23,12 @@ import { createBootGate } from "../../src/main/boot-gate.ts";
 import { DataLaunchKind, pointElectronAtData, writeDataFolderRecord } from "../../src/main/data-folder.ts";
 import { createIpcHandle, type IpcResult, type IpcSender } from "../../src/main/ipc-handle.ts";
 import { MainDiagnostic, type PreviousSession, RendererGone, SessionExit } from "../../src/shared/app-session.ts";
-import { RestartAnswer, UpdateFailure } from "../../src/shared/app-update.ts";
+import { RestartAnswer, UpdateFailure, UpdateFeedState } from "../../src/shared/app-update.ts";
 import {
+  SandboxFolderKind,
   BootFailure,
   BootPhase,
+  SandboxLaunchCode,
   SandboxProblemCode,
   type StartFacts,
   StartPassage,
@@ -413,19 +415,62 @@ describe("P10a: Relaunch to update, and updates that fail in the background", ()
     const sent = await recorder();
     const session = createStore<Record<string, unknown>>(() => ({ status: SessionStatus.Ready, launch: null }));
     const heard = launchHeard(session);
+    heard.ui({
+      type: UiEvent.UpdateFailed,
+      payload: {
+        stage: UpdateFailure.Check,
+        feed: UpdateFeedState.Unreachable,
+        netError: "ERR_NAME_NOT_RESOLVED",
+        httpStatus: null,
+        installer: true,
+        offeredDownload: true,
+      },
+    });
     heard.ui({ type: UiEvent.UpdateFailed, payload: { stage: UpdateFailure.Download } });
     for (const stage of [HOSTILE[0], 3, null, "download "])
       heard.ui(JSON.parse(JSON.stringify({ type: UiEvent.UpdateFailed, payload: { stage } })));
     heard.ui({ type: UiEvent.UpdateFailed });
+    for (const [netError, httpStatus] of [
+      [HOSTILE[7], 99],
+      ["The remote name could not be resolved: 'update.electronjs.org'", 503.5],
+      ["err_name_not_resolved", "503"],
+    ])
+      heard.ui(
+        JSON.parse(
+          JSON.stringify({
+            type: UiEvent.UpdateFailed,
+            payload: {
+              stage: UpdateFailure.Check,
+              feed: "blocked",
+              netError,
+              httpStatus,
+              installer: "yes",
+              offeredDownload: 1,
+            },
+          }),
+        ),
+      );
     heard.stop();
     const failures = sentOf(sent, AnalyticsEvent.UpdateBackgroundFailed);
+    const none = { feed: null, net_error: null, http_status: null, installer: null, offered_download: false };
     assert.deepEqual(failures, [
-      { stage: UpdateFailure.Download },
-      { stage: null },
-      { stage: null },
-      { stage: null },
-      { stage: null },
-      { stage: null },
+      {
+        stage: UpdateFailure.Check,
+        feed: UpdateFeedState.Unreachable,
+        net_error: "ERR_NAME_NOT_RESOLVED",
+        http_status: null,
+        installer: true,
+        offered_download: true,
+      },
+      { stage: UpdateFailure.Download, ...none },
+      { stage: null, ...none },
+      { stage: null, ...none },
+      { stage: null, ...none },
+      { stage: null, ...none },
+      { stage: null, ...none },
+      { stage: UpdateFailure.Check, ...none },
+      { stage: UpdateFailure.Check, ...none },
+      { stage: UpdateFailure.Check, ...none },
     ]);
     for (const properties of failures) assertClean("update_background_failed", properties);
   });
@@ -550,12 +595,43 @@ describe("P7: how the app started", () => {
       type: UiEvent.HarnessStartFailed,
       payload: { failure: HOSTILE[4], failureCode: SandboxProblemCode.IsolationBlocked },
     });
+    heard.ui({
+      type: UiEvent.HarnessStartFailed,
+      payload: { failure: HOSTILE[4], failureCode: SandboxLaunchCode.ProxyPortsRefused },
+    });
     heard.ui({ type: UiEvent.HarnessStartFailed, payload: { failure: HOSTILE[4], failureCode: HOSTILE[0] } });
     heard.ui({ type: UiEvent.HarnessStartFailed, payload: { failure: HOSTILE[6] } });
     heard.stop();
     const failed = sentOf(sent, AnalyticsEvent.AgentsStartFailed);
-    assert.deepEqual(failed, [{ code: SandboxProblemCode.IsolationBlocked }, { code: null }, { code: null }]);
+    assert.deepEqual(failed, [
+      { code: SandboxProblemCode.IsolationBlocked },
+      { code: SandboxLaunchCode.ProxyPortsRefused },
+      { code: null },
+      { code: null },
+    ]);
     for (const properties of failed) assertClean("agents_start_failed", properties);
+  });
+});
+
+describe("a folder the Windows sandbox left out", () => {
+  it("says only what kind of folder and whether it is on another drive, never where", async () => {
+    // Feedback cmwdpn67: Windows refused the sandbox's grant on one game folder on another drive.
+    const sent = await recorder();
+    const session = createStore<Record<string, unknown>>(() => ({ status: SessionStatus.Ready, launch: null }));
+    const heard = launchHeard(session);
+    heard.ui({ type: UiEvent.SandboxFolderLeftOut, payload: { kind: SandboxFolderKind.Game, otherDrive: true } });
+    heard.ui({ type: UiEvent.SandboxFolderLeftOut, payload: { kind: SandboxFolderKind.GenexData, otherDrive: false } });
+    heard.ui({ type: UiEvent.SandboxFolderLeftOut, payload: { kind: HOSTILE[0], otherDrive: HOSTILE[1] } });
+    heard.ui({ type: UiEvent.SandboxFolderLeftOut, payload: HOSTILE[4] });
+    heard.stop();
+    const left = sentOf(sent, AnalyticsEvent.SandboxFolderLeftOut);
+    assert.deepEqual(left, [
+      { kind: SandboxFolderKind.Game, other_drive: true },
+      { kind: SandboxFolderKind.GenexData, other_drive: false },
+      { kind: null, other_drive: null },
+      { kind: null, other_drive: null },
+    ]);
+    for (const properties of left) assertClean("sandbox_folder_left_out", properties);
   });
 });
 

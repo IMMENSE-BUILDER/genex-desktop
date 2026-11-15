@@ -1,9 +1,10 @@
+import { cleanBuildTitle } from "../shared/build-title.ts";
 import { mergeChatEvents } from "../shared/chat-history.ts";
-import { CustomEvent, customEvent, customRecord, DELEGATED_PREFIX } from "../shared/custom-events.ts";
+import { CustomEvent, customEvent, customRecord, DELEGATED_PREFIX, LEAD_PART } from "../shared/custom-events.ts";
 import { type ConversationRecord, type EventEnvelope, EventKind } from "../shared/event-log.ts";
 import { intlLocale, t } from "../shared/i18n.ts";
 import { messageQueueState, type QueueView } from "../shared/message-queue.ts";
-import { graphKeyOf, turnOfGraphKey } from "../shared/run-graph-events.ts";
+import { graphKeyOf, isGraphTrace, turnOfGraphKey } from "../shared/run-graph-events.ts";
 import { type RunExecution, RunState, runExecutions, workStart } from "../shared/run-state.ts";
 import { summaryCounts, summaryOutcome } from "../shared/run-summary.ts";
 import {
@@ -56,6 +57,65 @@ export function workerThreadFor(
   return threads.find((thread) => thread.title === `${workerTitlePrefix(runId)}${partTitle}`);
 }
 
+/**
+ * Records the stage's readers (the history, the graph, the run Live answers to) never fold: a
+ * builder's mirrored trace, session activity, context use and tool traffic. They are most of a
+ * long Loop's log, and each one reached the stage as its own batch.
+ */
+const STAGE_SKIPS: ReadonlySet<string> = new Set([EventKind.ToolRequested, EventKind.ToolResult]);
+
+/** Whether a record can change what the stage draws: not tool traffic, nor a trace the graph never draws. */
+function stageReads(event: EventEnvelope): boolean {
+  const { data } = event;
+  if (data.type !== EventKind.Custom) return !STAGE_SKIPS.has(data.type);
+  return !isGraphTrace(data.event_type);
+}
+
+/** A queued message names its words by the record just before it (`messageQueueState`), so that one stays. */
+const namesPrevious = (event: EventEnvelope): boolean =>
+  event.data.type === EventKind.Custom && event.data.event_type === CustomEvent.CoordinatorMessageQueued;
+
+/** A thread's log as the stage reads it, and the log it was taken from. */
+export interface StageLog {
+  source: readonly EventEnvelope[];
+  events: EventEnvelope[];
+}
+
+/** Add the records of `events` from `start` on that the stage reads to `kept`. */
+function keepStageRecords(events: readonly EventEnvelope[], start: number, kept: EventEnvelope[]): void {
+  for (let index = start; index < events.length; index++) {
+    const event = events[index];
+    if (!event || !stageReads(event)) continue;
+    const before = events[index - 1];
+    if (namesPrevious(event) && before && !stageReads(before)) kept.push(before);
+    kept.push(event);
+  }
+}
+
+/** Whether `events` begins with every record of `source`, the very same objects in the same places. */
+function growsFrom(events: readonly EventEnvelope[], source: readonly EventEnvelope[]): boolean {
+  if (events.length < source.length) return false;
+  for (let index = 0; index < source.length; index++) if (events[index] !== source[index]) return false;
+  return true;
+}
+
+/**
+ * The records of a thread's log the stage reads, without the ones it never folds (`stageReads`).
+ * A log that only grew reads just its new records, and keeps `previous.events` itself when none of
+ * them matters, so a batch of a builder's trace recomputes nothing on the stage: the Builds tab of
+ * a long Loop read its whole log several times over for every one of them.
+ */
+export function stageLogOf(previous: StageLog | null, source: readonly EventEnvelope[]): StageLog {
+  if (previous && growsFrom(source, previous.source)) {
+    const fresh: EventEnvelope[] = [];
+    keepStageRecords(source, previous.source.length, fresh);
+    return { source, events: fresh.length ? [...previous.events, ...fresh] : previous.events };
+  }
+  const events: EventEnvelope[] = [];
+  keepStageRecords(source, 0, events);
+  return { source, events };
+}
+
 /** The `director_worker.mode` of a builder that works in one session, with no rounds. */
 const SINGLE_SESSION_MODE = "single";
 
@@ -95,9 +155,7 @@ export function projectBuildGraph(
   // A chat turn's workers are pool sessions: they have no worker threads named after a run.
   const runId = runIdOf(initial);
   const starts =
-    options.includeWorkers === false || !runId
-      ? []
-      : initial.facets.flatMap((facet) => firstRoundStart(events, parent, threads, runId, facet));
+    options.includeWorkers === false || !runId ? [] : firstRoundStarts(events, parent, threads, runId, initial.facets);
   const graph = starts.length ? (fold(mergeChatEvents(parent, starts), initial.runId) ?? initial) : initial;
   if (!graph.runDir && runsRoot && runId) graph.runDir = `${runsRoot}/${runId}`;
   return graph;
@@ -121,47 +179,77 @@ export function stageRunGraph(
   return projectBuildGraph(events, threadId, [], runsRoot, newestRun, { includeWorkers: false });
 }
 
-/** Single-session director workers have an explicit lifecycle, not a round loop. */
-function isSingleSessionWorker(parent: EventEnvelope[], facetId: string): boolean {
-  return parent.some((e) => {
-    const worker = customEvent(e, CustomEvent.DirectorWorker);
-    return worker !== null && worker.workerId === facetId && worker.mode === SINGLE_SESSION_MODE;
-  });
+/** What the parent log says of its parts' first rounds: who works in one session, and whose first round started. */
+interface FirstRounds {
+  singleSession: Set<string>;
+  started: Set<string>;
 }
 
 /**
- * The start of a part's first round, read off the first mirrored record in its worker thread —
- * older worker logs never wrote one. A single-session worker gets none: a synthetic first round
- * would remain "building" even after the worker's done event.
+ * Read the parent log once for every part. Single-session director workers have an explicit
+ * lifecycle, not a round loop; a part whose first round has its own start needs none made up.
  */
-function firstRoundStart(
+function firstRoundsOf(parent: EventEnvelope[]): FirstRounds {
+  const rounds: FirstRounds = { singleSession: new Set(), started: new Set() };
+  for (const event of parent) {
+    const worker = customEvent(event, CustomEvent.DirectorWorker);
+    const workerId = worker?.workerId;
+    if (worker?.mode === SINGLE_SESSION_MODE && workerId) rounds.singleSession.add(workerId);
+    const start = customEvent(event, CustomEvent.FacetBuildStarted);
+    const facetId = start?.facetId;
+    if (start?.iteration === 1 && facetId) rounds.started.add(facetId);
+  }
+  return rounds;
+}
+
+/** The first mirrored record of each of these worker threads, read in one pass. */
+function firstDelegatedRecords(events: EventEnvelope[], threadIds: ReadonlySet<string>): Map<string, EventEnvelope> {
+  const first = new Map<string, EventEnvelope>();
+  for (const event of events) {
+    if (threadIds.has(event.thread_id) && !first.has(event.thread_id) && isDelegatedRecord(event))
+      first.set(event.thread_id, event);
+  }
+  return first;
+}
+
+/**
+ * The start of each part's first round, read off the first mirrored record in its worker thread —
+ * older worker logs never wrote one. A single-session worker gets none: a synthetic first round
+ * would remain "building" even after the worker's done event. A Loop's workers are pool sessions
+ * with no threads of their own, so its log is not read again at all: reading it once per part on
+ * every batch froze the Builds tab of a long Loop.
+ */
+function firstRoundStarts(
   events: EventEnvelope[],
   parent: EventEnvelope[],
   threads: readonly Pick<ConversationRecord, "id" | "title">[],
   runId: string,
-  facet: FacetNode,
+  facets: readonly FacetNode[],
 ): EventEnvelope[] {
-  if (isSingleSessionWorker(parent, facet.facetId)) return [];
-  const started = parent.some((event) => {
-    const start = customEvent(event, CustomEvent.FacetBuildStarted);
-    return start?.facetId === facet.facetId && start.iteration === 1;
+  const children = facets.flatMap((facet) => {
+    const child = workerThreadFor(threads, runId, facet.title);
+    return child ? [{ facet, child }] : [];
   });
-  if (started) return [];
-  const child = workerThreadFor(threads, runId, facet.title);
-  if (!child) return [];
-  const first = events.find((e) => e.thread_id === child.id && isDelegatedRecord(e));
-  if (!first) return [];
-  return [
-    {
-      ...first,
-      id: `${first.id}:build-start`,
-      data: {
-        type: EventKind.Custom,
-        event_type: CustomEvent.FacetBuildStarted,
-        payload: { runId, facetId: facet.facetId, facetTitle: facet.title, iteration: 1 },
+  if (children.length === 0) return [];
+  const rounds = firstRoundsOf(parent);
+  const firstRecords = firstDelegatedRecords(events, new Set(children.map(({ child }) => child.id)));
+  return children.flatMap(({ facet, child }) => {
+    const { facetId } = facet;
+    if (rounds.singleSession.has(facetId) || rounds.started.has(facetId)) return [];
+    const first = firstRecords.get(child.id);
+    if (!first) return [];
+    return [
+      {
+        ...first,
+        id: `${first.id}:build-start`,
+        data: {
+          type: EventKind.Custom,
+          event_type: CustomEvent.FacetBuildStarted,
+          payload: { runId, facetId, facetTitle: facet.title, iteration: 1 },
+        },
       },
-    },
-  ];
+    ];
+  });
 }
 
 /** Records that open a run in the history, and records of one judged round. */
@@ -179,6 +267,12 @@ export interface HistoryEntry {
   startedAt: string | null;
   /** What the person asked for it: the Loop's goal, or the words of the message the turn answers; "" when unknown. */
   ask: string;
+  /**
+   * A Loop's own name: the title the chat gave it as it started it, else the label of the first save
+   * point its lead named; absent when it has neither (an older run, a chat turn). `buildTitle`
+   * (shared/build-title.ts) names a build from it.
+   */
+  title?: string;
   /** While it works, when its clock began (ms): the time it has worked so far, counted back from now. */
   since: number | null;
   chat?: true;
@@ -193,11 +287,21 @@ interface TurnDraft {
   ask: string;
 }
 
-/** A run while the history is read: its rounds, when it opened, and the goal it was given. */
+/** A run while the history is read: its rounds, when it opened, the goal it was given and what names it. */
 interface RunDraft {
   rounds: number;
   startedAt: string | null;
   ask: string;
+  /** the title its registration carries */
+  title: string | null;
+  /** the label of the first save point its lead named */
+  savePoint: string | null;
+}
+
+/** The label of a save point the lead named (not an autosave); null for any other record. */
+function savePointLabel(eventType: string, payload: Record<string, unknown>): string | null {
+  const named = eventType === CustomEvent.FacetIteration && payload.facetId === LEAD_PART && payload.auto !== true;
+  return named ? cleanBuildTitle(payload.label) : null;
 }
 
 /** Note one worker record of a chat turn; true when it is the turn's first, which opens it in the history. */
@@ -231,10 +335,19 @@ function readRunRecord(
   const run = runs.get(id);
   if (RUN_OPEN_EVENTS.has(eventType)) {
     const goal = typeof payload.goal === "string" ? payload.goal.trim() : "";
-    runs.set(id, { rounds: run?.rounds ?? 0, startedAt: run?.startedAt ?? at, ask: run?.ask || goal });
+    runs.set(id, {
+      rounds: run?.rounds ?? 0,
+      startedAt: run?.startedAt ?? at,
+      ask: run?.ask || goal,
+      title: run?.title ?? cleanBuildTitle(payload.title),
+      savePoint: run?.savePoint ?? null,
+    });
     return true;
   }
-  if (run && ROUND_EVENTS.has(eventType)) run.rounds++;
+  if (run && ROUND_EVENTS.has(eventType)) {
+    run.rounds++;
+    run.savePoint ??= savePointLabel(eventType, payload);
+  }
   return run !== undefined && RUN_ID_EVENTS.has(eventType);
 }
 
@@ -290,7 +403,8 @@ export function buildHistory(events: EventEnvelope[], threadId: string | null): 
   return draft.order.map((key): HistoryEntry => {
     const turn = draft.turns.get(key);
     if (turn) return turnEntry(own, queue, key, turn);
-    return runEntry(key, draft.runs.get(key) ?? { rounds: 0, startedAt: null, ask: "" }, executions.get(key));
+    const run = draft.runs.get(key) ?? { rounds: 0, startedAt: null, ask: "", title: null, savePoint: null };
+    return runEntry(key, run, executions.get(key));
   });
 }
 
@@ -314,7 +428,16 @@ function turnEntry(events: EventEnvelope[], queue: QueueView, key: string, turn:
 function runEntry(key: string, run: RunDraft, execution: RunExecution | undefined): HistoryEntry {
   const state = execution?.state ?? RunState.Running;
   const since = state === RunState.Running ? runClockStart(run, execution) : null;
-  return { runId: key, rounds: run.rounds, state, startedAt: run.startedAt, ask: run.ask, since };
+  const title = run.title ?? run.savePoint;
+  return {
+    runId: key,
+    rounds: run.rounds,
+    state,
+    startedAt: run.startedAt,
+    ask: run.ask,
+    since,
+    ...(title ? { title } : {}),
+  };
 }
 
 /** Where a working run's clock starts: the time it has worked counted back from now, not the time it spent paused; else when it opened. */

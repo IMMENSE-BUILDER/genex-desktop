@@ -169,6 +169,20 @@ export type PluginApiVersion = 1 | 2 | 3;
  * `cancelled` when the person declined Studio's confirmation. Wire values: never rename.
  */
 export const PanelErrorCode = { Cancelled: "cancelled" } as const;
+
+/** How wide the dialog of a panel opened from the stage strip is: Studio's wide dialog unless the panel asks for the narrow one. Wire values: never rename. */
+export const PanelWidth = { Narrow: "narrow" } as const;
+export type PanelWidth = (typeof PanelWidth)[keyof typeof PanelWidth];
+
+/** One panel a plugin's manifest declares. */
+export type PluginPanel = {
+  id: string;
+  title: string;
+  file: string;
+  placement: "settings" | "project";
+  /** `narrow`: the panel is one short list, so its dialog is Studio's narrow one. */
+  width?: PanelWidth;
+};
 export type PanelErrorCode = (typeof PanelErrorCode)[keyof typeof PanelErrorCode];
 export type PluginScalar = string | number | boolean;
 export interface PluginTool {
@@ -191,6 +205,8 @@ export const PluginHostTool = {
   GenexCli: "genex-cli",
   GenexCliPaid: "genex-cli-paid",
   GenexPackage: "genex-package",
+  /** A server-authoritative game's room on this Mac: validated or served with bots, in the sandbox. */
+  GenexRoom: "genex-room",
 } as const;
 export type PluginHostTool = (typeof PluginHostTool)[keyof typeof PluginHostTool];
 /**
@@ -205,8 +221,7 @@ export const PluginToolAudience = {
 export type PluginToolAudience = (typeof PluginToolAudience)[keyof typeof PluginToolAudience];
 /**
  * Why a plugin call answered without running (its answer, never an error, carries it as
- * `blocker`): the chat is in Plan mode. The seed's copy is `PluginCallBlocker` in
- * `loop/unreal/lead-steps.ts` (seed-contracts.test.ts). Never rename a value.
+ * `blocker`): the chat is in Plan mode. Never rename a value.
  */
 export const PluginCallBlocker = {
   PlanMode: "plan_mode",
@@ -227,6 +242,51 @@ export const CallCutOff = {
   TurnEnded: "turn-ended",
 } as const;
 export type CallCutOff = (typeof CallCutOff)[keyof typeof CallCutOff];
+/**
+ * Why an agent's plugin call failed, as its `plugin_tool` record says: a code, never the error's
+ * words, so usage analytics tells a plugin's own failure from the host's refusals. Written in call
+ * records: never rename a value.
+ */
+export const PluginCallFailure = {
+  /** The plugin's backend answered with an error; its own code, when it gave one, is `errorCode`. */
+  Plugin: "plugin",
+  /** It went out and ended before it answered (`cutOff` says why). */
+  CutOff: "cut-off",
+  /** It ran past the time one call may take, so its outcome is unknown. */
+  OutOfTime: "out-of-time",
+  /** Too little of its time was left when its turn came: it never ran. */
+  NotRunInTime: "not-run-in-time",
+  /** Its card was declined. */
+  Declined: "declined",
+  /** Its plugin's own `tool.before` step blocked it. */
+  Blocked: "blocked",
+  /** A lock it needs was not given. */
+  LockRefused: "lock-refused",
+  /** The run's paid jobs had reached its credit cap. */
+  CreditCap: "credit-cap",
+  /** Its plugin is off, removed or not installed. */
+  Unavailable: "unavailable",
+  /** Its plugin declares no such tool for the caller. */
+  UnknownTool: "unknown-tool",
+  /** Its arguments don't fit the tool's declared parameters. */
+  InvalidArguments: "invalid-arguments",
+  /** Its plugin's backend is waiting out a pause after ending again and again. */
+  RestartPaused: "restart-paused",
+  /** It was stopped before it was sent to its plugin. */
+  NotSent: "not-sent",
+  /** Any other failure: a stop, a host step's own error. */
+  Other: "other",
+} as const;
+export type PluginCallFailure = (typeof PluginCallFailure)[keyof typeof PluginCallFailure];
+/**
+ * A plugin's own error code: a short identifier (`not-bound`, `ECONNREFUSED`), never words or a
+ * path, so it can sit in a call's record and in usage analytics.
+ */
+const PLUGIN_ERROR_CODE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$/;
+/** The `code` a plugin's error carries when it is shaped like one ({@link PLUGIN_ERROR_CODE}), else null. */
+export function pluginErrorCode(value: unknown): string | null {
+  return typeof value === "string" && PLUGIN_ERROR_CODE.test(value) ? value : null;
+}
 /**
  * The one text parameter of a confirmed tool that the person may edit on its card (API 3): the
  * card shows the agent's value under its question, in a field with this label, and the person's
@@ -260,7 +320,7 @@ export function confirmationInputValue(value: unknown): string | undefined {
 }
 
 /**
- * A tool as the manifest declares it. `host`, `audience`, `facts`, `makes`, `needs` and `ready`
+ * A tool as the manifest declares it. `host`, `audience`, `facts`, `makes`, `links`, `needs` and `ready`
  * never reach an agent: the tool list the registry serves is plain `PluginTool`, which the harness
  * seed is generated from.
  */
@@ -273,10 +333,24 @@ export interface PluginManifestTool extends PluginTool {
   facts?: string[];
   /** API 3, agent tools only: the facts the tool makes in the game's folder (a new project of a kind, a port). */
   makes?: string[];
+  /**
+   * API 3, tools with `makes` only: the string parameter naming the engine project file a call links
+   * the game to. While the game's run is going, a call naming a project file of the plugin's engine
+   * inside the game's own folder, where the game already holds that kind, changes nothing under the
+   * run and runs (`main/core/kind-change.ts`); every other call is still refused then.
+   */
+  links?: string;
   /** API 3: the plugin's locks (`locks[].id`) a call of this tool holds while it runs. */
   needs?: string[];
   /** API 3, agent tools with `makes` only: the harness tool that answers whether what it makes is ready to make. */
   ready?: string;
+  /**
+   * API 3, agent tools only: the tool's job outlives its call (it answers `{started: true}` at
+   * once), and this agent tool of the manifest says how it stands, answering
+   * {@link PLUGIN_JOB_RUNNING_FIELD}. Genex reads it while the job runs and, once it has ended,
+   * starts the next turn of the chat whose agent started it.
+   */
+  jobStatus?: string;
   /**
    * API 3, agent tools only: the kind of asset a call makes. While a call runs it is a card on the
    * Assets canvas and in the chat, in the spot its files will land.
@@ -296,6 +370,17 @@ export interface PluginManifestTool extends PluginTool {
    */
   timeoutMs?: number;
 }
+/** The field of a `jobStatus` tool's answer that says whether the job still runs: `true` or `false`. */
+export const PLUGIN_JOB_RUNNING_FIELD = "jobRunning";
+/** Whether a `jobStatus` tool's answer says its job still runs; null when it says neither. */
+export function pluginJobRunning(answer: unknown): boolean | null {
+  if (!answer || typeof answer !== "object") return null;
+  const running = (answer as Record<string, unknown>)[PLUGIN_JOB_RUNNING_FIELD];
+  return typeof running === "boolean" ? running : null;
+}
+/** Whether a plugin tool's answer says it started a job that outlives the call (`{started: true}`). */
+export const startedPluginJob = (answer: unknown): boolean =>
+  !!answer && typeof answer === "object" && (answer as Record<string, unknown>).started === true;
 /** Whether agents are handed a manifest tool: every one but those only the harness calls. */
 export const isAgentTool = (tool: Pick<PluginManifestTool, "audience">): boolean =>
   tool.audience !== PluginToolAudience.Harness;
@@ -341,19 +426,13 @@ export function skillScope(skill: Pick<PluginSkill, "engines" | "facts">): strin
 /**
  * A tool a plugin offers that makes a kind of project (its manifest's `makes`), as a session's
  * snapshot lists it: the plugin's id and name, the tool's agent name `<plugin>__<tool>`, and the
- * facts. `asksReady` says the tool declares a `ready` harness tool (a plugin's new-game tool, the
- * one its engine card offers). For a game with no kind yet, the host fills `ready` and `note` from
- * that tool (whether one can be made here now, and the words the engine card offers it with); both
- * are absent when it declares none or its answer didn't come.
+ * facts.
  */
 export interface PluginKindOffer {
   plugin: string;
   name: string;
   tool: string;
   makes: string[];
-  asksReady?: boolean;
-  ready?: boolean;
-  note?: string;
   /** The scaffold this offer is (`PluginScaffold.id`), when the plugin declares scaffolds. */
   scaffold?: string;
   /** The scaffold's label, what the card names this kind ("Unreal plugin"); else the plugin's name. */
@@ -379,35 +458,35 @@ export interface PluginScaffold {
   game?: boolean;
   facts?: FactRule[];
 }
-/** What of one plugin reaches a game's session: its agent tools, its skills and whether its skill reader does. */
+/** What of one plugin reaches a game's session: its agent tools and its skills. */
 export interface PluginReach {
   tools: PluginManifestTool[];
   skills: PluginSkill[];
-  skillTool: boolean;
 }
 /**
  * What of one plugin reaches a session for a game (`{ facts: [] }`: no kind yet, served as a web
- * game; one of a kind Genex can't name is served by no fact), narrowed to `offered` when the session was: the agent tools whose `facts` reach; the skills
- * whose scope reaches, never through a Unity or Godot game's web export, and, when they name tools,
- * one of those reaches too (a skill follows its tools); the skill reader while a file skill reaches. A narrowed session none of whose offered
- * tools the plugin has gets nothing of it, not even its skills. The registry's snapshot and the
- * capability facts both read this one rule.
+ * game; one of a kind Genex can't name is served by no fact), narrowed to `offered` when the session
+ * was, tools and skills alike never through a Unity or Godot game's web export: the agent tools
+ * whose `facts` reach; the skills whose scope reaches and, when they name tools, one of those
+ * reaches too (a skill follows its tools). A narrowed session none of whose offered tools the
+ * plugin has gets nothing of it, not even its skills. The registry's snapshot, its locks and the
+ * capability facts all read this one rule.
  */
 export function pluginReach(
   manifest: Pick<PluginManifest, "id" | "tools" | "skills">,
   game: GameKind,
   offered?: (agentName: string) => boolean,
 ): PluginReach {
-  const tools = manifest.tools.filter(
-    (t) => isAgentTool(t) && scopeReaches(t.facts, game) && (!offered || offered(`${manifest.id}__${t.name}`)),
-  );
-  if (offered && !tools.length) return { tools, skills: [], skillTool: false };
-  const reaching = new Set(tools.map((t) => t.name));
   const known = withoutEngineWebVersion(game);
+  const tools = manifest.tools.filter(
+    (t) => isAgentTool(t) && scopeReaches(t.facts, known) && (!offered || offered(`${manifest.id}__${t.name}`)),
+  );
+  if (offered && !tools.length) return { tools, skills: [] };
+  const reaching = new Set(tools.map((t) => t.name));
   const skills = manifest.skills.filter(
     (s) => scopeReaches(skillScope(s), known) && (!s.tools || s.tools.some((name) => reaching.has(name))),
   );
-  return { tools, skills, skillTool: skills.some(isFileSkill) };
+  return { tools, skills };
 }
 /** The tool name, after `<pluginId>__`, that reads a plugin's file skills; a manifest may not declare it beside them. */
 export const PLUGIN_SKILL_TOOL = "skill";
@@ -573,7 +652,7 @@ export interface PluginManifest {
   capabilities: string[];
   tools: PluginManifestTool[];
   skills: PluginSkill[];
-  panels: Array<{ id: string; title: string; file: string; placement: "settings" | "project" }>;
+  panels: PluginPanel[];
   settings: Array<{
     key: string;
     label: string;
@@ -720,6 +799,8 @@ export const PluginStateRefusal = {
   InstallFirst: "plugin_install_first",
   /** It holds the app's account, so it can be turned off but not removed. */
   KeepsAccount: "plugin_keeps_account",
+  /** It works under the hood, by another plugin's switch: it is never switched or removed by itself. */
+  UnderHood: "plugin_under_hood",
 } as const;
 export type PluginStateRefusal = (typeof PluginStateRefusal)[keyof typeof PluginStateRefusal];
 
@@ -766,7 +847,6 @@ export interface PluginInfo {
   health: PluginHealth;
   error?: string;
   pendingVersion?: string;
-  availableVersion?: string;
   state: "enabled" | "disabled" | "not-enabled";
   origin?: PluginSource;
   scan?: PluginScan;
@@ -780,10 +860,7 @@ export interface PluginInfo {
   /** Agent tools of a local plugin the person allowed to run without asking; cleared when its code changes or it is turned off. */
   allowedTools?: string[];
 }
-/**
- * The plugins and skills one session was handed, as `plugin` ids and `plugin/skill` names: the
- * `tool_registry_applied` record's set, which a resumed session is compared against.
- */
+/** The plugins and skills one session is handed, as `plugin` ids and `plugin/skill` names. */
 export interface PluginAppliedSet {
   plugins: string[];
   skills: string[];
@@ -1120,6 +1197,11 @@ export const PluginService = {
   ProjectWrite: "project.write",
   AssetsDeliver: "assets.deliver",
   ExportStage: "export.stage",
+  /**
+   * `export`: the bound game's room module alone, staged into the publish copy with no web export,
+   * for a game whose apps go without a web build (an Unreal game's).
+   */
+  ExportRoom: "export.room",
   JobsRead: "jobs.read",
   JobsWrite: "jobs.write",
   NativeRun: "native.run",
@@ -1153,6 +1235,12 @@ export const PluginService = {
    * started: false once that turn has ended (answered, failed or taken back) or its time is up.
    */
   GameEngineAssisting: "game.engine.assisting",
+  /**
+   * `game-engine`: computer control for the bound game's chat: when it is off, Genex asks the person
+   * on its card to turn it on (then macOS's own grants) and starts the chat's next turn with the
+   * task; when it is on, nothing is posted. It grants no app: each still asks on its own card.
+   */
+  GameComputerControl: "game.computer.control",
   /**
    * `game-engine`: a long job of the plugin's (an engine's build or package) started in Genex's
    * process sandbox, writing only folders inside the bound game; answers its id at once, and the
@@ -1243,6 +1331,8 @@ export const EngineAssistRefusal = {
    * answers it does the clicking, so nothing more is posted.
    */
   InAssist: "in-assist",
+  /** Computer control is on already: the chat's turn can click now, so nothing was posted. */
+  AlreadyOn: "already-on",
 } as const;
 export type EngineAssistRefusal = (typeof EngineAssistRefusal)[keyof typeof EngineAssistRefusal];
 

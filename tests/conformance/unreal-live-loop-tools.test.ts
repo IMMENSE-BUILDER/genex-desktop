@@ -4,8 +4,8 @@
  * the editor's work; `log-errors` reads the editor log's new error lines since an offset, without
  * Unreal's and Genex's own noise, across a restarted log; `update-helper` updates the project's
  * Genex editor helper only while Unreal is closed; `editor-state` says where the project's helper
- * stands. The editor and the helper update are stand-ins; the logs, projects and helpers are real
- * files.
+ * stands; `find-nodes` has the open editor export the template's facts a project never exported.
+ * The editor and the helper update are stand-ins; the logs, projects and helpers are real files.
  */
 import { setAgentsSetting } from "../../src/substrate/engine-agents.ts";
 import assert from "node:assert/strict";
@@ -16,6 +16,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { PluginContext, PluginHookContext, PluginObserveContext } from "../../src/plugin-sdk/index.d.ts";
 import { OBSERVE_CALL_MS } from "../../src/shared/observers.ts";
 import { HookEvent } from "../../src/shared/plugin-hooks.ts";
+import type { ReferenceData } from "../../src/plugins/unreal/blueprint-reference.ts";
 import { CppEditorTool } from "../../src/plugins/unreal/cpp-tools.ts";
 import { SHOT_SETTLE_MS } from "../../src/plugins/unreal/editor-captures.ts";
 import { editorLogPath } from "../../src/plugins/unreal/editor-log.ts";
@@ -31,7 +32,6 @@ import {
   LiveLoopToolName,
   LoopEditorTool,
   LoopToolName,
-  MomentToolName,
 } from "../../src/plugins/unreal/loop-tools.ts";
 import {
   BUSY_WAIT_MS,
@@ -40,15 +40,13 @@ import {
   MOMENT_ASK_MS,
   MOMENT_SAVE_CALL_MS,
   type MomentOps,
-  OPEN_FOR_RUN_MAX_MS,
-  openForRun,
   PLAY_STOP_WAIT_MS,
   RESTORE_SAVE_MAX_MS,
   saveAtMoment,
 } from "../../src/plugins/unreal/editor-moments.ts";
 import { ANSWER_CHECK_MS } from "../../src/plugins/unreal/editor-port.ts";
-import { PS_TIMEOUT_MS, ReopenState } from "../../src/plugins/unreal/editor-reopen.ts";
-import { MOMENT_WORDS } from "../../src/plugins/unreal/hook-answers.ts";
+import { PS_TIMEOUT_MS } from "../../src/plugins/unreal/editor-reopen.ts";
+import { storeReference } from "../../src/plugins/unreal/reference-store.ts";
 import { encodePng, type RgbImage } from "../../src/plugins/unreal/tone.ts";
 import { type HelperUpdate, HelperState, type SetupEnv, type SetupOptions } from "../../src/plugins/unreal/setup.ts";
 import { XcodeState } from "../../src/plugins/unreal/xcode.ts";
@@ -82,14 +80,18 @@ type Options = {
   unlinked?: boolean;
   /** The editor's answer to save_all. */
   save?: () => unknown;
+  /** The helper's answer to save_during_play (an older helper has none: the call fails). */
+  saveDuringPlay?: (args: Record<string, unknown>) => unknown;
   /** The stand-in helper update's answer. */
   update?: () => HelperUpdate;
+  /** The stand-in live helper update's answer (null: a changed file needs Unreal restarted). */
+  updateLive?: () => HelperUpdate | null;
+  /** The helper's answer to reload_helper (an older helper has none: the call fails). */
+  reloadHelper?: (args: Record<string, unknown>) => unknown;
   /** The editor's answer to editor_activity, in place of the stand-in's. */
   activity?: () => unknown;
   /** The build toolset's answers (its hero cameras and stills), by tool. */
   build?: (tool: AnyLoopTool, args: Record<string, unknown>) => Promise<unknown>;
-  /** An Unreal Genex opens whose process runs but never answers. */
-  neverAnswersOpened?: boolean;
   /** Every editor call with a limit, and every ask whether Unreal answers, answers only as its time is about to run out. */
   slow?: boolean;
   /** The editor's play session: stopped by nobody ("never"), or ending only as `save-all`'s wait for it runs out. */
@@ -113,7 +115,7 @@ function playsOn(mode: NonNullable<Options["playsOn"]>, tool: AnyLoopTool, now: 
 }
 
 /** A node reference as the editor exports one, at its smallest. */
-const EXPORTED_REFERENCE = { version: 1, engine: "5.8.3", common: ["Math|Add"], contexts: {}, pins: {} };
+const EXPORTED_REFERENCE: ReferenceData = { version: 1, engine: "5.8.3", common: ["Math|Add"], contexts: {}, pins: {} };
 
 /** The editor's answer to one of the template's exports: the file it names written. */
 async function exportAnswer(tool: AnyLoopTool, args: Record<string, unknown>): Promise<unknown> {
@@ -177,7 +179,7 @@ function standInComputer(
       where.events.push("open");
       Object.assign(state, {
         running: true,
-        answersAt: options.neverAnswersOpened ? undefined : now() + OPEN_TAKES_MS,
+        answersAt: now() + OPEN_TAKES_MS,
       });
     },
   };
@@ -246,6 +248,8 @@ async function liveWorld(options: Options = {}) {
       if (options.exports && EXPORT_TOOLS.has(tool)) return exportAnswer(tool, args);
       if (tool === LoopEditorTool.ExportReference) throw new Error("not in these tests");
       if (tool === CppEditorTool.SaveAll) return options.save ? options.save() : { saved: true, dirty: [], ms: 640 };
+      if (tool === LoopEditorTool.SaveDuringPlay && options.saveDuringPlay) return options.saveDuringPlay(args);
+      if (tool === LoopEditorTool.ReloadHelper && options.reloadHelper) return options.reloadHelper(args);
       if (tool === LoopTool.EditorActivity && options.activity) return options.activity();
       if (Object.values(HeroShotTool).includes(tool as HeroShotTool)) return options.build?.(tool, args);
       const answer = await editor.editor.port.call(tool as LoopTool, args);
@@ -264,6 +268,10 @@ async function liveWorld(options: Options = {}) {
       updates.push([file, given]);
       events.push("update");
       return options.update?.() ?? { from: "0.4.0", to: "0.5.0", kept: [] };
+    },
+    updateHelperLive: async () => {
+      events.push("live update");
+      return options.updateLive ? options.updateLive() : { from: "0.4.0", to: "0.5.0", kept: [] };
     },
     restart: unreal.restart,
     processes: unreal.processes,
@@ -661,6 +669,75 @@ describe("editor-state names where the project's helper stands", () => {
   });
 });
 
+describe("a run's start and the project's helper", () => {
+  const helperIn = (w: World) => path.join(path.dirname(w.project), "Plugins", "GenexEditorHelper");
+  /** An older Genex editor helper than the plugin's, in the project's Plugins folder. */
+  async function olderHelper(w: World): Promise<void> {
+    await cp(w.shipped, helperIn(w), { recursive: true });
+    await writeFile(path.join(helperIn(w), "GenexEditorHelper.uplugin"), JSON.stringify({ Version: 4 }));
+  }
+  const atStart = (w: World) => w.call(LiveLoopToolName.LogErrors, {}, atRun(HookEvent.RunPrepare));
+
+  // Genex's open-for-run quit, updated and reopened Unreal itself; now the lead hears it and decides.
+  it("tells the lead when Unreal is open with an outdated helper, and updates nothing under it", async () => {
+    const open = await liveWorld();
+    await olderHelper(open);
+    const told = (await atStart(open)) as { note?: string };
+    assert.match(told.note ?? "", /older Genex editor helper/);
+    assert.match(told.note ?? "", /quit-editor, then open-editor/);
+    assert.deepEqual(open.updates, [], "nothing is updated under an open Unreal");
+    assert.deepEqual(open.events, [], "a helper that can't reload is never written live");
+
+    const closed = await liveWorld({ answering: false, running: false });
+    await olderHelper(closed);
+    assert.deepEqual(await atStart(closed), {}, "the lead's open of a closed Unreal updates it");
+    const current = await liveWorld();
+    await cp(current.shipped, helperIn(current), { recursive: true });
+    assert.deepEqual(await atStart(current), {}, "a current helper says nothing");
+  });
+});
+
+// Sword Duel, Windows: each Loop began with quit-editor and open-editor only to update the helper's
+// Python; the open editor now reloads it in place when nothing Unreal registers changed.
+describe("a run's start brings an open Unreal's helper up to date in place", () => {
+  const helperIn = (w: World) => path.join(path.dirname(w.project), "Plugins", "GenexEditorHelper");
+  async function olderHelper(w: World): Promise<void> {
+    await cp(w.shipped, helperIn(w), { recursive: true });
+    await writeFile(path.join(helperIn(w), "GenexEditorHelper.uplugin"), JSON.stringify({ Version: 4 }));
+  }
+  const atStart = (w: World) => w.call(LiveLoopToolName.LogErrors, {}, atRun(HookEvent.RunPrepare));
+  const reloads = (w: World) => w.calls.filter(([tool]) => tool === LoopEditorTool.ReloadHelper).map(([, a]) => a);
+  const reloading = (args: Record<string, unknown>) =>
+    args.check_only ? { ready: true } : { reloaded: ["genex_build.terrain"], ms: 80 };
+
+  it("writes the new helper, has the editor reload it, and tells the lead nothing", async () => {
+    const w = await liveWorld({ reloadHelper: reloading });
+    await olderHelper(w);
+    assert.deepEqual(await atStart(w), {});
+    assert.deepEqual(w.events, ["live update"]);
+    assert.deepEqual(reloads(w), [{ check_only: true }, {}], "asked whether it can reload, then reloaded");
+    assert.deepEqual(w.updates, [], "Unreal is never closed to update it");
+  });
+
+  it("tells the lead to restart Unreal when a changed file needs it, the helper is busy, or the reload fails", async () => {
+    const cases: Array<[string, Options]> = [
+      ["a toolset changed", { reloadHelper: reloading, updateLive: () => null }],
+      ["a play runs", { reloadHelper: () => ({ ready: false, why: "A play session is running" }) }],
+      ["the reload failed", { reloadHelper: (args) => (args.check_only ? { ready: true } : { error: "boom" }) }],
+    ];
+    for (const [label, options] of cases) {
+      const w = await liveWorld(options);
+      await olderHelper(w);
+      const told = (await atStart(w)) as { note?: string };
+      assert.match(told.note ?? "", /quit-editor, then open-editor/, label);
+    }
+    const busy = await liveWorld({ reloadHelper: () => ({ ready: false }) });
+    await olderHelper(busy);
+    await atStart(busy);
+    assert.deepEqual(busy.events, [], "nothing is written while the helper can't reload");
+  });
+});
+
 describe("editor-activity", () => {
   it("answers whether a play session runs and how many packages are unsaved", async () => {
     const w = await liveWorld({
@@ -827,7 +904,13 @@ const unsaved =
   () => ({ camera: [0, 0, 0], selection: [], dirty, pie: false });
 const savedTool = (w: World) => w.calls.filter(([tool]) => tool === CppEditorTool.SaveAll).length;
 
-/** A run's save point: saved, or blocked with why. */
+/** A save-all answer at a checkpoint, as these tests read it. */
+type MomentAnswer = { block?: string; note?: string };
+
+/**
+ * A run's save point: saved, or a note of why the editor's work wasn't (the save point holds the
+ * files on disk). Flipped: each of these blocked the save point, so nothing was kept.
+ */
 async function saveAtRunCheckpoint() {
   const before = atRun(HookEvent.CheckpointBefore);
   const saved = await liveWorld({ activity: unsaved("/Game/Maps/Hall") });
@@ -838,29 +921,44 @@ async function saveAtRunCheckpoint() {
   // The person chose to have agents wait while they play: their play is theirs to stop.
   await setAgentsSetting(playing.storage, false);
   playing.editor.editor.state.pie = true;
-  const refused = (await playing.call(LiveLoopToolName.SaveAll, {}, before)) as { block?: string };
-  assert.match(refused.block ?? "", /playing in the editor: stop the play session first/);
+  const during = (await playing.call(LiveLoopToolName.SaveAll, {}, before)) as MomentAnswer;
+  assert.equal(during.block, undefined, "the save point is kept");
+  assert.match(during.note ?? "", /playing in the editor, so nothing was saved in Unreal/);
+  assert.match(during.note ?? "", /this save point holds the files on disk only/);
   assert.equal(savedTool(playing), 0, "the person's play session is never ended to save");
 
   const closed = await liveWorld({ answering: false });
   assert.deepEqual(await closed.call(LiveLoopToolName.SaveAll, {}, before), {
-    block: "Unreal doesn't answer, so nothing was saved.",
+    note: "Unreal doesn't answer, so nothing was saved in it: this save point holds the files on disk only.",
   });
 
   const unknown = await liveWorld({ activity: () => ({ dirty: 3 }) });
-  const cantTell = (await unknown.call(LiveLoopToolName.SaveAll, {}, before)) as { block?: string };
-  assert.match(cantTell.block ?? "", /can't tell whether the game is playing/);
+  const cantTell = (await unknown.call(LiveLoopToolName.SaveAll, {}, before)) as MomentAnswer;
+  assert.equal(cantTell.block, undefined);
+  assert.match(cantTell.note ?? "", /can't tell whether the game is playing.*files on disk only/);
   assert.equal(savedTool(unknown), 0);
 
   const left = await liveWorld({
     activity: unsaved("/Game/Maps/Hall"),
     save: () => ({ saved: false, dirty: ["/Game/Maps/Hall"], ms: 300 }),
   });
-  const notSaved = (await left.call(LiveLoopToolName.SaveAll, {}, before)) as { block?: string };
-  assert.match(notSaved.block ?? "", /left 1 assets unsaved \(\/Game\/Maps\/Hall\)\. No save point was made/);
+  const notSaved = (await left.call(LiveLoopToolName.SaveAll, {}, before)) as MomentAnswer;
+  assert.equal(notSaved.block, undefined);
+  assert.match(
+    notSaved.note ?? "",
+    /^Unreal's work wasn't saved: the editor's save left 1 assets unsaved \(\/Game\/Maps\/Hall\)\. This save point holds the files on disk only\.$/,
+  );
+
+  const failing = await liveWorld({
+    activity: unsaved("/Game/Maps/Hall"),
+    save: () => ({ error: "The disk is full." }),
+  });
+  const failed = (await failing.call(LiveLoopToolName.SaveAll, {}, before)) as MomentAnswer;
+  assert.equal(failed.block, undefined);
+  assert.match(failed.note ?? "", /the editor's save failed: .*The disk is full\. This save point holds/);
 }
 
-/** A chat's checkpoint: a note of what was saved, blocked only by a play. */
+/** A chat's checkpoint: a note of what was saved, or why not. Flipped: a play blocked it. */
 async function saveAtChatCheckpoint() {
   const before = atChat(HookEvent.CheckpointBefore);
   const two = await liveWorld({ activity: unsaved("/Game/Maps/Hall", "/Game/Kit/SM_Rib") });
@@ -887,18 +985,69 @@ async function saveAtChatCheckpoint() {
 
   const playing = await liveWorld();
   playing.editor.editor.state.pie = true;
-  const refused = (await playing.call(LiveLoopToolName.SaveAll, {}, before)) as { block?: string };
-  assert.match(refused.block ?? "", /playing in the Unreal editor, so nothing was saved and no snapshot was taken/);
+  const during = (await playing.call(LiveLoopToolName.SaveAll, {}, before)) as MomentAnswer;
+  assert.equal(during.block, undefined, "the checkpoint is taken");
+  assert.match(during.note ?? "", /playing in the Unreal editor, so nothing was saved there/);
+  assert.match(during.note ?? "", /this checkpoint holds the files on disk only\. Stop the play session/);
+  assert.doesNotMatch(during.note ?? "", /no snapshot/);
 }
+
+// Sword Duel, Windows: every save point ended the agent's play, and its next StopPIE failed with
+// "not currently running"; a run's play test now goes on through its save points.
+describe("a save point during the agent's play", () => {
+  const before = atRun(HookEvent.CheckpointBefore);
+  const tools = (w: World) => w.calls.map(([tool]) => tool);
+
+  it("keeps the play running when the editor's helper saves during play", async () => {
+    const w = await liveWorld({
+      saveDuringPlay: (args) => (args.check_only ? { ready: true } : { saved: true, dirty: [], ms: 90, pie: true }),
+    });
+    w.editor.editor.state.pie = true;
+    assert.deepEqual(await w.call(LiveLoopToolName.SaveAll, {}, before), {});
+    assert.deepEqual(
+      w.calls.filter(([tool]) => tool === LoopEditorTool.SaveDuringPlay).map(([, args]) => args),
+      [{ check_only: true }, {}],
+    );
+    assert.ok(!tools(w).includes(LoopTool.StopPlay), tools(w).join(", "));
+    assert.ok(!tools(w).includes(CppEditorTool.SaveAll), "the save that ends a play never runs");
+    assert.equal(w.editor.editor.state.pie, true, "the play goes on");
+  });
+
+  it("ends the play first, then saves, with a helper that can't save during play", async () => {
+    const w = await liveWorld();
+    w.editor.editor.state.pie = true;
+    assert.deepEqual(await w.call(LiveLoopToolName.SaveAll, {}, before), {});
+    const asked = tools(w);
+    assert.ok(asked.indexOf(LoopTool.StopPlay) < asked.indexOf(CppEditorTool.SaveAll), asked.join(", "));
+  });
+
+  it("names the helper's refusal when its save during play fails", async () => {
+    const w = await liveWorld({
+      saveDuringPlay: (args) => (args.check_only ? { ready: true } : { error: "The disk is full." }),
+    });
+    w.editor.editor.state.pie = true;
+    const answer = (await w.call(LiveLoopToolName.SaveAll, {}, before)) as MomentAnswer;
+    assert.equal(answer.block, undefined);
+    assert.match(answer.note ?? "", /The disk is full\./);
+    assert.equal(w.editor.editor.state.pie, true, "a failed save never ends the play");
+  });
+
+  it("never asks the helper when nothing plays", async () => {
+    const w = await liveWorld({ activity: unsaved("/Game/Maps/Hall"), saveDuringPlay: () => ({ ready: true }) });
+    await w.call(LiveLoopToolName.SaveAll, {}, before);
+    assert.ok(!tools(w).includes(LoopEditorTool.SaveDuringPlay), tools(w).join(", "));
+    assert.equal(savedTool(w), 1);
+  });
+});
 
 describe("at Genex's moments", () => {
   it(
-    "save-all at a run's checkpoint blocks on a play, an editor that doesn't answer, or work left unsaved, and is silent when it saved",
+    "save-all at a run's checkpoint notes a play, an editor that doesn't answer, or work left unsaved, never blocking, and is silent when it saved",
     saveAtRunCheckpoint,
   );
 
   it(
-    "save-all at a chat's checkpoint notes what it saved or couldn't, and blocks only on a play",
+    "save-all at a chat's checkpoint notes what it saved or couldn't, a play among them, never blocking",
     saveAtChatCheckpoint,
   );
 
@@ -1053,111 +1202,38 @@ describe("at Genex's moments", () => {
   });
 });
 
-/** The project's own Genex editor helper folder. */
-const helperOf = (w: World) => path.join(path.dirname(w.project), "Plugins", "GenexEditorHelper");
 /** The template's facts the editor exported for the project, as the Loop reads them. */
 const factsOf = (w: World) => path.join(path.dirname(w.project), "Saved", "Genex", "project.json");
 
-describe("open-for-run", () => {
-  it("opens a closed Unreal, updates an outdated helper once its process exits, exports a missing reference, and blocks without a helper", async () => {
-    const prepare = atRun(HookEvent.RunPrepare);
-    const closed = await liveWorld({ answering: false, running: false });
-    await cp(closed.shipped, helperOf(closed), { recursive: true });
-    await mkdir(path.dirname(factsOf(closed)), { recursive: true });
-    await writeFile(factsOf(closed), JSON.stringify({ blueprints: [] }));
-    assert.deepEqual(await closed.call(MomentToolName.OpenForRun, {}, prepare), {});
-    assert.deepEqual(closed.events, ["open"], "opened, nothing updated");
-    assert.equal(closed.state.answering, true, "it waited until Unreal answered");
-    assert.ok(closed.editor.deps.now() >= OPEN_TAKES_MS);
+describe("find-nodes and the template's facts", () => {
+  // Only a Loop's start (open-for-run) exported them for a project that never had: a second project
+  // on an engine whose reference is kept never got its own, and check-part never read its Blueprints.
+  it("a lookup exports the template's facts a project never exported, once, within the moment's limit; a closed Unreal is never asked", async () => {
+    const closed = await liveWorld({ answering: false, running: false, exports: true });
+    await storeReference(closed.storage, "5.8", EXPORTED_REFERENCE);
+    const found = (await closed.call(LoopToolName.FindNodes, { query: "add" })) as { nodes: Array<{ typeId: string }> };
+    assert.deepEqual(
+      found.nodes.map((node) => node.typeId),
+      ["Math|Add"],
+      "the kept reference answers",
+    );
+    assert.deepEqual(closed.calls, [], "a closed Unreal is never asked");
+
+    const open = await liveWorld({ exports: true });
+    await storeReference(open.storage, "5.8", EXPORTED_REFERENCE);
+    await open.call(LoopToolName.FindNodes, { query: "add" });
+    assert.deepEqual(
+      open.limits.filter(([tool]) => EXPORT_TOOLS.has(tool)),
+      [[LoopEditorTool.ExportProject, MOMENT_ASK_MS]],
+      "only the project's facts, within the moment's limit: the engine's reference is kept",
+    );
+    assert.deepEqual(JSON.parse(await readFile(factsOf(open), "utf8")), { blueprints: [] });
+    await open.call(LoopToolName.FindNodes, { query: "add" });
     assert.equal(
-      closed.calls.some(([tool]) => tool === LoopEditorTool.ExportReference),
-      false,
-      "the facts were there",
+      open.calls.filter(([tool]) => tool === LoopEditorTool.ExportProject).length,
+      1,
+      "a project that exported its facts is never asked again",
     );
-
-    const outdated = await liveWorld();
-    await cp(outdated.shipped, helperOf(outdated), { recursive: true });
-    await writeFile(path.join(helperOf(outdated), "GenexEditorHelper.uplugin"), JSON.stringify({ Version: 4 }));
-    const updated = (await outdated.call(MomentToolName.OpenForRun, {}, prepare)) as { note?: string };
-    assert.match(updated.note ?? "", /Updated this game's Genex editor helper to 0\.5\.0/);
-    assert.deepEqual(outdated.events, ["quit", "update", "open"], "saved, closed, updated while closed, reopened");
-    assert.equal(savedTool(outdated), 1, "its work was saved before Unreal was closed");
-    assert.equal(outdated.state.answering, true);
-    assert.ok(
-      outdated.calls.some(([tool]) => tool === LoopEditorTool.ExportReference),
-      "a project that never exported its facts has them exported",
-    );
-
-    const missing = await liveWorld();
-    const blocked = (await missing.call(MomentToolName.OpenForRun, {}, prepare)) as { block?: string };
-    assert.match(blocked.block ?? "", /no Genex editor helper/);
-    assert.deepEqual(missing.events, []);
-
-    // Unreal answers only through the helper: a closed project without one is told so, never opened first.
-    const closedMissing = await liveWorld({ answering: false, running: false });
-    const told = (await closedMissing.call(MomentToolName.OpenForRun, {}, prepare)) as { block?: string };
-    assert.match(told.block ?? "", /no Genex editor helper/);
-    assert.deepEqual(closedMissing.events, [], "Unreal was not opened");
-  });
-
-  /** A world whose project has the plugin's helper at an older version. */
-  async function outdatedWorld(options: Options) {
-    const w = await liveWorld(options);
-    await cp(w.shipped, helperOf(w), { recursive: true });
-    await writeFile(path.join(helperOf(w), "GenexEditorHelper.uplugin"), JSON.stringify({ Version: 4 }));
-    return w;
-  }
-
-  it("an outdated helper whose save leaves work unsaved stays as it was, Unreal open, and the run goes on with a note", async () => {
-    const w = await outdatedWorld({ save: () => ({ saved: true, dirty: ["/Game/Maps/Track"], ms: 10 }) });
-    const answer = (await w.call(MomentToolName.OpenForRun, {}, atRun(HookEvent.RunPrepare))) as Record<string, string>;
-    assert.equal(answer.block, undefined, "the run goes on");
-    assert.match(
-      answer.note ?? "",
-      /helper couldn't be updated \(.*\/Game\/Maps\/Track.* left Unreal open\); the Loop goes on/,
-    );
-    assert.deepEqual(w.events, [], "nothing was closed or updated");
-    assert.equal(w.state.answering, true, "Unreal is still open");
-  });
-
-  it("a Stop during the save before a helper update ends it there: Unreal is not closed, updated or opened", async () => {
-    const stop = new AbortController();
-    const w = await outdatedWorld({
-      save: () => {
-        stop.abort(new Error("Stopped."));
-        return { saved: true, dirty: [], ms: 10 };
-      },
-    });
-    await w.call(MomentToolName.OpenForRun, {}, atRun(HookEvent.RunPrepare), stop.signal);
-    assert.deepEqual(w.events, [], "no quit, no update, no open after the Stop");
-    assert.equal(w.state.answering, true, "Unreal is still open");
-  });
-
-  it("a helper update that throws is a note: Unreal is opened again and the run goes on", async () => {
-    const w = await outdatedWorld({
-      update: () => {
-        throw new Error("the disk is full");
-      },
-    });
-    const answer = (await w.call(MomentToolName.OpenForRun, {}, atRun(HookEvent.RunPrepare))) as Record<string, string>;
-    assert.equal(answer.block, undefined);
-    assert.match(answer.note ?? "", /helper couldn't be updated \(the disk is full\); the Loop goes on/);
-    assert.deepEqual(w.events, ["quit", "update", "open"], "closed, the update tried, reopened");
-    assert.equal(w.state.answering, true);
-  });
-
-  it("an Unreal that never answers once opened blocks the run's start with its reopen's own failure, within its ceiling", async () => {
-    const w = await liveWorld({ answering: false, running: false, neverAnswersOpened: true });
-    await cp(w.shipped, helperOf(w), { recursive: true });
-    const answer = (await w.call(MomentToolName.OpenForRun, {}, atRun(HookEvent.RunPrepare))) as { block?: string };
-    // The reopen job gives up after its own five minutes, before the step's six-minute wait would.
-    assert.match(
-      answer.block ?? "",
-      /^Unreal couldn't be reopened \(Genex reopened the game's project, but Unreal didn't answer within 5 minutes/,
-    );
-    assert.deepEqual(w.events, ["open"]);
-    assert.ok(w.editor.deps.now() >= 5 * 60_000, "it waited minutes on the stand-in's clock");
-    assert.ok(w.editor.deps.now() < OPEN_FOR_RUN_MAX_MS, "and answered before the step's longest start");
   });
 });
 
@@ -1181,7 +1257,7 @@ describe("the editor calls under Genex's moments", () => {
   });
 });
 
-describe("the editor calls of a checkpoint, of hero shots and of a run's start", () => {
+describe("the editor calls of a checkpoint and of hero shots", () => {
   it("a checkpoint's save asks the editor's activity and its save within the checkpoint's own limits", async () => {
     const w = await liveWorld();
     await w.call(LiveLoopToolName.SaveAll, {}, { on: HookEvent.CheckpointBefore, ...IN_RUN });
@@ -1215,6 +1291,22 @@ describe("the editor calls of a checkpoint, of hero shots and of a run's start",
       const stopped = w.calls.some(([tool]) => tool === LoopTool.StopPlay);
       assert.ok(stopped, `the play was asked to stop: ${JSON.stringify(answer)}`);
     });
+
+  it("a checkpoint's save during the agent's play, whose helper never answers whether it saves during play, answers within its longest", async () => {
+    playStopEnds = Number.POSITIVE_INFINITY;
+    const w = await liveWorld({
+      slow: true,
+      playsOn: "until the wait ends",
+      activity: () => ({ pie: true, dirty: ["/Game/Track"] }),
+    });
+    const started = w.editor.deps.now();
+    await w.call(LiveLoopToolName.SaveAll, {}, { on: HookEvent.CheckpointBefore, ...IN_RUN });
+    const tookMs = w.editor.deps.now() - started;
+    assert.ok(tookMs <= CHECKPOINT_SAVE_MAX_MS, `it answered after ${tookMs} ms, within ${CHECKPOINT_SAVE_MAX_MS}`);
+    const asked = w.calls.map(([tool]) => tool);
+    assert.ok(asked.includes(LoopEditorTool.SaveDuringPlay), asked.join(", "));
+    assert.ok(asked.includes(CppEditorTool.SaveAll), "an older helper's save ends the play, then saves");
+  });
 
   it("hero-shots asks each editor call within a limit, and waits for no still past its own time", async () => {
     const cameras = ["A", "B", "C", "D", "E", "F", "G", "H"].map((name) => `GX_Shot_${name}`);
@@ -1261,19 +1353,6 @@ describe("the editor calls of a checkpoint, of hero shots and of a run's start",
     const stills = w.calls.filter(([tool]) => tool === HeroShotTool.CaptureShot);
     assert.equal(stills.length, 1, "no camera is piloted to after the Stop");
   });
-
-  it("a run's start on a project that never exported its facts asks each of the three exports within its limit", async () => {
-    const w = await liveWorld({ exports: true });
-    await cp(w.shipped, helperOf(w), { recursive: true });
-    const answer = (await w.call(MomentToolName.OpenForRun, {}, atRun(HookEvent.RunPrepare))) as { block?: string };
-    assert.equal(answer.block, undefined, JSON.stringify(answer));
-    const exported = w.limits.filter(([tool]) => EXPORT_TOOLS.has(tool));
-    assert.deepEqual(
-      exported.map(([tool]) => tool),
-      [LoopEditorTool.ExportReference, LoopEditorTool.ExportPythonNames, LoopEditorTool.ExportProject],
-    );
-    for (const [tool, limit] of exported) assert.equal(limit, MOMENT_ASK_MS, `${tool} has the moment's limit`);
-  });
 });
 
 describe("a restore's wait for a busy editor keeps to its window (editor-moments.ts)", () => {
@@ -1301,7 +1380,6 @@ describe("a restore's wait for a busy editor keeps to its window (editor-moments
         now += PS_TIMEOUT_MS;
         return true;
       },
-      setUp: async () => {},
     } as unknown as MomentOps;
     return { ops, looks, now: () => now };
   }
@@ -1334,7 +1412,6 @@ describe("a checkpoint's save during a play session (editor-moments.ts)", () => 
         saves.push("save");
         return { saved: true, dirty: [] };
       },
-      setUp: async () => {},
     } as unknown as MomentOps;
     return { ops, saves };
   }
@@ -1345,139 +1422,9 @@ describe("a checkpoint's save during a play session (editor-moments.ts)", () => 
     assert.deepEqual(may.saves, ["save"]);
     const mayNot = playingUnreal(false);
     const held = await saveAtMoment(mayNot.ops, { on: HookEvent.CheckpointBefore, ...IN_RUN });
-    assert.ok(held.block, "the person's play holds the save point");
+    // Flipped: the person's play held the save point back (a block); it is kept, the play left alone.
+    assert.equal(held.block, undefined, "the person's play never holds the save point back");
+    assert.match(held.note ?? "", /files on disk only/, "the lead reads what it holds");
     assert.deepEqual(mayNot.saves, []);
-  });
-});
-
-describe("open-for-run's own wait for a reopened Unreal (editor-moments.ts)", () => {
-  /** A gone Unreal whose reopen goes as `reopening` says, on a clock its own waits move. */
-  function goneUnreal(reopen: () => Promise<unknown>, reopening: () => { state: ReopenState; error?: string }) {
-    let now = 0;
-    const ops = {
-      now: () => now,
-      sleep: async (ms: number) => {
-        now += ms;
-      },
-      signal: new AbortController().signal,
-      answers: async () => false,
-      running: async () => false,
-      reopen,
-      state: async () => ({ answering: false, running: false, reopening: reopening(), helper: HelperState.Current }),
-      setUp: async () => {},
-    } as unknown as MomentOps;
-    return { ops, now: () => now };
-  }
-
-  it("a reopen still under way after six minutes blocks the start: Unreal didn't answer in time", async () => {
-    const { ops, now } = goneUnreal(
-      async () => ({ started: true }),
-      () => ({ state: ReopenState.Reopening }),
-    );
-    const answer = await openForRun(ops);
-    assert.equal(answer.block, MOMENT_WORDS.NotOpened(MOMENT_WORDS.OpenTimedOut(6)));
-    assert.ok(now() >= 6 * 60_000, "it waited its six minutes");
-  });
-
-  it("a reopen that fails blocks the start with its error", async () => {
-    const { ops } = goneUnreal(
-      async () => ({ started: true }),
-      () => ({ state: ReopenState.Failed, error: "the project is locked" }),
-    );
-    const answer = await openForRun(ops);
-    assert.equal(answer.block, MOMENT_WORDS.NotOpened("the project is locked"));
-  });
-
-  it("a Stop during the wait for a gone Unreal opens nothing after it", async () => {
-    const stop = new AbortController();
-    let reopened = 0;
-    const { ops } = goneUnreal(
-      async () => {
-        reopened += 1;
-        return { started: true };
-      },
-      () => ({ state: ReopenState.Idle }),
-    );
-    // The Stop lands while the step waits between its asks of a silent Unreal.
-    const stopped = Object.assign(ops, {
-      signal: stop.signal,
-      sleep: async () => {
-        stop.abort(new Error("Stopped."));
-      },
-    });
-    const answer = await openForRun(stopped);
-    assert.equal(answer.block, MOMENT_WORDS.StoppedBeforeOpen);
-    assert.equal(reopened, 0, "Unreal was not reopened after the Stop");
-  });
-
-  /**
-   * An open Unreal whose helper is outdated, on a clock its own waits move: what the step did, in
-   * order, and the Stop the test lands at `stopAt` (ending the editor, or waiting for its process).
-   */
-  function outdatedUnreal(stopAt: "end" | "exit") {
-    let now = 0;
-    const did: string[] = [];
-    const stop = new AbortController();
-    let closed = false;
-    const ops = {
-      now: () => now,
-      sleep: async (ms: number) => {
-        now += ms;
-        if (stopAt === "exit") stop.abort(new Error("Stopped."));
-      },
-      signal: stop.signal,
-      answers: async () => !closed,
-      // The ended editor's process takes its time to exit.
-      running: async () => true,
-      activity: async () => ({ pie: false, dirty: 0 }),
-      save: async () => ({ saved: true, dirty: [] }),
-      end: async () => {
-        did.push("end");
-        closed = true;
-        if (stopAt === "end") stop.abort(new Error("Stopped."));
-      },
-      updateHelper: async () => {
-        did.push("update");
-        return { from: "0.4.0", to: "0.5.0", kept: [] };
-      },
-      reopen: async (updateHelper: boolean) => {
-        did.push(updateHelper ? "reopen and update" : "reopen");
-        return { started: true };
-      },
-      exported: async () => true,
-      exportReference: async () => undefined,
-      state: async () => ({
-        answering: !closed,
-        running: true,
-        reopening: { state: ReopenState.Idle },
-        helper: HelperState.Outdated,
-      }),
-      setUp: async () => {},
-    } as unknown as MomentOps;
-    return { ops, did };
-  }
-
-  for (const stopAt of ["end", "exit"] as const) {
-    it(`a Stop while the editor ${stopAt === "end" ? "ends" : "process exits"} before a helper update leaves the helper as it was, and reopens the Unreal it closed`, async () => {
-      const { ops, did } = outdatedUnreal(stopAt);
-      const answer = await openForRun(ops);
-      assert.deepEqual(
-        did,
-        ["end", "reopen"],
-        "the helper was not updated after the Stop, and the Unreal the step closed is reopened as it was",
-      );
-      assert.equal(answer.note, MOMENT_WORDS.StoppedAfterClose);
-    });
-  }
-
-  it("a reopen that can't start blocks the start with why", async () => {
-    const { ops } = goneUnreal(
-      async () => {
-        throw new Error("no Unreal 5.8 on this computer");
-      },
-      () => ({ state: ReopenState.Idle }),
-    );
-    const answer = await openForRun(ops);
-    assert.equal(answer.block, MOMENT_WORDS.NotOpened("no Unreal 5.8 on this computer"));
   });
 });

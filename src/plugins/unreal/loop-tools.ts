@@ -10,8 +10,9 @@
  * the game's own folder, whose module the open editor has loaded; `run-part` checks it without
  * compiling and hands the queue its code, which the queue copies into the game and hot-reloads.
  * `cpp-status` and `add-cpp-module` (`cpp-tools.ts`) tell the runner whether C++ compiles here and
- * add the game's C++ module. The queue watches the editor for a crash while a part is in it, and
- * after one the runner has `reopen-editor` and `editor-state` (`editor-reopen.ts`) reopen Unreal.
+ * add the game's C++ module. The queue watches the editor for a crash while a part is in it;
+ * `editor-state` (`editor-reopen.ts`) says where Unreal stands, and `reopen-editor` reopens it after
+ * a restore.
  *
  * The Unreal lead's save points and restarts have their own tools beside these
  * ({@link LiveLoopToolName}): `play-check` queues a play of the game with the board's checks (read
@@ -20,9 +21,11 @@
  * `end-editor` ends this project's editor for a cold restore, and `update-helper` updates the
  * project's Genex editor helper while Unreal is closed. And ({@link LeadLoopToolName})
  * `editor-activity` says whether a play session runs and how much is unsaved, before any save, and
- * `hero-shots` takes the level's hero cameras' stills for a save point's thumbnails. Agents in a
- * chat open and quit the game's Unreal themselves with `open-editor` and `quit-editor`
- * (`editor-control.ts`), over the same reopen jobs, and read `editor-status`.
+ * `hero-shots` takes the level's hero cameras' stills for a save point's thumbnails. Agents, a
+ * Loop's lead among them, open and quit the game's Unreal themselves with `open-editor` (which may
+ * build the C++ module first) and `quit-editor` (`editor-control.ts`), over the same reopen jobs,
+ * and read `editor-status`. A lookup (`find-nodes`) has the open editor export the template's facts
+ * a project never exported.
  */
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -38,7 +41,6 @@ import { atomicWriteJson, isJsonObject, readRegularFile } from "../../substrate/
 import { Severity } from "./blueprint-check.ts";
 import {
   BaseClass,
-  type BlueprintDecl,
   contextKey,
   GraphKind,
   type NodePins,
@@ -60,10 +62,10 @@ import {
   CHECKPOINT_SAVE,
   endAtMoment,
   healthAtMoment,
+  helperAtStart,
   MOMENT_ASK_MS,
   MOMENT_SAVE,
   type MomentOps,
-  openForRun,
   PLAY_STOP_POLL_MS,
   PLAY_STOP_WAIT_MS,
   reopenAtMoment,
@@ -73,6 +75,7 @@ import { createEditorControl, EditorControlToolName } from "./editor-control.ts"
 import { createReopenTools, type ProcessEnv } from "./editor-reopen.ts";
 import type { RunProgram } from "./automation-tests.ts";
 import { createMotionTools, MotionToolName } from "./motion-tools.ts";
+import { addMultiplayer, MultiplayerToolName, type UnrealMultiplayerDeps } from "./multiplayer-tools.ts";
 import { createShipTools, type ShipToolName } from "./plugin-ship.ts";
 import { createGamePackageTools, type GamePackageToolName, type RunUat } from "./game-package.ts";
 import type { EditorRestart } from "./editor-restart.ts";
@@ -107,10 +110,12 @@ import {
 import { type CompileJobs, compileWaitMs, cppFingerprint, createCompileJobs, freshenSources } from "./part-compile.ts";
 import { parsePartManifest } from "./part-manifest.ts";
 import { type PartCheck, parsePartTest, readPartCheck } from "./part-test.ts";
-import { readBlueprintGuide } from "./blueprint-guide.ts";
+import { noReferenceMessage, readBlueprintGuide, readGraphDslGuide } from "./blueprint-guide.ts";
+import { BlueprintText, traitsOf } from "./engine-line.ts";
 import { PROJECT_EXPORT, projectExported, readProjectBlueprints } from "./project-blueprints.ts";
 import { checkPython, type PythonCpp, PythonProblemCode, unrealPython } from "./python-check.ts";
 import { loadReference, parseReference, referencePaths, storeReference } from "./reference-store.ts";
+import { createReferenceExports, endWithin, type ReferenceExports } from "./reference-warm.ts";
 import {
   HELPER_FOLDER,
   type HelperUpdate,
@@ -118,6 +123,7 @@ import {
   type SetupOptions,
   systemSetupEnv,
   updateHelper,
+  updateHelperLive,
 } from "./setup.ts";
 import { toneOf } from "./tone.ts";
 import {
@@ -128,7 +134,8 @@ import {
   type PrepareSandbox,
   type RunCommand,
 } from "./ubt.ts";
-import type { XcodeStatus } from "./xcode.ts";
+import type { VisualStudioStatus } from "./visual-studio.ts";
+import { XcodeState, type XcodeStatus } from "./xcode.ts";
 
 /** The editor tools the Loop uses beyond the queue's own. */
 export const LoopEditorTool = {
@@ -137,6 +144,8 @@ export const LoopEditorTool = {
   ExportReference: "export_reference",
   ExportPythonNames: "export_python_names",
   ExportProject: "export_project",
+  SaveDuringPlay: "save_during_play",
+  ReloadHelper: "reload_helper",
 } as const;
 export type LoopEditorTool = (typeof LoopEditorTool)[keyof typeof LoopEditorTool];
 
@@ -169,13 +178,22 @@ export const TOOLSET_OF = {
   [LoopTool.PlayerState]: HELPER_TOOLSET,
   [LoopTool.Mouse]: HELPER_TOOLSET,
   [LoopTool.Pause]: HELPER_TOOLSET,
+  [LoopTool.WalkTo]: HELPER_TOOLSET,
+  [LoopTool.LookAt]: HELPER_TOOLSET,
+  [LoopTool.Pilot]: HELPER_TOOLSET,
+  [LoopTool.LightPlay]: HELPER_TOOLSET,
+  [LoopTool.PilotStep]: HELPER_TOOLSET,
   [LoopTool.GetProperties]: OBJECT_TOOLSET,
   [LoopTool.SetProperties]: OBJECT_TOOLSET,
+  [LoopTool.RunSettings]: LOOP_TOOLSET,
+  [LoopTool.SetThrottle]: LOOP_TOOLSET,
   [LoopEditorTool.RollbackPart]: LOOP_TOOLSET,
   [LoopEditorTool.ReloadLevel]: LOOP_TOOLSET,
   [LoopEditorTool.ExportReference]: LOOP_TOOLSET,
   [LoopEditorTool.ExportPythonNames]: LOOP_TOOLSET,
   [LoopEditorTool.ExportProject]: LOOP_TOOLSET,
+  [LoopEditorTool.SaveDuringPlay]: LOOP_TOOLSET,
+  [LoopEditorTool.ReloadHelper]: LOOP_TOOLSET,
   [CppEditorTool.SaveAll]: LOOP_TOOLSET,
   [HeroShotTool.ShotCameras]: BUILD_TOOLSET,
   [HeroShotTool.CaptureShot]: BUILD_TOOLSET,
@@ -226,10 +244,6 @@ export const LeadLoopToolName = {
 } as const;
 export type LeadLoopToolName = (typeof LeadLoopToolName)[keyof typeof LeadLoopToolName];
 
-/** The Unreal plugin's harness tools for Genex's moments only, by their names after `unreal__`. */
-export const MomentToolName = { OpenForRun: "open-for-run" } as const;
-export type MomentToolName = (typeof MomentToolName)[keyof typeof MomentToolName];
-
 /** The most node types one lookup answers. */
 const MAX_FOUND_NODES = 40;
 const BASES: ReadonlySet<string> = new Set(Object.values(BaseClass));
@@ -239,6 +253,13 @@ const GRAPHS: ReadonlySet<string> = new Set(Object.values(GraphKind));
 const MAX_SHOT_BYTES = 16 * 1024 * 1024;
 /** Where the editor writes the exported reference, inside the project. */
 const EXPORT_FOLDER = path.join("Saved", "Genex");
+/**
+ * The longest each editor call of the node reference's export may take: about 5 s on a Mac, past
+ * the 15 s of a moment's ask on Windows.
+ */
+const REFERENCE_EXPORT_MS = 3 * MINUTE_MS;
+/** How long a lookup waits for an export that runs; the export goes on after. */
+const FIND_WAIT_MS = 90 * SECOND_MS;
 
 const MESSAGE = {
   NoFolder: "This call needs a game: run it from a game's chat or build.",
@@ -252,7 +273,11 @@ const MESSAGE = {
     `${part} has ${count} ${count === 1 ? "problem" : "problems"} to fix before it can go to the editor:\n${list}`,
   UnknownRun: (id: string) => `There is no part run ${id}.`,
   NoProject: "This game has no Unreal project yet.",
-  NoReference: "There is no node reference for this engine yet; check-part still reads the text without it.",
+  NoReference:
+    "There is no node reference for this engine yet, and this game's Unreal isn't answering to export one: open it with open-editor if it is closed, or call find-nodes again once it has started. check-part still reads the Blueprint text without it.",
+  ExportFailed: (reason: string) =>
+    `There is no node reference for this engine yet, and this game's Unreal couldn't export one (${reason}). check-part still reads the Blueprint text without it.`,
+  StillExporting: `This game's Unreal is exporting the engine's node reference (once per engine; it can take a few minutes on a slow computer). Call find-nodes again in a minute: it keeps running, and once it is kept lookups answer at once, during play too.`,
   NoQuery: 'find-nodes needs a query: a few words of the node\'s name, such as "set intensity".',
   BadReference: "The editor's node reference didn't have the expected shape; it was not kept.",
   Meant: (message: string, names: readonly string[]) => `${message} Did you mean ${names.join(" or ")}?`,
@@ -270,6 +295,7 @@ const MESSAGE = {
   NoSaveAnswer: "The Genex editor helper didn't answer save_all with what it saved.",
   StillPlaying: "This game's Unreal is still in a play session after Genex asked it to stop, so Genex saved nothing.",
   NoLinkedProject: "This game isn't linked to an Unreal project.",
+  NoMultiplayer: "Genex multiplayer can't be added from here.",
   BadSince: "since must be a byte offset a log-errors call answered: a whole number, 0 or more.",
   HelperWhileOpen:
     "Unreal is open on this game, so Genex didn't update its editor helper. Save (save-all), end the editor (end-editor), then update.",
@@ -279,8 +305,11 @@ const MESSAGE = {
   NoCameras: "The Genex editor helper didn't answer shot_cameras with the level's hero cameras.",
 } as const;
 
-/** The only platform Unreal C++ is compiled on (Xcode). */
+/** The platforms Unreal C++ is compiled on: a Mac (Xcode) and Windows (Microsoft's C++ tools). */
 const MAC: NodeJS.Platform = "darwin";
+const WINDOWS: NodeJS.Platform = "win32";
+/** Xcode as Windows has it: never there, never asked. */
+const NO_XCODE = { state: XcodeState.NotApplicable } as const;
 /** The largest module rules file read into a compile's fingerprint. */
 const MAX_RULES_BYTES = 64 * 1024;
 const SOURCE_FOLDER = "Source";
@@ -341,12 +370,21 @@ const SHIPPED_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), H
 /** What the tools need from the computer and the editor. */
 export type LoopToolsDeps = {
   platform: NodeJS.Platform;
-  /** The supported engine's version and folder, or undefined without one. */
-  engine(): Promise<{ version: string; directory: string } | undefined>;
+  /**
+   * The installed engine `game`'s tools run with, by version and folder: the one its linked project
+   * names, else the newest supported one (a call with no game gets that one too); undefined without one.
+   */
+  engine(storage: string, game: string | undefined): Promise<{ version: string; directory: string } | undefined>;
   /** The game's linked project file in the plugin's storage, or undefined. */
   project(storage: string, game: string): Promise<string | undefined>;
   /** Where Xcode stands against the engine in `engineDir` (C++ compiles only when Ready on a Mac), and its app. */
   xcode(engineDir: string | undefined): Promise<Pick<XcodeStatus, "state"> & Partial<Pick<XcodeStatus, "app">>>;
+  /** Where Microsoft's C++ tools stand on Windows against the engine in `engineDir`; none off Windows. */
+  visualStudio?(engineDir: string | undefined): Promise<Pick<VisualStudioStatus, "state">>;
+  /** Windows: `LINUX_MULTIARCH_ROOT` as Epic's Linux toolchain installer set it, for a Linux package. */
+  linuxToolchain?(): Promise<string | undefined>;
+  /** The emsdk folder this computer names for a web build (`EMSDK_VARIABLES`). */
+  emsdk?(): Promise<string | undefined>;
   /** Compiles a game copy's editor target; UnrealBuildTool's own unless a test stands in. */
   compile?(options: CompileOptions): Promise<CompileResult>;
   /** Writes a Blueprint project's C++ module; `addCppModule` unless a test stands in. */
@@ -368,10 +406,10 @@ export type LoopToolsDeps = {
   restart: EditorRestart;
   /**
    * Sets the game's linked project up in this profile when it has no set-up record here (another
-   * profile set it up): the backend's own, which quits Unreal first only when `mayQuit` (else it
-   * refuses while Unreal has the project open); without it nothing is set up.
+   * profile set it up): the backend's own, which quits Unreal first while it has the project open;
+   * without it nothing is set up.
    */
-  setUpLinked?(storage: string, game: string, mayQuit: boolean): Promise<void>;
+  setUpLinked?(storage: string, game: string): Promise<void>;
   /** Starts watching the game's editor for a crash (its log and its process); without it the queue sees none. */
   watchCrash?(storage: string, game: string): Promise<CrashCheck>;
   /** This computer's processes, for ending a crashed editor and its crash reporter; without them none is ended. */
@@ -385,6 +423,8 @@ export type LoopToolsDeps = {
   setup?(storage: string): SetupOptions;
   /** Updates a project's Genex editor helper; `updateHelper` unless a test stands in. */
   updateHelper?: typeof updateHelper;
+  /** Updates the helper of a project Unreal has open, when it reloads; `updateHelperLive` unless a test stands in. */
+  updateHelperLive?: typeof updateHelperLive;
   /** Where Genex's own start of the game's set-up project stands (the toolbar's Starting); null without one. */
   starting?(storage: string, game: string): Promise<EditorStart | null>;
   /** Runs the headless editor for a plugin's tests; the product's runner unless a test stands in. */
@@ -396,6 +436,8 @@ export type LoopToolsDeps = {
   runUat?: RunUat;
   /** Aborts once the backend stops: a plugin's running jobs end with it. */
   stopped?: AbortSignal;
+  /** What `multiplayer` reaches (the network and `unzip` for the Colyseus core); without it the tool refuses. */
+  multiplayer?: UnrealMultiplayerDeps;
 };
 
 type Handler = (args: Record<string, unknown>, context: PluginContext, storage: string) => Promise<unknown>;
@@ -434,11 +476,19 @@ async function templateBlueprints(deps: LoopToolsDeps, storage: string, game: st
   return readProjectBlueprints(await linkedProject(deps, storage, game));
 }
 
-/** Whether this computer compiles the game's C++ (a Mac whose Xcode is ready for the engine), and with which Xcode. */
+/**
+ * Whether this computer compiles the game's C++ (a Mac whose Xcode is ready for the engine, or
+ * Windows whose Microsoft C++ tools are), and with which Xcode.
+ */
 async function cppSupportOf(deps: LoopToolsDeps, engine: Engine | undefined): Promise<CppSupportFound> {
+  if (deps.platform === WINDOWS) {
+    const visualStudio = await deps.visualStudio?.(engine?.directory).catch(() => undefined);
+    const ready = canCompileCpp({ xcode: NO_XCODE, visualStudio }, deps.platform);
+    return { support: ready ? CppSupport.Ready : CppSupport.NoBuildTools, app: null };
+  }
   if (deps.platform !== MAC) return { support: CppSupport.NotMac, app: null };
   const xcode = await deps.xcode(engine?.directory).catch(() => undefined);
-  const support = xcode && canCompileCpp(xcode, deps.platform) ? CppSupport.Ready : CppSupport.NoXcode;
+  const support = xcode && canCompileCpp({ xcode }, deps.platform) ? CppSupport.Ready : CppSupport.NoXcode;
   return { support, app: xcode?.app ?? null };
 }
 
@@ -545,7 +595,7 @@ type GateRead = {
  */
 async function gate(deps: LoopToolsDeps, storage: string, directory: string, part: string, game?: string) {
   const { dir, files } = await readPartFiles(directory, part);
-  const engine = await deps.engine();
+  const engine = await deps.engine(storage, game);
   const linked = await linkedProject(deps, storage, game);
   const others = await readOtherParts(directory);
   const cpp = linked ? await readPartCpp(part, { copy: directory, project: linked }) : undefined;
@@ -620,6 +670,12 @@ async function compileProblems(
   return result.errors.map((e) => problem(fileOf(e.file), e.message, e.line));
 }
 
+/** Whether a shot the editor writes is there and has bytes: Unreal makes the file before it fills it. */
+export async function shotFileReady(file: string): Promise<boolean> {
+  const info = await stat(file).catch(() => null);
+  return info?.isFile() === true && info.size > 0;
+}
+
 /** The one editor queue the Loop's tools share, made on first use for the plugin's storage. */
 /** What the editor queue and the computer's play tools reach the game's editor and the clock through. */
 function queueDepsFor(deps: LoopToolsDeps, storage: string): QueueDeps {
@@ -633,7 +689,7 @@ function queueDepsFor(deps: LoopToolsDeps, storage: string): QueueDeps {
     landCpp: landPartCpp,
     now: deps.now,
     sleep: deps.sleep,
-    fileReady: async (file) => (await stat(file).catch(() => null))?.isFile() === true,
+    fileReady: shotFileReady,
     readShot: async (file) => {
       const info = await stat(file);
       if (info.size > MAX_SHOT_BYTES) throw new Error(`${file} is too large`);
@@ -675,6 +731,12 @@ export function createLoopTools(deps: LoopToolsDeps) {
   };
 
   const compiles = createCompileJobs(deps.now);
+  // One export of an engine's reference at a time: lookups that find none kept wait for the same one.
+  const lookupExports: LookupExports = { reference: createReferenceExports(deps.now), facts: new Map() };
+  // The reference exported ahead of the first lookup, whenever the game's Unreal is seen answering.
+  const warm = (storage: string, game: string) => {
+    warmReference(deps, lookupExports, storage, game).catch(() => undefined);
+  };
   const cpp = createCppTools(deps);
   const motion = createMotionTools(deps);
   // Adding the C++ module or the sample's content restarts Unreal: one restart of a project at a time.
@@ -684,7 +746,7 @@ export function createLoopTools(deps: LoopToolsDeps) {
   const set: SetDeps = { ...deps, setup: deps.setup ?? systemSetup() };
   // Those jobs and building a plugin restart Unreal: the reopen tools read them as Genex's own reopen.
   const reopen = createReopenTools(set, (project) => restartsForJob(project) || ship.restarting(project));
-  const moments = momentTools(set, queueFor, reopen);
+  const moments = momentTools(set, queueFor, reopen, warm);
   const play = createComputerPlay({ queueDeps: (storage) => queueDepsFor(deps, storage), queue: queueFor, game });
 
   const handlers: Record<LoopToolName, Handler> = {
@@ -728,14 +790,10 @@ export function createLoopTools(deps: LoopToolsDeps) {
       deps.editorCall(storage, game(context), LoopEditorTool.RollbackPart, { part: partArg(args) }),
     [LoopToolName.ReloadLevel]: async (_args, context, storage) =>
       deps.editorCall(storage, game(context), LoopEditorTool.ReloadLevel, {}),
-    [LoopToolName.ExportReference]: (_args, context, storage) => exportReference(deps, storage, game(context)),
-    [LoopToolName.BlueprintGuide]: async () => {
-      const engine = await deps.engine();
-      if (!engine) throw new Error(MESSAGE.NoEngine);
-      return readBlueprintGuide(engine.directory, engine.version);
-    },
-    [LoopToolName.FindNodes]: async (args, context, storage) =>
-      findNodes(deps, storage, args, await templateBlueprints(deps, storage, context.project)),
+    [LoopToolName.ExportReference]: (_args, context, storage) =>
+      exportJoined(deps, lookupExports, storage, game(context)),
+    [LoopToolName.BlueprintGuide]: (_args, context, storage) => blueprintGuide(deps, storage, context.project),
+    [LoopToolName.FindNodes]: async (args, context, storage) => findNodes(deps, storage, context, args, lookupExports),
     [LoopToolName.CppStatus]: (_args, context, storage) => cpp.status(storage, game(context)),
     [LoopToolName.AddCppModule]: (_args, context, storage) => cpp.add(storage, game(context)),
     ...restartHandlers(reopen, moments),
@@ -746,10 +804,9 @@ export function createLoopTools(deps: LoopToolsDeps) {
     ...leadHandlers(set, moments),
     ...ship.handlers,
     ...packageHandlers(deps),
-    [MomentToolName.OpenForRun]: async (_args, context, storage) => openForRun(moments.ops(context, storage)),
-    [MotionToolName.Status]: (_args, context, storage) => motion.status(storage, game(context)),
-    [MotionToolName.Add]: (_args, context, storage) => motion.add(storage, game(context), context.directory),
-    ...controlHandlers(deps, reopen),
+    ...motionHandlers(motion),
+    ...multiplayerHandlers(deps),
+    ...controlHandlers(deps, reopen, warm),
     ...play.handlers,
   };
   return {
@@ -759,6 +816,21 @@ export function createLoopTools(deps: LoopToolsDeps) {
   };
 }
 
+/** `motion-status` and `add-motion-matching`: the Game Animation Sample's content in the game's project. */
+const motionHandlers = (motion: ReturnType<typeof createMotionTools>): Record<MotionToolName, Handler> => ({
+  [MotionToolName.Status]: (_args, context, storage) => motion.status(storage, gameOf(context)),
+  [MotionToolName.Add]: (_args, context, storage) => motion.add(storage, gameOf(context), context.directory),
+});
+
+/** `multiplayer`: Genex's Unreal plugin into the game's linked project. */
+const multiplayerHandlers = (deps: LoopToolsDeps): Record<MultiplayerToolName, Handler> => ({
+  [MultiplayerToolName.Multiplayer]: async (_args, context, storage) => {
+    if (!deps.multiplayer) throw new Error(MESSAGE.NoMultiplayer);
+    const project = await linkedOrThrow(deps, storage, gameOf(context));
+    return addMultiplayer(deps.multiplayer, storage, project, context.signal);
+  },
+});
+
 /** `package-game` and `package-status`, saving the game's open Unreal with the agent's own save. */
 const packageHandlers = (deps: LoopToolsDeps) =>
   createGamePackageTools({
@@ -766,22 +838,30 @@ const packageHandlers = (deps: LoopToolsDeps) =>
     save: (storage, game, timeoutMs) => saveAll(deps, storage, game, { saveMs: timeoutMs }),
   }).handlers;
 
-/** `open-editor`'s set-up of a project this profile has no record of: it holds the editor lock, so it may quit Unreal. */
-const setUpThenOpen =
-  (setUpLinked: NonNullable<LoopToolsDeps["setUpLinked"]>) =>
-  (storage: string, game: string): Promise<void> =>
-    setUpLinked(storage, game, true);
+/** Starts the reference's background export, unless kept or running: the game's Unreal was seen answering. */
+type Warm = (storage: string, game: string) => void;
 
-/** The agent's own editor tools (`editor-control.ts`) over the reopen jobs: open, quit and where it stands. */
+/** `answer`, after warming the reference when it says the game's Unreal answers. */
+function warmedOn<T extends object>(answer: T, warm: () => void): T {
+  if ("answering" in answer && answer.answering === true) warm();
+  return answer;
+}
+
+/**
+ * The agent's own editor tools (`editor-control.ts`) over the reopen jobs: open, quit and where it
+ * stands; an answer that Unreal answers starts the reference's export.
+ */
 function controlHandlers(
   deps: LoopToolsDeps,
   reopen: ReturnType<typeof createReopenTools>,
+  warm: Warm,
 ): Record<EditorControlToolName, Handler> {
   const control = createEditorControl({
     project: deps.project,
     editorAnswers: deps.editorAnswers,
     ...(deps.starting ? { starting: deps.starting } : {}),
-    ...(deps.setUpLinked ? { setUp: setUpThenOpen(deps.setUpLinked) } : {}),
+    // Its set-up of a project this profile has no record of may quit Unreal: open-editor holds the editor lock.
+    ...(deps.setUpLinked ? { setUp: deps.setUpLinked } : {}),
     save: (storage, game) => saveAll(deps, storage, game),
     quit: deps.restart.quit,
     reopen,
@@ -789,23 +869,28 @@ function controlHandlers(
     sleep: deps.sleep,
   });
   return {
-    [EditorControlToolName.OpenEditor]: (args, context, storage) => control.open(storage, gameOf(context), args),
+    [EditorControlToolName.OpenEditor]: async (args, context, storage) => {
+      const game = gameOf(context);
+      return warmedOn(await control.open(storage, game, args), () => warm(storage, game));
+    },
     [EditorControlToolName.QuitEditor]: (_args, context, storage) => control.quit(storage, gameOf(context)),
-    [EditorControlToolName.EditorStatus]: (args, context, storage) =>
-      control.state(storage, gameOf(context), args, context.signal),
+    [EditorControlToolName.EditorStatus]: async (args, context, storage) => {
+      const game = gameOf(context);
+      return warmedOn(await control.state(storage, game, args, context.signal), () => warm(storage, game));
+    },
   };
 }
 
-/** Any of the Loop's tools: the part tools, the harness's, the lead's and the moments' own. */
+/** Any of the Loop's tools: the part tools, the harness's and the lead's. */
 export type AnyLoopToolName =
   | LoopToolName
   | LiveLoopToolName
   | LeadLoopToolName
-  | MomentToolName
   | EditorControlToolName
   | ShipToolName
   | GamePackageToolName
   | MotionToolName
+  | MultiplayerToolName
   | EnginePlayTool;
 
 /** The tools' dependencies with setup's chosen: a test's, or this computer's. */
@@ -868,7 +953,7 @@ function liveHandlers(
         : saveAll(deps, storage, gameOf(context)),
     [LiveLoopToolName.LogErrors]: async (args, context, storage) =>
       context.hook
-        ? moments.log(storage, gameOf(context), context.hook)
+        ? moments.log(context, storage, context.hook)
         : moments.readLog(storage, gameOf(context), sinceOf(args)),
     [LiveLoopToolName.EndEditor]: async (_args, context, storage) =>
       context.hook ? endAtMoment(moments.ops(context, storage)) : reopen.end(storage, gameOf(context)),
@@ -906,6 +991,7 @@ function momentTools(
   deps: SetDeps,
   queueFor: (storage: string) => EditorQueue,
   reopen: ReturnType<typeof createReopenTools>,
+  warm: Warm,
 ) {
   const readLog = createLogReader(deps);
   const marks = new Map<string, number>();
@@ -913,13 +999,18 @@ function momentTools(
     if (!marks.has(game) && marks.size >= MAX_LOG_MARKS) marks.delete(marks.keys().next().value ?? "");
     marks.set(game, offset);
   };
-  const log = async (storage: string, game: string, hook: HookContext): Promise<HookAnswer> => {
+  // At a run's start it also tells the lead of an open Unreal's outdated helper (`helperAnswer`),
+  // and starts the reference's export when none is kept.
+  const log = async (context: PluginContext, storage: string, hook: HookContext): Promise<HookAnswer> => {
     if (hook.on !== HookEvent.RunPrepare && hook.on !== HookEvent.CheckpointBefore) return {};
+    const game = gameOf(context);
     const since = hook.on === HookEvent.CheckpointBefore ? marks.get(game) : undefined;
     const read = await readLog(storage, game, since).catch(() => null);
-    if (!read) return {};
-    mark(game, read.offset);
-    return since === undefined ? {} : logAnswer(read.lines.slice(0, MAX_MOMENT_LOG_LINES), hook);
+    if (read) mark(game, read.offset);
+    if (hook.on === HookEvent.CheckpointBefore)
+      return read && since !== undefined ? logAnswer(read.lines.slice(0, MAX_MOMENT_LOG_LINES), hook) : {};
+    warm(storage, game);
+    return inRun(hook) ? helperAtStart(editorOps(deps, reopen, context, storage)) : {};
   };
   // The hero cameras' stills as pictures, nothing when Unreal doesn't answer; within `withinMs`
   // (an observer's call), the stills taken by then.
@@ -994,22 +1085,24 @@ function editorOps(
     mayEndPlay: async () =>
       (await agentPlaying(storage, game, deps.now())) ||
       (inRun(context.hook) && (await agentsSetting(storage)).whilePlaying),
-    // A checkpoint's save has its step to itself; before a restore and at a run's start the busy wait leaves it less.
-    save: () =>
-      saveAll(deps, storage, game, context.hook?.on === HookEvent.CheckpointBefore ? CHECKPOINT_SAVE : MOMENT_SAVE),
+    // A checkpoint's save has its step to itself; before a restore the busy wait leaves it less.
+    updateHelperLive: () => liveHelperUpdate(deps, storage, game),
+    save: (keepPlay) =>
+      saveAll(
+        deps,
+        storage,
+        game,
+        context.hook?.on === HookEvent.CheckpointBefore ? CHECKPOINT_SAVE : MOMENT_SAVE,
+        keepPlay,
+      ),
     end: () => reopen.end(storage, game),
-    // At a Loop's start Unreal is never quit to set the project up: the agent links it itself.
-    setUp: async () => deps.setUpLinked?.(storage, game, false),
-    reopen: (helper) => reopen.reopen(storage, game, helper),
+    reopen: () => reopen.reopen(storage, game, true),
     state: () => reopen.state(storage, game),
     start: async () => (deps.starting ? deps.starting(storage, game) : null),
     projectName: async () => {
       const project = await linked();
       return project ? path.parse(project).name : null;
     },
-    updateHelper: () => updateGameHelper(deps, storage, game),
-    exported: async () => projectExported(await linked()),
-    exportReference: () => exportReference(deps, storage, game, MOMENT_ASK_MS),
   };
 }
 
@@ -1148,19 +1241,34 @@ async function stopPlayFirst(deps: LoopToolsDeps, storage: string, game: string,
 /** How long each editor call of a save may take: under a moment, its limits (`editor-moments.ts`); else each call's own. */
 type SaveLimits = { askMs?: number; saveMs?: number };
 
-/**
- * `save-all`: a play session ended first, then the helper saves every unsaved level and asset;
- * throws its refusal, or when Unreal doesn't answer or stays in play.
- */
-async function saveAll(deps: LoopToolsDeps, storage: string, game: string, limits: SaveLimits = {}) {
-  if (!(await deps.editorAnswers(storage, game).catch(() => false))) throw new Error(MESSAGE.NotAnswering);
-  await stopPlayFirst(deps, storage, game, limits.askMs);
-  const answer = await deps.editorCall(storage, game, CppEditorTool.SaveAll, {}, limits.saveMs);
+/** What a save answered (`save_all`, `save_during_play`); throws the helper's refusal or anything else. */
+function savedOf(answer: unknown) {
   const reply = isJsonObject(answer) ? answer : {};
   if (reply.error !== undefined) throw new Error(String(reply.error));
   if (typeof reply.saved !== "boolean" || !Array.isArray(reply.dirty)) throw new Error(MESSAGE.NoSaveAnswer);
   const dirty = reply.dirty.filter((name): name is string => typeof name === "string");
   return { saved: reply.saved, dirty, ms: typeof reply.ms === "number" ? reply.ms : 0 };
+}
+
+/** Whether the game's editor helper saves while a play session goes on: an older one has no `save_during_play`. */
+async function savesDuringPlay(deps: LoopToolsDeps, storage: string, game: string, askMs?: number): Promise<boolean> {
+  const tool = LoopEditorTool.SaveDuringPlay;
+  const answer = await deps.editorCall(storage, game, tool, { check_only: true }, askMs).catch(() => undefined);
+  return isJsonObject(answer) && answer.ready === true;
+}
+
+/**
+ * `save-all`: the helper saves every unsaved level and asset, a play session ended first. With
+ * `keepPlay` (a save point while the agent plays) a helper that can saves with the play going on, so
+ * the agent's play test outlives its save point; an older one ends the play as before. Throws the
+ * helper's refusal, or when Unreal doesn't answer or stays in play.
+ */
+async function saveAll(deps: LoopToolsDeps, storage: string, game: string, limits: SaveLimits = {}, keepPlay = false) {
+  if (!(await deps.editorAnswers(storage, game).catch(() => false))) throw new Error(MESSAGE.NotAnswering);
+  if (keepPlay && (await savesDuringPlay(deps, storage, game, limits.askMs)))
+    return savedOf(await deps.editorCall(storage, game, LoopEditorTool.SaveDuringPlay, {}, limits.saveMs));
+  await stopPlayFirst(deps, storage, game, limits.askMs);
+  return savedOf(await deps.editorCall(storage, game, CppEditorTool.SaveAll, {}, limits.saveMs));
 }
 
 /** `log-errors`' `since`: absent, or a byte offset (a whole number, 0 or more); anything else is refused. */
@@ -1195,6 +1303,23 @@ function createLogReader(deps: LoopToolsDeps) {
   };
 }
 
+/**
+ * The open Unreal's outdated Genex editor helper brought up to the plugin's without a restart, when
+ * every change is Python the editor reloads (`updateHelperLive`) and the running helper can reload
+ * now (`reload_helper`, which an older helper lacks); whether it was. Nothing is written when the
+ * running helper can't reload; a reload that fails after the write leaves the next start to load it.
+ */
+async function liveHelperUpdate(deps: SetDeps, storage: string, game: string): Promise<boolean> {
+  const project = await linkedOrThrow(deps, storage, game);
+  const reload = (args: Record<string, unknown>) =>
+    deps.editorCall(storage, game, LoopEditorTool.ReloadHelper, args, MOMENT_ASK_MS).catch(() => undefined);
+  const check = await reload({ check_only: true });
+  if (!isJsonObject(check) || check.ready !== true) return false;
+  if (!(await (deps.updateHelperLive ?? updateHelperLive)(project, deps.setup(storage)))) return false;
+  const reloaded = await reload({});
+  return isJsonObject(reloaded) && Array.isArray(reloaded.reloaded);
+}
+
 /** `update-helper`: the project's Genex editor helper brought up to the plugin's, only while this game's Unreal is closed. */
 async function updateGameHelper(deps: SetDeps, storage: string, game: string): Promise<HelperUpdate> {
   const project = await linkedOrThrow(deps, storage, game);
@@ -1210,14 +1335,16 @@ async function updateGameHelper(deps: SetDeps, storage: string, game: string): P
 async function findNodes(
   deps: LoopToolsDeps,
   storage: string,
+  context: PluginContext,
   args: Record<string, unknown>,
-  template: readonly BlueprintDecl[],
+  exports: LookupExports,
 ) {
   const words = text(args, "query").toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) throw new Error(MESSAGE.NoQuery);
-  const engine = await deps.engine();
-  const reference = engine ? await loadReference(storage, engine.version) : null;
-  if (!reference) throw new Error(MESSAGE.NoReference);
+  await refuseWithoutReference(deps, storage, context.project);
+  const reference = await lookupReference(deps, storage, context, exports);
+  // Read after the reference: an export it needed also wrote the template's project file.
+  const template = await templateBlueprints(deps, storage, context.project);
   const base = text(args, "base");
   const graph = text(args, "graph");
   const known = BASES.has(base) && GRAPHS.has(graph);
@@ -1231,6 +1358,123 @@ async function findNodes(
     return pins ? { typeId, pins } : { typeId };
   });
   return { nodes, more: matches.length > MAX_FOUND_NODES };
+}
+
+/**
+ * The exports lookups wait for: the engine's reference by plugin storage and engine version (also
+ * started in the background, `reference-warm.ts`), a project's template facts by plugin storage and
+ * project.
+ */
+type LookupExports = { reference: ReferenceExports; facts: Map<string, Promise<unknown>> };
+
+/** `blueprint-guide`: how Blueprint text is written on the game's own Unreal, read from that engine. */
+async function blueprintGuide(deps: LoopToolsDeps, storage: string, game: string | undefined): Promise<string> {
+  const engine = await deps.engine(storage, game);
+  if (!engine) throw new Error(MESSAGE.NoEngine);
+  return keepsReference(engine.version)
+    ? readBlueprintGuide(engine.directory, engine.version)
+    : readGraphDslGuide(engine.directory, engine.version);
+}
+
+/** Whether Genex keeps a node reference for an Unreal: only one that writes Blueprint text with Epic's Python tools. */
+const keepsReference = (version: string): boolean => traitsOf(version).blueprintText === BlueprintText.PythonTools;
+
+/** Refuses a tool of the node reference for a game whose Unreal has none, saying where nodes are looked up there. */
+async function refuseWithoutReference(deps: LoopToolsDeps, storage: string, game: string | undefined): Promise<void> {
+  const engine = await deps.engine(storage, game).catch(() => undefined);
+  if (engine && !keepsReference(engine.version)) throw new Error(noReferenceMessage(engine.version));
+}
+
+/** The key an engine's reference is exported and kept under. */
+const referenceKey = (storage: string, engine: string) => `${storage}\0${engine}`;
+
+/**
+ * Starts exporting the engine's node reference from the game's Unreal in the background when none
+ * is kept yet and it answers, so a lookup during play later finds it kept. Never throws.
+ */
+async function warmReference(deps: LoopToolsDeps, exports: LookupExports, storage: string, game: string) {
+  const engine = await deps.engine(storage, game).catch(() => undefined);
+  if (!engine || !keepsReference(engine.version)) return;
+  const kept = await stat(referencePaths(storage, engine.version).nodes).catch(() => null);
+  if (kept || !(await deps.editorAnswers(storage, game).catch(() => false))) return;
+  exports.reference.warm(referenceKey(storage, engine.version), () => exportUnlessKept(deps, storage, game));
+}
+
+/** `export-reference`: an export of the engine's reference, joining one that runs (a background one), so two never write the same files. */
+async function exportJoined(deps: LoopToolsDeps, exports: LookupExports, storage: string, game: string) {
+  const engine = await deps.engine(storage, game);
+  if (!engine) throw new Error(MESSAGE.NoEngine);
+  if (!keepsReference(engine.version)) throw new Error(noReferenceMessage(engine.version));
+  return exports.reference.start(referenceKey(storage, engine.version), () => exportReference(deps, storage, game));
+}
+
+/**
+ * The engine's reference exported with {@link REFERENCE_EXPORT_MS} per editor call, unless one is
+ * kept by the time it starts: a background export may have kept it since its caller looked.
+ */
+async function exportUnlessKept(deps: LoopToolsDeps, storage: string, game: string) {
+  const engine = await deps.engine(storage, game);
+  if (engine && (await loadReference(storage, engine.version))) return { engine: engine.version, stored: true };
+  return exportReference(deps, storage, game, REFERENCE_EXPORT_MS);
+}
+
+/**
+ * The engine's node reference for a lookup: the one kept, or, when none is kept yet, the one the
+ * game's open Unreal exports (with the template's facts), each editor call within
+ * `REFERENCE_EXPORT_MS`, waited for up to `FIND_WAIT_MS`. Throws what the agent can do about a
+ * missing one. With a reference kept, a game whose project never exported its template's facts (a
+ * second project on the same engine) has its open Unreal export them first: nothing else does.
+ */
+async function lookupReference(
+  deps: LoopToolsDeps,
+  storage: string,
+  context: PluginContext,
+  exports: LookupExports,
+): Promise<ReferenceData> {
+  const engine = await deps.engine(storage, context.project);
+  if (!engine) throw new Error(MESSAGE.NoEngine);
+  const kept = await loadReference(storage, engine.version);
+  if (kept) {
+    await exportMissingFacts(deps, storage, context.project, exports.facts);
+    return kept;
+  }
+  const game = gameOf(context);
+  if (!(await deps.editorAnswers(storage, game).catch(() => false))) throw new Error(MESSAGE.NoReference);
+  const running = exports.reference.start(referenceKey(storage, engine.version), () =>
+    exportUnlessKept(deps, storage, game),
+  );
+  const ended = await endWithin(running, (ms, signal) => deps.sleep(ms, signal), FIND_WAIT_MS, context.signal);
+  if (!ended) throw new Error(MESSAGE.StillExporting);
+  if ("failure" in ended) throw new Error(MESSAGE.ExportFailed(errorMessage(ended.failure)));
+  const exported = await loadReference(storage, engine.version);
+  if (!exported) throw new Error(MESSAGE.BadReference);
+  return exported;
+}
+
+/**
+ * Has the game's open Unreal write its project's template facts (`project.json`) when the project
+ * never exported them, one export per project at a time; a closed Unreal is never asked, and an
+ * export that fails leaves the lookup as it was (the gate checks against the parts alone).
+ */
+async function exportMissingFacts(
+  deps: LoopToolsDeps,
+  storage: string,
+  game: string | undefined,
+  exports: LookupExports["facts"],
+): Promise<void> {
+  if (!game) return;
+  const project = await linkedProject(deps, storage, game);
+  if (!project || (await projectExported(project))) return;
+  if (!(await deps.editorAnswers(storage, game).catch(() => false))) return;
+  const key = `${storage}\0${project}`;
+  const file = path.join(path.dirname(project), PROJECT_EXPORT);
+  const running = exports.get(key) ?? exportProject(deps, storage, game, file, MOMENT_ASK_MS);
+  exports.set(key, running);
+  try {
+    await running;
+  } finally {
+    if (exports.get(key) === running) exports.delete(key);
+  }
 }
 
 /** Throws the editor's refusal (`{error}`), so a file left from an earlier export is never read. */
@@ -1256,7 +1500,7 @@ async function exportProject(deps: LoopToolsDeps, storage: string, game: string,
 
 /** Asks the game's editor for the node reference and the Python names, and keeps them per engine; each call within `callMs` when given. */
 async function exportReference(deps: LoopToolsDeps, storage: string, game: string, callMs?: number) {
-  const engine = await deps.engine();
+  const engine = await deps.engine(storage, game);
   if (!engine) throw new Error(MESSAGE.NoEngine);
   const project = await deps.project(storage, game);
   if (!project) throw new Error(MESSAGE.NoProject);

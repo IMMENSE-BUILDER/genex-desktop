@@ -23,9 +23,11 @@ import { EditorHealth, type HealthRead, healthAnswer } from "../../src/plugins/u
 import { createLoopTools, LiveLoopToolName, LoopToolName } from "../../src/plugins/unreal/loop-tools.ts";
 import { HelperState, type SetupEnv } from "../../src/plugins/unreal/setup.ts";
 import { CompileFailure, type CompileOptions, type CompileResult } from "../../src/plugins/unreal/ubt.ts";
+import { VisualStudioState } from "../../src/plugins/unreal/visual-studio.ts";
 import { XcodeState } from "../../src/plugins/unreal/xcode.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 import { CrashLog, crashLog } from "../helpers/unreal-editor-stand-in.ts";
+import { engineByGame } from "../helpers/unreal-fake-engine.ts";
 
 const NAME = "TowerClimb";
 const XCODE_APP = "/Applications/Xcode-26.2.app";
@@ -70,6 +72,8 @@ type Options = {
   openTakes?: number;
   compile?: (options: CompileOptions) => CompileResult;
   xcode?: XcodeState;
+  /** Where Microsoft's C++ tools stand on Windows; none: the computer can't tell. */
+  visualStudio?: VisualStudioState;
   unlinked?: boolean;
   /** Processes the stand-in computer runs, besides the ones a test adds. */
   rows?: (w: Paths) => Row[];
@@ -84,6 +88,8 @@ type Options = {
   editorCall?: (tool: string, events: string[]) => unknown;
   /** Where Genex's own start of the game's project stands. */
   starting?: EditorStart;
+  /** A newer Unreal is installed beside the game's own, which answers only when asked for this game. */
+  newerUnreal?: boolean;
 };
 
 type Paths = { home: string; project: string; crashes: string; ours: string; other: string; elsewhere: string };
@@ -133,6 +139,11 @@ type EditorState = {
   helper: string | null;
 };
 
+/** The stand-in Visual Studio probe a world gets when a test names its state; none when it doesn't. */
+function visualStudioOf(state: VisualStudioState | undefined) {
+  return state ? { visualStudio: async () => ({ state }) } : {};
+}
+
 async function reopenWorld(options: Options = {}) {
   const { root, unreal, storage, paths } = await reopenFiles(options.module !== false);
   const { home, project } = paths;
@@ -163,15 +174,20 @@ async function reopenWorld(options: Options = {}) {
   };
   const remembered = rememberAnswers(asked, () => clock.at);
   const helper = options.outdatedHelper ? await helperUpdates(root, paths, events, rows) : {};
+  const own = { version: "5.8", directory: path.join(root, "engine") };
+  const newer = { version: "5.9", directory: path.join(root, "engine-5.9") };
+  const builtWith: string[] = [];
 
   const tools = createLoopTools({
     ...helper,
     platform: options.platform ?? "darwin",
-    engine: async () => ({ version: "5.8", directory: path.join(root, "engine") }),
+    engine: options.newerUnreal ? engineByGame("tower-climb", own, newer) : async () => own,
     project: async () => (options.unlinked ? undefined : project),
     xcode: async () => ({ state: options.xcode ?? XcodeState.Ready, app: XCODE_APP }),
+    ...visualStudioOf(options.visualStudio),
     compile: async (compile) => {
       events.push("compile");
+      builtWith.push(compile.engineDir);
       assert.equal(compile.projectFile, project);
       assert.equal(compile.module, NAME);
       assert.equal(compile.xcodeApp, XCODE_APP);
@@ -239,7 +255,22 @@ async function reopenWorld(options: Options = {}) {
   /** One of the agent's editor tools, as a chat calls it. */
   const agentCall = (name: string, args: Record<string, unknown> = {}) =>
     tools.call(name as LoopToolName, args, context, storage);
-  return { paths, rows, events, signals, clock, state, reopen, reopened, editorState, endEditor, atMoment, agentCall };
+  return {
+    paths,
+    rows,
+    events,
+    signals,
+    builtWith,
+    engineDir: own.directory,
+    clock,
+    state,
+    reopen,
+    reopened,
+    editorState,
+    endEditor,
+    atMoment,
+    agentCall,
+  };
 }
 
 /** A setup env for the project's helper: this stand-in computer, where nothing else runs. */
@@ -339,6 +370,35 @@ describe("reopen-editor", () => {
       "the other project's reporter and editor are left as they were",
     );
     assert.ok(w.clock.at >= OPEN_TAKES_MS, "it waited for the project to answer");
+  });
+
+  it("ends the crash reporter of the game's own Unreal and builds with that Unreal, where a newer one is installed too", async () => {
+    const w = await reopenWorld({ newerUnreal: true });
+    assert.deepEqual(await w.reopen(), { started: true });
+    const end = await w.reopened();
+    assert.equal(end.reopening.state, ReopenState.Done, end.reopening.error);
+    assert.deepEqual(w.signals, [[7900, "SIGTERM"]], "the reporter of a crash filed under the game's own Unreal");
+    assert.deepEqual(w.builtWith, [w.engineDir]);
+  });
+
+  it("on Windows builds the game's module with Microsoft's C++ tools before it opens the project", async () => {
+    const w = await reopenWorld({ platform: "win32", visualStudio: VisualStudioState.Ready });
+    w.rows.splice(0, w.rows.length);
+    assert.deepEqual(await w.reopen(), { started: true });
+    const end = await w.reopened();
+    assert.equal(end.reopening.state, ReopenState.Done, end.reopening.error);
+    assert.deepEqual(w.events, ["compile", `forget ${NAME}.uproject`, `open ${NAME}.uproject`]);
+  });
+
+  it("on Windows without Microsoft's C++ tools opens the project on the module its last build left, building nothing", async () => {
+    for (const visualStudio of [VisualStudioState.Missing, undefined]) {
+      const w = await reopenWorld({ platform: "win32", ...(visualStudio ? { visualStudio } : {}) });
+      w.rows.splice(0, w.rows.length);
+      assert.deepEqual(await w.reopen(), { started: true });
+      const end = await w.reopened();
+      assert.equal(end.reopening.state, ReopenState.Done, end.reopening.error);
+      assert.deepEqual(w.events, [`forget ${NAME}.uproject`, `open ${NAME}.uproject`], String(visualStudio));
+    }
   });
 
   it("asks a hung editor of this project to quit when it is the only editor, then terminates and kills it", async () => {
@@ -616,6 +676,12 @@ describe("end-editor (the live builder's cold restore)", () => {
     );
   });
 
+  it("ends the crash reporter of the game's own Unreal where a newer one is installed too", async () => {
+    const w = await reopenWorld({ newerUnreal: true });
+    assert.deepEqual(await w.endEditor(), { ended: 1 });
+    assert.deepEqual(w.signals, [[7900, "SIGTERM"]]);
+  });
+
   it("throws when this project's processes outlive even a kill", async () => {
     const w = await reopenWorld({ stubborn: { 7900: { SIGTERM: true, SIGKILL: true } } });
     await assert.rejects(w.endEditor(), /didn't end/);
@@ -696,6 +762,11 @@ describe("at Genex's moments", () => {
     await failed.reopened();
     const lost = (await failed.atMoment(LoopToolName.EditorState, health)) as Answer;
     assert.match(lost.block ?? "", /reopening Unreal failed: .*didn't build/);
+    // An editor of the game opened since (by the person) and still loading reads busy, never as that failure.
+    failed.rows.push({ pid: 9300, exec: EDITOR_EXEC, args: `${EDITOR_EXEC} ${failed.paths.project}` });
+    const loading = (await failed.atMoment(LoopToolName.EditorState, health)) as Answer;
+    assert.match(loading.pending ?? "", /busy/);
+    assert.equal(loading.block, undefined, "a loading editor is no crash");
   });
 
   it("editor-state's answer at health, in a run and in a chat: pending while Unreal may yet answer, blocked once it can't", () => {
@@ -718,7 +789,8 @@ describe("at Genex's moments", () => {
         { health: EditorHealth.NoProject },
         chat,
         "block",
-        /Open it from the Unreal button/,
+        // Flipped on purpose: where Unreal stands, never an errand for the person.
+        /isn't running with this game's project open\.$/,
       ],
       [
         "processes that can't be listed",
@@ -733,7 +805,8 @@ describe("at Genex's moments", () => {
         { health: EditorHealth.Gone, project: "Tower" },
         chat,
         "block",
-        /didn't finish opening Tower/,
+        // Flipped on purpose: the chat's words say where Unreal stands; the agent opens it itself.
+        /isn't running with Tower open\.$/,
       ],
     ];
     for (const [name, read, hook, field, words] of rows) {
@@ -821,10 +894,12 @@ describe("at Genex's moments", () => {
       "the closed Unreal stays closed",
     );
 
+    // Flipped: a crash reopened Unreal. Nobody fires the crash moment now, and a step an older
+    // manifest still hooks there reopens nothing: the lead opens its app with open-editor.
     const crashed = await reopenWorld();
     assert.deepEqual(await crashed.atMoment(LoopToolName.ReopenEditor, { on: HookEvent.Crash, runId: "run-7" }), {});
-    await crashed.reopened();
-    assert.ok(crashed.events.includes(`open ${NAME}.uproject`), "a crash still reopens Unreal");
+    assert.equal((await crashed.editorState()).reopening.state, ReopenState.Idle, "no reopen started at a crash");
+    assert.deepEqual(crashed.events, [], "nothing opened or built");
   });
 });
 
@@ -862,6 +937,47 @@ describe("the agent's open-editor", () => {
     assert.ok(w.clock.at >= OPEN_TAKES_MS && w.clock.at < OPEN_TAKES_MS + 30_000, `waited ${w.clock.at} ms`);
   });
 
+  it("after a reopen that failed, builds the game's module first: a fix that still doesn't build fails with its errors, a fix that builds opens", async () => {
+    let fixed = false;
+    // Another program runs on the Mac, so a listing without the game's editor says it isn't running.
+    const shell = { pid: 6100, exec: "/bin/zsh", args: "/bin/zsh -l" };
+    const w = await reopenWorld({ compile: () => (fixed ? BUILT : BROKEN), rows: () => [shell] });
+    await w.reopen();
+    assert.equal((await w.reopened()).reopening.state, ReopenState.Failed);
+    assert.deepEqual(await w.agentCall(EditorControlToolName.OpenEditor), { started: true });
+    const still = await w.reopened();
+    assert.equal(still.reopening.state, ReopenState.Failed);
+    assert.match(still.reopening.error ?? "", /BikeGameMode\.cpp:42/, "the agent reads what still doesn't build");
+    fixed = true;
+    assert.deepEqual(await w.agentCall(EditorControlToolName.OpenEditor), { started: true });
+    const end = await w.reopened();
+    assert.equal(end.reopening.state, ReopenState.Done, end.reopening.error);
+    assert.deepEqual(w.events, ["compile", "compile", "compile", `forget ${NAME}.uproject`, `open ${NAME}.uproject`]);
+    // The editor stops again: the good build cleared the mark, so the agent's Open is Unreal's own.
+    w.state.answering = false;
+    w.rows.splice(
+      w.rows.findIndex((row) => row.pid !== shell.pid),
+      1,
+    );
+    w.events.length = 0;
+    assert.deepEqual(await w.agentCall(EditorControlToolName.OpenEditor), { started: true });
+    assert.equal((await w.reopened()).reopening.state, ReopenState.Done);
+    assert.deepEqual(w.events, [`forget ${NAME}.uproject`, `open ${NAME}.uproject`], "no build once it built");
+  });
+
+  it("after a reopen that failed for anything but the build (Xcode not ready), opens by Unreal's own Open", async () => {
+    const shell = { pid: 6100, exec: "/bin/zsh", args: "/bin/zsh -l" };
+    const w = await reopenWorld({ xcode: XcodeState.FirstLaunch, rows: () => [shell] });
+    await w.reopen();
+    const failed = await w.reopened();
+    assert.equal(failed.reopening.state, ReopenState.Failed);
+    assert.match(failed.reopening.error ?? "", /Xcode/);
+    assert.deepEqual(await w.agentCall(EditorControlToolName.OpenEditor), { started: true });
+    const end = await w.reopened();
+    assert.equal(end.reopening.state, ReopenState.Done, end.reopening.error);
+    assert.deepEqual(w.events, [`forget ${NAME}.uproject`, `open ${NAME}.uproject`], "no build: Unreal's own Open");
+  });
+
   it("leaves an editor of the game that runs without answering, and ends and reopens it only with restart: true", async () => {
     const w = await reopenWorld({ rows: (p) => [ownEditor(p)] });
     const busy = (await w.agentCall(EditorControlToolName.OpenEditor)) as { busy: boolean; next: string };
@@ -893,6 +1009,27 @@ describe("the agent's open-editor", () => {
     await assert.rejects(w.agentCall(EditorControlToolName.OpenEditor), /unreal__use-project/);
     await assert.rejects(w.agentCall(EditorControlToolName.QuitEditor), /unreal__use-project/);
     assert.deepEqual([w.events, w.signals], [[], []]);
+  });
+});
+
+describe("the agent's open-editor: the helper and the build a Loop's lead opens Unreal with", () => {
+  it("updates an outdated helper while Unreal is closed, and with build: true builds the game's module first; a build that fails leaves Unreal closed with its errors", async () => {
+    const w = await reopenWorld({ outdatedHelper: true });
+    assert.deepEqual(await w.agentCall(EditorControlToolName.OpenEditor, { build: true }), { started: true });
+    const end = await w.reopened();
+    assert.equal(end.reopening.state, ReopenState.Done, end.reopening.error);
+    assert.deepEqual(
+      w.events,
+      ["update-helper", "compile", `forget ${NAME}.uproject`, `open ${NAME}.uproject`],
+      "the helper updated and the module built while Unreal was closed, then the project opened",
+    );
+
+    const broken = await reopenWorld({ compile: () => BROKEN });
+    assert.deepEqual(await broken.agentCall(EditorControlToolName.OpenEditor, { build: true }), { started: true });
+    const failed = (await broken.agentCall(EditorControlToolName.EditorStatus, { seconds: 170 })) as EditorState;
+    assert.equal(failed.reopening.state, ReopenState.Failed);
+    assert.match(failed.reopening.error ?? "", /BikeGameMode\.cpp:42/, "editor-status names what didn't build");
+    assert.deepEqual(broken.events, ["compile"], "Unreal stays closed");
   });
 });
 

@@ -29,6 +29,9 @@ import {
   engineAppIds,
   engineAssist,
   assistUnderWay,
+  computerControlAssist,
+  CONTROL_DECLINE_HOLD_MS,
+  ControlDeclines,
   followAssistDeliveries,
 } from "../../src/main/core/desktop-assist.ts";
 import { CustomEvent, customEventData } from "../../src/shared/custom-events.ts";
@@ -103,6 +106,7 @@ function fakeHost(
       seen.posted.push({ threadId, project, text, messageId });
     },
     grants,
+    controlDeclines: new ControlDeclines(options.now),
     messageId: () => `msg_assist_${++ids}`,
   };
   return { host, seen, grants, control: () => control };
@@ -110,6 +114,67 @@ function fakeHost(
 
 const assist = (host: AssistHost, binding: PluginBinding = BINDING) =>
   engineAssist(host, { pluginId: "toy-engine", binding, task: TASK, asked: true });
+
+const control = (
+  host: AssistHost,
+  asked = true,
+  pluginId = "toy-engine",
+  binding: PluginBinding | undefined = BINDING,
+) => computerControlAssist(host, { pluginId, binding, task: "Click the game's menu.", asked });
+
+describe("game.computer.control", () => {
+  it("with computer control off, asks on the setting's card; a yes turns it on and starts the chat's next turn", async () => {
+    const fake = fakeHost({ answers: [true] });
+    assert.deepEqual(await control(fake.host), { started: true });
+    assert.deepEqual(fake.seen.cards, [{ kind: AssistCardKind.ComputerSetting }]);
+    assert.equal(fake.seen.turnedOn, 1);
+    assert.equal(fake.seen.posted.length, 1);
+    assert.match(fake.seen.posted[0]?.text ?? "", /Computer control is on now\. Click the game's menu\./);
+    assert.equal(fake.grants.live(fake.seen.posted[0]?.threadId ?? ""), null, "no app is granted");
+  });
+
+  it("changes nothing on a no, when it is on already, with no chat, no desktop, or a stranger's unasked call", async () => {
+    const no = fakeHost({ answers: [false] });
+    assert.deepEqual(await control(no.host), { started: false, reason: "declined" });
+    assert.deepEqual([no.seen.turnedOn, no.seen.posted.length], [0, 0]);
+    const on = fakeHost({ control: true });
+    assert.deepEqual(await control(on.host), { started: false, reason: "already-on" });
+    assert.deepEqual([on.seen.cards.length, on.seen.posted.length], [0, 0]);
+    const cases: Array<[ReturnType<typeof fakeHost>, () => ReturnType<typeof control>, string]> = [];
+    const chatless = fakeHost({ answers: [true] });
+    cases.push([
+      chatless,
+      () =>
+        computerControlAssist(chatless.host, { pluginId: "toy-engine", binding: undefined, task: "x", asked: true }),
+      "no-chat",
+    ]);
+    const deskless = fakeHost({ answers: [true], desktop: false });
+    cases.push([deskless, () => control(deskless.host), "unavailable"]);
+    const stranger = fakeHost({ answers: [true], bundled: false });
+    cases.push([stranger, () => control(stranger.host, false), "not-person"]);
+    const unknown = fakeHost({ answers: [true] });
+    cases.push([unknown, () => control(unknown.host, true, "nobody"), "unavailable"]);
+    for (const [fake, call, reason] of cases) {
+      assert.deepEqual(await call(), { started: false, reason }, reason);
+      assert.deepEqual([fake.seen.cards.length, fake.seen.turnedOn, fake.seen.posted.length], [0, 0, 0], reason);
+    }
+    const ungranted = fakeHost({ answers: [true], macGrants: false });
+    assert.deepEqual(await control(ungranted.host), { started: false, reason: "declined" });
+    assert.equal(ungranted.seen.posted.length, 0, "macOS's grants refused: no turn");
+    assert.equal(ungranted.control(), true, "the setting the person turned on stays on");
+  });
+
+  it("a no is held for the chat: asked again within the hold, no card comes back", async () => {
+    let now = 1_000;
+    const fake = fakeHost({ answers: [false, true], now: () => now });
+    assert.deepEqual(await control(fake.host), { started: false, reason: "declined" });
+    assert.deepEqual(await control(fake.host), { started: false, reason: "declined" });
+    assert.equal(fake.seen.cards.length, 1, "one card for the no and the ask after it");
+    now += CONTROL_DECLINE_HOLD_MS;
+    assert.deepEqual(await control(fake.host), { started: true });
+    assert.equal(fake.seen.cards.length, 2, "once the hold is over, the card may ask again");
+  });
+});
 
 describe("game.engine.assist", () => {
   it("with computer control off, asks to turn it on; a yes turns it on and posts the task to the chat", async () => {
@@ -568,14 +633,15 @@ describe("the apps engines declare", () => {
     );
   });
 
-  it("Unreal's Do it for me may drive Epic's launcher, only in the turn answering its task, never Unreal's editor", async () => {
+  // Flipped (agents act by themselves): outside its assist Epic's launcher is the agent's like any app.
+  it("Unreal's Do it for me drives only Epic's launcher; outside it the launcher is the agent's like any app", async () => {
     const manifest = validateManifest(JSON.parse(await readFile("src/plugins/unreal/plugin.json", "utf8")));
     const unreal = [{ enabled: true, removed: false, manifest }];
     const declared = declaredEngineApps(unreal, "win32");
     assert.deepEqual([...declared], ["epicgameslauncher.exe", "epicwebhelper.exe"]);
     assert.deepEqual([...declaredEngineApps(unreal, "darwin")], ["com.epicgames.EpicGamesLauncher"]);
     const launcher: DesktopApp = { name: "Epic Games Launcher", bundleId: "epicgameslauncher.exe", pid: 7 };
-    assert.match(String(engineAppRefusal(launcher, { declared, granted: null })), /engine/, "outside its assist");
+    assert.equal(engineAppRefusal(launcher, { declared, granted: null }), null, "outside its assist");
     assert.equal(engineAppRefusal(launcher, { declared, granted: declared }), null, "the turn answering its task");
     const editor: DesktopApp = { name: "Unreal Editor", bundleId: "unrealeditor.exe", pid: 8 };
     assert.match(String(engineAppRefusal(editor, { declared, granted: declared })), /not one of the apps/);
@@ -609,6 +675,8 @@ describe("the toy engine's Do it for me, through a real core", () => {
     const { core } = lite;
     await core.plugins.installLocal(await toyWithAssist(), PluginSourceKind.Local, []);
     await core.plugins.setEnabled(TOY_PLUGIN_ID, true);
+    // On by default: these cases start with it turned off, so the setting's own card asks.
+    await core.updateSettings({ computerControl: false });
     const dir = (await core.games.scaffold("garden")).dir;
     threadId = await core.threadForGame("garden");
     binding = { project: "garden", directory: dir, threadId };
@@ -755,6 +823,8 @@ describe("a plugin that came with Genex starts its setup from its own tool, thro
     const { core } = lite;
     await core.plugins.installLocal(await toyWithAssist(), PluginSourceKind.Bundled, []);
     await core.plugins.setEnabled(TOY_PLUGIN_ID, true);
+    // On by default: these cases start with it turned off, so the setting's own card asks.
+    await core.updateSettings({ computerControl: false });
     const dir = (await core.games.scaffold("orchard")).dir;
     threadId = await core.threadForGame("orchard");
     binding = { project: "orchard", directory: dir, threadId };

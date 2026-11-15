@@ -22,6 +22,7 @@ import {
   GenexPublishPhase,
   type GenexPublishJob,
   type GenexPublishState,
+  type GenexSendProgress,
 } from "../../../../shared/genex.ts";
 import { type PluginToolbarEntry, toolbarItems } from "../../../../shared/plugin-toolbar.ts";
 import type { PluginInfo } from "../../../../shared/plugins.ts";
@@ -33,7 +34,15 @@ import { t } from "../../../../shared/i18n.ts";
 import { FEEDBACK_TEXT_MAX_CHARS, type FeedbackDraft, FeedbackScreen } from "../../../../shared/feedback.ts";
 import { relativeTime } from "../../../chat-labels.ts";
 import { type StepState, stepStateAt } from "../../../ui/step-bar.ts";
-import { GENEX_WORDS } from "../../../words.ts";
+import { GENEX_WORDS, REVIEW_WORDS } from "../../../words.ts";
+import {
+  appKey,
+  GenexAppReview,
+  GenexGameReview,
+  type GenexReviewApp,
+  type GenexReviewRecord,
+} from "../../../../shared/genex-review.ts";
+import { checkingSince } from "./review-card-view.ts";
 
 const WORDS = GENEX_WORDS.publish;
 
@@ -46,6 +55,8 @@ export const GenexPublishStep = {
   Prepare: "prepare",
   Upload: "upload",
   Test: "test",
+  /** Genex's check of an app before players get it: an apps-only publish has it in place of the test. */
+  Check: "check",
   Live: "live",
 } as const;
 export type GenexPublishStep = (typeof GenexPublishStep)[keyof typeof GenexPublishStep];
@@ -67,6 +78,8 @@ const PHASE_STEP: Partial<Record<GenexPublishPhase, GenexPublishStep>> = {
 
 /** A test running longer than this is "Still testing": Genex usually serves a new build well within it. */
 export const SLOW_TEST_MS = 2 * MINUTE_MS;
+/** Genex's check of an app taking longer than this says so, and that a person reviews it if it can't finish. */
+export const SLOW_CHECK_MS = 15 * MINUTE_MS;
 
 /** One step on the progress bar. */
 export interface StepView {
@@ -97,6 +110,8 @@ export interface PublishButton {
 
 /** Everything the dialog draws. */
 export interface PublishView {
+  /** How far the build or its source is on the way up; absent when nothing is being sent or the CLI says nothing of it. */
+  progress?: GenexSendProgress;
   stage: PublishStage;
   /** The line under Publish: who can play it. */
   intro: string;
@@ -133,6 +148,8 @@ export interface PublishView {
   canAskCover: boolean;
   /** The game would go out with no picture: no cover to send, and none on Genex ({@link goesWithoutCover}). */
   withoutCover: boolean;
+  /** Genex checks the game's apps now: when the last was sent, and whether it takes longer than usual. */
+  check: { since: string; slow: boolean; person: boolean } | null;
 }
 
 export const isListed = (state: GenexPublishState): boolean => state.status === GenexHostedStatus.Published;
@@ -185,7 +202,8 @@ function chipOf(state: GenexPublishState, outcome: PublishOutcome, now: number):
 function isSlow(job: GenexPublishJob | undefined, unresolved: boolean, now: number): boolean {
   if (unresolved) return true;
   const testing = job?.state === GenexPublishJobState.Running && PHASE_STEP[job.phase] === GenexPublishStep.Test;
-  return testing && now - Date.parse(job.startedAt) > SLOW_TEST_MS;
+  // From when the upload ended, where the record says: a long upload is not a slow test.
+  return testing && now - Date.parse(job.uploadedAt ?? job.startedAt) > SLOW_TEST_MS;
 }
 
 /** Publish again, while Studio cannot tell whether the last upload reached Genex. */
@@ -207,9 +225,9 @@ function failureOf(outcome: PublishOutcome, state: GenexPublishState, job: Genex
 }
 
 /**
- * Whether Studio should take the game's Genex cover as the dialog opens: the plugin reports its
- * cover (an older one does not), no shot is kept, none is being sent, no publish is running (it
- * shoots the cover itself), and the owner chose none on genex.games.
+ * Whether Studio should take the game's Genex cover as the dialog opens: the record has its cover,
+ * no shot is kept, none is being sent, no publish is running (it shoots the cover itself), and the
+ * owner chose none on genex.games.
  */
 export function needsCover(state: GenexPublishState): boolean {
   const cover = state.cover;
@@ -259,6 +277,10 @@ export function flipCover(choices: { shas: string[]; index: number }, step: 1 | 
   return shas[(from + step + shas.length) % shas.length] ?? null;
 }
 
+/** How far a running attempt's send is, as `{ progress }` to spread into the view; nothing when it says none. */
+const sendProgressOf = (job: GenexPublishJob | undefined, running: boolean): Pick<PublishView, "progress"> =>
+  running && job?.progress ? { progress: job.progress } : {};
+
 /** The dialog's view of a publish record, at `now`. */
 export function publishView(state: GenexPublishState, now = Date.now()): PublishView {
   const job = state.job;
@@ -278,6 +300,7 @@ export function publishView(state: GenexPublishState, now = Date.now()): Publish
     slow,
     phase: job && running ? (slow && WORDS.stillTesting) || WORDS.phase[job.phase] : "",
     startedAt: running && job ? job.startedAt : null,
+    ...sendProgressOf(job, running),
     steps: stepViews(job, running),
     chip: chipOf(state, outcome, now),
     primary: {
@@ -298,7 +321,124 @@ export function publishView(state: GenexPublishState, now = Date.now()): Publish
     needsCover: needsCover(state),
     canAskCover: canAskCover(state),
     withoutCover: goesWithoutCover(state),
+    check: null,
   };
+}
+
+/** The steps of an apps-only publish: Genex checks its apps before they go live; an admin's go at once. */
+const APPS_STEPS: readonly GenexPublishStep[] = [
+  GenexPublishStep.Prepare,
+  GenexPublishStep.Upload,
+  GenexPublishStep.Check,
+  GenexPublishStep.Live,
+];
+const ADMIN_STEPS: readonly GenexPublishStep[] = [
+  GenexPublishStep.Prepare,
+  GenexPublishStep.Upload,
+  GenexPublishStep.Live,
+];
+
+/** Where an apps-only publish stands on its steps: a running job's phase, or Genex's check after it. */
+function appsStepAt(view: PublishView, phase: GenexPublishPhase | undefined, checking: boolean): GenexPublishStep {
+  if (checking && !view.running) return GenexPublishStep.Check;
+  return phase === GenexPublishPhase.Uploading ? GenexPublishStep.Upload : GenexPublishStep.Prepare;
+}
+
+/** The chip a game's review puts on the banner, when it has one to say. */
+const REVIEW_CHIP: Partial<Record<GenexGameReview, { tone: ChipTone; text: string }>> = {
+  [GenexGameReview.TakenDown]: { tone: ChipTone.Failed, text: REVIEW_WORDS.dialog.chipTakenDown },
+  [GenexGameReview.NotApproved]: { tone: ChipTone.Failed, text: REVIEW_WORDS.dialog.chipNotApproved },
+  [GenexGameReview.WithPerson]: { tone: ChipTone.Quiet, text: REVIEW_WORDS.dialog.chipReview },
+  [GenexGameReview.Checking]: { tone: ChipTone.Quiet, text: REVIEW_WORDS.dialog.chipReview },
+};
+
+/** Where the publish-open action sends the browser (the plugin's `PublishLinkTarget`). */
+export const LinkTarget = { Gallery: "gallery" } as const;
+
+/**
+ * The chip a game's review puts on its banner. A game with only apps says In review, Not approved or
+ * Taken down; a game with a web version keeps the web game's chip, except Taken down, which hides the
+ * whole game: its apps' review shows on their rows and in the card.
+ */
+const reviewChip = (record: GenexReviewRecord | null, appsOnly: boolean) => {
+  if (!record) return undefined;
+  if (!appsOnly && record.state !== GenexGameReview.TakenDown) return undefined;
+  return REVIEW_CHIP[record.state];
+};
+
+/**
+ * A game with only apps whose app players get, while its publish record has no listing to say so
+ * yet: Live, since the newest app went live, never "Not published".
+ */
+function appsLiveChip(view: PublishView, record: GenexReviewRecord | null, now: number): PublishView["chip"] {
+  if (record?.state !== GenexGameReview.Live || view.chip?.tone !== ChipTone.Quiet) return view.chip;
+  const live = record.apps
+    .filter((app) => app.state === GenexAppReview.Live)
+    .map((app) => app.decidedAt ?? app.sentAt)
+    .filter((at): at is string => typeof at === "string" && Number.isFinite(Date.parse(at)))
+    .sort()
+    .at(-1);
+  return { tone: ChipTone.Live, text: live ? WORDS.chipLive(relativeTime(live, now)) : WORDS.chipLiveUndated };
+}
+
+/**
+ * The dialog's view of a game with apps, with Genex's review of them: an apps-only publish's steps are
+ * Prepare · Upload · Check · Go live (an admin's, whose apps go live at once, have no Check), the Check
+ * stays current while an app is checked or with a person, its clock counting from when it was sent,
+ * and the banner's chip says In review, Not approved or Taken down. A web game's view is never changed.
+ */
+export function withAppsReview(
+  view: PublishView,
+  input: { apps: boolean; appsOnly: boolean; admin: boolean; record: GenexReviewRecord | null; job?: GenexPublishJob },
+  now = Date.now(),
+): PublishView {
+  if (!input.apps) return view;
+  const chip = reviewChip(input.record, input.appsOnly);
+  const said = chip && !view.running ? { ...view, chip } : view;
+  if (!input.appsOnly) return said;
+  const reviewed = view.running ? said : { ...said, chip: appsLiveChip(said, input.record, now) };
+  const since = checkingSince(input.record);
+  const checking = since !== null;
+  const steps = input.admin ? ADMIN_STEPS : APPS_STEPS;
+  if (!view.running && !checking) return reviewed;
+  const at = steps.indexOf(appsStepAt(view, input.job?.phase, checking));
+  const person = input.record?.state === GenexGameReview.WithPerson;
+  const slow = !person && now - Date.parse(since ?? "") >= SLOW_CHECK_MS;
+  const check = since !== null && !view.running ? { since, slow, person } : null;
+  return {
+    ...reviewed,
+    steps: steps.map((step, index) => ({ step, label: WORDS.step[step], state: stepStateAt(index, at) })),
+    check,
+  };
+}
+
+/** The apps Genex holds in `record` (checked or with a person), by their key. */
+export function heldApps(record: GenexReviewRecord | null): Map<string, GenexReviewApp> {
+  const held = new Map<string, GenexReviewApp>();
+  if (!record || record.takedown) return held;
+  for (const app of record.apps)
+    if (app.state === GenexAppReview.Checking || app.state === GenexAppReview.WithPerson) held.set(appKey(app), app);
+  return held;
+}
+
+/** An app that went live while the dialog watched it, and whether players had an earlier build of it. */
+export interface WentLive {
+  app: GenexReviewApp;
+  update: boolean;
+}
+
+/**
+ * The app Genex held when the dialog last read it (`held`) that `record` says is live now; null for
+ * none. An app already live when the dialog opened is never one: only a check the dialog watched end
+ * is celebrated.
+ */
+export function wentLive(held: ReadonlyMap<string, GenexReviewApp>, record: GenexReviewRecord | null): WentLive | null {
+  if (!record || record.takedown) return null;
+  for (const app of record.apps) {
+    const before = held.get(appKey(app));
+    if (before && app.state === GenexAppReview.Live) return { app, update: before.players !== undefined };
+  }
+  return null;
 }
 
 /**
@@ -352,9 +492,23 @@ export function publishReport(project: string, title: string, view: PublishView)
   return { text: text.slice(0, FEEDBACK_TEXT_MAX_CHARS), screen: FeedbackScreen.Chat, appLogs: true, chatId: null };
 }
 
-/** The name the dialog offers: the one the game is listed under, else Studio's title for it, else its folder. */
-export function offeredTitle(state: GenexPublishState | null, gameTitle: string | undefined, project: string): string {
-  return state?.title ?? cleanGenexTitle(gameTitle) ?? defaultGenexTitle(project);
+/** The game as Studio names it: its title, and whether that title still waits for its first idea. */
+export type StudioName = { title?: string; provisional?: boolean };
+
+/**
+ * The name the dialog offers: one the game was given in Studio that Genex hasn't taken yet, else
+ * the one Genex lists the game under (a rename in Studio, on its page or in Play gives it there),
+ * else the game's name in Studio, unless that name still waits for the game's first idea; else the
+ * one Studio listed it under, Studio's title, its folder. A listed name that is only the game's
+ * link is no name anyone chose (an older link change named the game after its link), so Studio's
+ * name wins over it.
+ */
+export function offeredTitle(state: GenexPublishState | null, game: StudioName | undefined, project: string): string {
+  const named = game?.provisional ? null : cleanGenexTitle(game?.title);
+  const listed = state?.hostedTitle === state?.slug ? undefined : state?.hostedTitle;
+  return (
+    state?.renamed ?? listed ?? named ?? state?.title ?? cleanGenexTitle(game?.title) ?? defaultGenexTitle(project)
+  );
 }
 
 /** What Publish asks for before it can publish: a Genex account, or nothing. */

@@ -13,7 +13,7 @@
 
 import type { CallMaking, MakingJob } from "./asset-making.ts";
 import type { GenexBlocked } from "./genex.ts";
-import type { CallCutOff } from "./plugins.ts";
+import type { CallCutOff, PluginCallFailure } from "./plugins.ts";
 
 export type AssetKind = "image" | "model" | "audio" | "video" | "other";
 /** `genex` and `blender` are the two the studio ships; any other value is a plugin id. */
@@ -69,6 +69,25 @@ export interface ProjectAsset {
    */
   building?: { runId: string; workspace: string };
 }
+
+/**
+ * Why a game's asset inventory could not be read, as the failure crosses IPC and analytics count it
+ * (`assets_inventory_failed`): by the file system's answer, never its words or a path. Wire values:
+ * never rename one.
+ */
+export const AssetInventoryFailure = {
+  /** Another program holds a file open (Windows: Unity or a virus scanner), `EBUSY`. */
+  FileBusy: "inventory_file_busy",
+  /** The system refused the read, `EPERM` or `EACCES` (Windows also answers a held file so). */
+  AccessDenied: "inventory_access_denied",
+  /** A file or folder went away while it was read, `ENOENT` or `ENOTDIR`. */
+  Missing: "inventory_missing",
+  /** The app had too many files open, `EMFILE` or `ENFILE`. */
+  TooManyOpen: "inventory_too_many_open",
+  /** Anything else. */
+  Failed: "inventory_failed",
+} as const;
+export type AssetInventoryFailure = (typeof AssetInventoryFailure)[keyof typeof AssetInventoryFailure];
 
 export interface ProjectAssets {
   project: string;
@@ -200,6 +219,10 @@ export function digestOperation(args: string | undefined): string | null {
 export interface PluginToolFinishedPayload extends PluginToolStartedPayload {
   ok: boolean;
   error?: string;
+  /** Why a failed call failed: set on every failure this version records, never on an answer. */
+  failure?: PluginCallFailure;
+  /** The plugin's own error code when its failure gave one shaped like a code (`pluginErrorCode`). */
+  errorCode?: string;
   /** A digest of the result record, at most 4 KiB, with base64 payloads removed. */
   result: string;
   /** How many images came back with the result — counted before they are stripped from the record. */

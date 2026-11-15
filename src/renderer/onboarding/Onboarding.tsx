@@ -1,11 +1,14 @@
 /**
  * First launch: one welcome screen in two states, then the subscription to build with.
  *
- * Welcome: a prompt types itself into a copy of the composer (Loop on) and the pointer sends
+ * Welcome: a prompt types itself into a copy of the composer and the pointer sends
  * it; the prompt lands on the lead's sheet, then the workers and a second opinion join (art.ts).
  * Clicking the composer takes the person's own idea, which waits in the real composer afterwards.
  * Connect: Claude Code and ChatGPT sign in through the same flows as Settings → Model Providers.
- * Each has one button that hugs its words and changes them as the sign-in moves on. Under them,
+ * Each has one button that hugs its words and changes them as the sign-in moves on. Where
+ * genex.games offers it, Use Genex beside them builds with Genex credits: it opens Genex's screen
+ * (GenexScreen.tsx), which signs in to Genex in the browser and becomes Genex ready; the first
+ * message asks for a plan when the account has none. Under them,
  * "or use" offers local models (the Best fit for this Mac downloads), OpenRouter (browser sign-in
  * or a pasted key), OpenCode (installs, then its free models run), Grok Build and Cursor (each
  * installs, then signs in to the person's account), each on its own screen. The first connection
@@ -72,6 +75,7 @@ import { prefersReducedMotion, REDUCED_MOTION_QUERY } from "../ui/media-queries.
 import { ArtCanvas, type Draw } from "./ArtCanvas.tsx";
 import { CliScreen } from "./CliScreen.tsx";
 import { useCli } from "./cli-way.tsx";
+import { type Genex, GenexScreen, useGenex } from "./GenexScreen.tsx";
 import { OpenCodeScreen, useFreeModel, useOpenCode } from "./OpenCodeScreen.tsx";
 import { OpenRouterScreen, useOpenRouter } from "./OpenRouterScreen.tsx";
 import { OtherWays } from "./OtherWays.tsx";
@@ -413,7 +417,7 @@ type WelcomeModel = ReturnType<typeof useWelcome>;
 
 /** The composer copy on the stage: the idea, the composer's icons and Send. */
 function WelcomeComposer({ w }: { w: WelcomeModel }): JSX.Element {
-  const { beat, phase, writing, draft, value, composerOn, run } = w;
+  const { beat, phase, writing, draft, value, composerOn } = w;
   const pressing = beat === 0 && phase === 3;
   const nothingToSend = writing && !draft.trim();
   return (
@@ -441,11 +445,6 @@ function WelcomeComposer({ w }: { w: WelcomeModel }): JSX.Element {
       <div className="flex min-w-0 items-center gap-1" aria-hidden="true">
         <span className="composer-icon composer-add">
           <Icon name="plus" />
-        </span>
-        {/* A new key each time the bar comes back, so the Loop's ∞ draws itself once more. */}
-        <span key={`${run}:${beat}`} className="onboarding-loop composer-text-button">
-          <Icon name="infinity" />
-          <span className="onboarding-loop-label">Loop</span>
         </span>
         <span className="min-w-0 flex-1" />
       </div>
@@ -787,17 +786,17 @@ function CodeForm({
   );
 }
 
-/** What a subscription's button shows for everything but the code box. */
-function ConnectContent({
+/** What a choice's button shows for everything but the code box. */
+function ConnectContent<Id extends string>({
   id,
   view,
   onAct,
   onCancel,
 }: {
-  id: Subscription;
+  id: Id;
   view: Exclude<ConnectView, { kind: typeof ConnectViewKind.Code }>;
-  onAct: (id: Subscription, view: ConnectView) => void;
-  onCancel: (id: Subscription) => void;
+  onAct: (id: Id, view: ConnectView) => void;
+  onCancel: (id: Id) => void;
 }): JSX.Element {
   if (view.kind === ConnectViewKind.Action)
     return (
@@ -895,6 +894,31 @@ function ConnectButton({
           {codeError}
         </p>
       )}
+    </div>
+  );
+}
+
+/** Building with Genex's button: Use Genex, which opens Genex's screen, then that screen's sign-in as it stands. */
+function GenexChoice({
+  genex,
+  slot,
+  onOpen,
+}: {
+  genex: Genex;
+  slot: RefObject<HTMLDivElement | null>;
+  /** Use Genex was pressed: Genex's screen opens. */
+  onOpen: () => void;
+}): JSX.Element {
+  const { view } = genex;
+  const use = (): void => {
+    genex.pick();
+    onOpen();
+  };
+  return (
+    <div ref={slot} className="onboarding-choice" data-genex-choice={view.kind}>
+      <Hug swap={`${view.kind}:${"label" in view ? view.label : ""}`}>
+        <ConnectContent id={EngineId.Genex} view={view} onAct={use} onCancel={genex.cancel} />
+      </Hug>
     </div>
   );
 }
@@ -998,30 +1022,43 @@ function useRecheckOnReturn(s: Subscriptions) {
   }, [s.codexLogin?.phase]);
 }
 
+/** Each mark's button on the connect screen; null for a mark the screen leaves out. */
+type MarkViews = Record<Provider, ConnectView | null>;
+
 /** When each mark connected here (not one that was already connected on arrival), in performance.now() time. */
-function useConnectedAt(views: Record<Subscription, ConnectView>): RefObject<Record<Provider, number>> {
+function useConnectedAt(views: MarkViews): RefObject<Record<Provider, number>> {
   const on = {
-    [Provider.Claude]: views[EngineId.ClaudeCode].kind === ConnectViewKind.On,
-    [Provider.Codex]: views[EngineId.Codex].kind === ConnectViewKind.On,
+    [Provider.Claude]: views.claude?.kind === ConnectViewKind.On,
+    [Provider.Codex]: views.codex?.kind === ConnectViewKind.On,
+    [Provider.Genex]: views.genex?.kind === ConnectViewKind.On,
   };
-  const connectedAt = useRef<Record<Provider, number>>({ [Provider.Claude]: -1, [Provider.Codex]: -1 });
+  const connectedAt = useRef<Record<Provider, number>>({
+    [Provider.Claude]: -1,
+    [Provider.Codex]: -1,
+    [Provider.Genex]: -1,
+  });
   const seen = useRef<Record<Provider, boolean> | null>(null);
   useEffect(() => {
     const before = seen.current;
     seen.current = on;
     if (!before) return;
     for (const id of MARK_PROVIDERS) if (on[id] && !before[id]) connectedAt.current[id] = performance.now();
-  }, [on.claude, on.codex]);
+  }, [on.claude, on.codex, on.genex]);
   return connectedAt;
 }
 
 /** Each mark stands over its own button, wherever the row puts it: the buttons' centres on the art. */
 function useMarkPlaces() {
   const area = useRef<HTMLDivElement>(null);
-  const slots = { [Provider.Claude]: useRef<HTMLDivElement>(null), [Provider.Codex]: useRef<HTMLDivElement>(null) };
+  const slots = {
+    [Provider.Claude]: useRef<HTMLDivElement>(null),
+    [Provider.Codex]: useRef<HTMLDivElement>(null),
+    [Provider.Genex]: useRef<HTMLDivElement>(null),
+  };
   const markX = useRef<Record<Provider, number>>({
     [Provider.Claude]: MARKS.width / 2 - 128,
     [Provider.Codex]: MARKS.width / 2 + 128,
+    [Provider.Genex]: MARKS.width / 2 + 256,
   });
   const [placed, setPlaced] = useState(0);
   useLayoutEffect(() => {
@@ -1036,20 +1073,21 @@ function useMarkPlaces() {
     };
     measure();
     const observer = new ResizeObserver(measure);
-    for (const element of [area.current, slots.claude.current, slots.codex.current])
+    for (const element of [area.current, slots.claude.current, slots.codex.current, slots.genex.current])
       if (element) observer.observe(element);
     return () => observer.disconnect();
   }, []);
   return { area, slots, markX, placed };
 }
 
-/** The connect art: both marks in their buttons' states, popping as they connect. */
-function useMarksArt(views: Record<Subscription, ConnectView>, markX: RefObject<Record<Provider, number>>) {
+/** The connect art: each mark in its button's state, popping as it connects. */
+function useMarksArt(views: MarkViews, markX: RefObject<Record<Provider, number>>) {
   const connectedAt = useConnectedAt(views);
-  const marks: Record<Provider, MarkState> = {
-    [Provider.Claude]: markState(views[EngineId.ClaudeCode]),
-    [Provider.Codex]: markState(views[EngineId.Codex]),
-  };
+  const marks: Partial<Record<Provider, MarkState>> = {};
+  for (const id of MARK_PROVIDERS) {
+    const view = views[id];
+    if (view) marks[id] = markState(view);
+  }
   const marksNow = useRef(marks);
   marksNow.current = marks;
   const born = useRef(performance.now());
@@ -1060,7 +1098,11 @@ function useMarksArt(views: Record<Subscription, ConnectView>, markX: RefObject<
       ctx,
       marksNow.current,
       now === null ? 0 : (now - born.current) / SECOND_MS,
-      { [Provider.Claude]: age(Provider.Claude), [Provider.Codex]: age(Provider.Codex) },
+      {
+        [Provider.Claude]: age(Provider.Claude),
+        [Provider.Codex]: age(Provider.Codex),
+        [Provider.Genex]: age(Provider.Genex),
+      },
       markX.current,
       palette,
     );
@@ -1076,12 +1118,18 @@ function Connect({
   back,
   onBack,
   onWay,
+  onGenex,
   onSkip,
   onStart,
   onTerminal,
+  genex,
 }: {
   engines: EngineDescriptor[];
   onEnginesRefresh: () => void;
+  /** Building with Genex's choice beside the subscriptions. */
+  genex: Genex;
+  /** Use Genex was pressed: Genex's screen opens. */
+  onGenex: () => void;
   /** The row's buttons under the subscriptions: local models, OpenRouter, OpenCode, Grok Build and Cursor. */
   ways: Record<OtherWay, WayView>;
   anyOn: boolean;
@@ -1103,7 +1151,10 @@ function Connect({
   useNotStartingShown(subscriptions.claudeAuth.engine, ProviderSurface.Onboarding);
   useNotStartingShown(subscriptions.codexAuth.engine, ProviderSurface.Onboarding);
   const { area, slots, markX, placed } = useMarkPlaces();
-  const { marks, drawArt } = useMarksArt(views, markX);
+  const { marks, drawArt } = useMarksArt(
+    { claude: views[EngineId.ClaudeCode], codex: views[EngineId.Codex], genex: genex.offered ? genex.view : null },
+    markX,
+  );
 
   return (
     <section
@@ -1111,15 +1162,19 @@ function Connect({
     >
       <TopBar onBack={onBack} onSkip={anyOn ? undefined : onSkip} />
       <h1 ref={heading} tabIndex={-1} className="onboarding-title">
-        {t("Bring your AI subscription")}
+        {genex.offered ? t("Choose how Genex builds") : t("Bring your AI subscription")}
       </h1>
-      <p className="onboarding-lede">{t("Genex builds with the Claude or ChatGPT plan you already pay for.")}</p>
+      <p className="onboarding-lede">
+        {genex.offered
+          ? t("Connect the Claude or ChatGPT plan you already pay for, or build with Genex credits.")
+          : t("Genex builds with the Claude or ChatGPT plan you already pay for.")}
+      </p>
       <div ref={area} className="onboarding-marks">
         <ArtCanvas
           width={MARKS.width}
           height={MARKS.height}
           draw={drawArt}
-          still={`${marks.claude}:${marks.codex}:${placed}`}
+          still={`${marks.claude}:${marks.codex}:${marks.genex}:${placed}`}
         />
         <div className="onboarding-choices">
           {SUBSCRIPTIONS.map((id) => (
@@ -1133,11 +1188,12 @@ function Connect({
               onPasteCode={codeFallback.pasteCode}
             />
           ))}
+          {genex.offered && <GenexChoice genex={genex} slot={slots[Provider.Genex]} onOpen={onGenex} />}
         </div>
       </div>
       <OtherWays views={ways} onOpen={onWay} />
       <p role="alert" className="onboarding-problem onboarding-connect-problem">
-        {shown ? problemWords(shown) : ""}
+        {problemLine(shown ?? genex.problem)}
       </p>
       <StartBuilding anyOn={anyOn} onStart={onStart} />
     </section>
@@ -1375,10 +1431,19 @@ function useOtherWays(engines: EngineDescriptor[], onEnginesRefresh: () => void)
   return { local, router, code, grok, cursor, ways };
 }
 
-/** Whether anything is ready to build with, and whether anything besides OpenCode's free models is. */
-function readiness(engines: EngineDescriptor[], localInstalled: boolean): { othersOn: boolean; anyOn: boolean } {
+/** The connect screen's problem line: what went wrong, in plain words, or nothing. */
+const problemLine = (problem: string | null | undefined): string => (problem ? problemWords(problem) : "");
+
+/**
+ * Whether anything is ready to build with, and whether anything besides OpenCode's free models is.
+ * Genex counts once its screen signed in: its first message asks for what it still needs.
+ */
+function readiness(
+  engines: EngineDescriptor[],
+  chosen: { localInstalled: boolean; genexOn: boolean },
+): { othersOn: boolean; anyOn: boolean } {
   const ready = (id: string) => engines.find((engine) => engine.id === id)?.status.code === EngineStatusCode.Ready;
-  const othersOn = localInstalled || BUILDS_WITH.some(ready);
+  const othersOn = chosen.localInstalled || chosen.genexOn || BUILDS_WITH.some(ready);
   // OpenCode's free models count: a ready OpenCode is something to build with.
   return { othersOn, anyOn: othersOn || ready(EngineId.OpenCode) };
 }
@@ -1413,24 +1478,40 @@ function useWelcomeEnd(
   return { end, next: journey.next };
 }
 
-/** Focus comes to the welcome once nothing waits above it, and each of its screens is reported as it shows. */
+/**
+ * Focus comes to the welcome's layer (the ref it answers with) once nothing waits above it, each
+ * of its screens is reported as it shows, and past the first, home's background gets ready behind
+ * them.
+ */
 function useWelcomePresence(
-  root: RefObject<HTMLDivElement | null>,
   held: boolean,
   screen: WelcomeScreen,
   onScreen: ((screen: WelcomeScreen) => void) | undefined,
-): void {
+): RefObject<HTMLDivElement | null> {
+  const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!held) root.current?.focus({ preventScroll: true });
   }, [held, root]);
   useEffect(() => {
     onScreen?.(screen);
   }, [onScreen, screen]);
+  // Past the welcome, home's background gets ready behind these screens, so home opens on it.
+  useEffect(() => {
+    if (screen !== WelcomeScreen.Welcome) void preloadHomeBackdrop();
+  }, [screen]);
+  return root;
 }
 
 /** The welcome's local-server link: Model Providers, where a server is added. */
 const openServerSettings = (): void =>
   openSettings(SettingsSection.Providers, undefined, SettingsOpenedFrom.WelcomeServer);
+
+/** The screen the welcome shows, and whether it was reached by going back (it enters from the other side). */
+interface ScreenShown {
+  id: WelcomeScreen;
+  back: boolean;
+}
+const FIRST_SCREEN: ScreenShown = { id: WelcomeScreen.Welcome, back: false };
 
 export function Onboarding({
   engines,
@@ -1451,23 +1532,16 @@ export function Onboarding({
   /** The welcome's screen changed (usage analytics names it). */
   onScreen?: (screen: WelcomeScreen) => void;
 }): JSX.Element {
-  const [screen, setScreen] = useState<{ id: WelcomeScreen; back: boolean }>({
-    id: WelcomeScreen.Welcome,
-    back: false,
-  });
+  const [screen, setScreen] = useState<ScreenShown>(FIRST_SCREEN);
   const [idea, setIdea] = useState("");
-  const root = useRef<HTMLDivElement>(null);
   const { local, router, code, grok, cursor, ways } = useOtherWays(engines, onEnginesRefresh);
+  const genex = useGenex(engines);
   const { closing, leaving, finish } = useWelcomeExit(idea, onReady, onFinish);
-  const { othersOn, anyOn } = readiness(engines, local.installed);
+  const { othersOn, anyOn } = readiness(engines, { localInstalled: local.installed, genexOn: genex.on });
   const freeModel = useFreeModel(code, engines, othersOn);
   const { end, next } = useWelcomeEnd({ engines, idea, anyOn, held, screen }, freeModel, finish);
 
-  useWelcomePresence(root, held, screen.id, onScreen);
-  // Past the welcome, home's background gets ready behind these screens, so home opens on it.
-  useEffect(() => {
-    if (screen.id !== WelcomeScreen.Welcome) void preloadHomeBackdrop();
-  }, [screen.id]);
+  const root = useWelcomePresence(held, screen.id, onScreen);
   const go = (id: WelcomeScreen, back = false) => setScreen({ id, back });
   // Every screen after Connect goes back to it, and skips or starts the same way.
   const after = {
@@ -1501,15 +1575,19 @@ export function Onboarding({
             engines={engines}
             onEnginesRefresh={onEnginesRefresh}
             ways={ways}
+            genex={genex}
             anyOn={anyOn}
             back={screen.back}
             onBack={() => go(WelcomeScreen.Welcome, true)}
             onWay={(way) => go(WAY_SCREEN[way])}
+            onGenex={() => go(WelcomeScreen.Genex)}
             onSkip={() => end(WelcomeExit.Skip)}
             onStart={() => end(WelcomeExit.Start)}
             onTerminal={() => end(WelcomeExit.Terminal, () => window.dispatchEvent(new Event(SHOW_TERMINAL_EVENT)))}
           />
         );
+      case WelcomeScreen.Genex:
+        return <GenexScreen key={WelcomeScreen.Genex} genex={genex} {...after} />;
       case WelcomeScreen.OpenRouter:
         return <OpenRouterScreen key={WelcomeScreen.OpenRouter} router={router} {...after} />;
       case WelcomeScreen.OpenCode:

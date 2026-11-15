@@ -13,8 +13,9 @@ import { publishesAsWebGame } from "../../shared/project-workspace.ts";
 import { cleanGenexTitle, GENEX_PLUGIN_ID, GenexAction } from "../../shared/genex.ts";
 import { type ExportReview, type PluginBinding, PluginSourceKind } from "../../shared/plugins.ts";
 import type { StudioCore } from "../studio-core.ts";
+import { CLOUD_PLATFORMS } from "../../plugins/genex/cloud-build.ts";
 import { pinnedCliSendsApps } from "../../plugins/genex/native-publish.ts";
-import { publishedApps } from "./publish-platforms.ts";
+import { type AppsChoice, publishedApps } from "./publish-platforms.ts";
 import { t } from "../../shared/i18n.ts";
 
 /** Why Publish is refused before Genex is asked anything. */
@@ -26,6 +27,7 @@ const MESSAGE = {
     t("{title} builds in Unreal; publishing an Unreal game isn't supported yet.", { title }),
   NotWebGame: (title: string) => t("{title} isn't a web game, so Genex can't publish it yet.", { title }),
   NoApps: () => t("This game has no Mac, Windows or Linux app ready to publish"),
+  NoCloudPlatform: () => t("Genex builds only Windows apps on its own computers"),
 } as const;
 
 /** Why a game can't be published at all, by code: callers act on it, never on its words. */
@@ -44,6 +46,8 @@ export class PublishRefusedError extends Error {
 
 type InstalledPlugin = ReturnType<StudioCore["plugins"]["list"]>[number];
 type DialogCore = Pick<StudioCore, "games" | "plugins" | "pluginBinding" | "publicCopyFiles" | "withApprovedExport">;
+/** What binding a game to Studio's Genex needs. */
+type BindingCore = Pick<StudioCore, "plugins" | "pluginBinding">;
 
 /**
  * Studio's own Genex, installed: the only plugin whose publish the dialog runs. On or off: Publish
@@ -83,8 +87,28 @@ export async function assertPublishable(core: Pick<StudioCore, "games">, project
 /** The dialog's Allow remixing as the publish's argument: sent only when the dialog said yes or no. */
 const remixArg = (remix: unknown): { remix?: boolean } => (typeof remix === "boolean" ? { remix } : {});
 
+/**
+ * The dialog's word that this web build replaces a page that shows only the game's apps (the line
+ * it showed above the press) as the publish's argument: sent only when it said so, never assumed.
+ */
+const replaceArg = (replace: unknown): { replaceNativePage?: true } =>
+  replace === true ? { replaceNativePage: true } : {};
+
+/** The systems an app Publish sends can be for. */
+const APP_PLATFORMS: ReadonlySet<string> = new Set(["mac", "windows", "linux"]);
+
+/**
+ * The Publish card's switches as the send's choice: only the platforms it names go. Absent or not a
+ * list, every ready app goes, as before the card; a name that is no app platform is dropped.
+ */
+export function platformsChoice(platforms: unknown): AppsChoice {
+  if (!Array.isArray(platforms)) return {};
+  const named = platforms.filter((one): one is string => typeof one === "string" && APP_PLATFORMS.has(one));
+  return { platforms: [...new Set(named)] };
+}
+
 /** The game the dialog names, bound as Studio allows it to be opened, while Studio's Genex is installed. */
-async function boundGame(core: DialogCore, project: unknown): Promise<PluginBinding> {
+async function boundGame(core: BindingCore, project: unknown): Promise<PluginBinding> {
   if (typeof project !== "string" || !project) throw new Error(MESSAGE.NoGame());
   if (!core.plugins.list().some(isUsableGenex)) throw new Error(MESSAGE.GenexUnavailable());
   const binding = await core.pluginBinding(project);
@@ -108,7 +132,8 @@ export async function publishReview(core: DialogCore, project: unknown): Promise
 /**
  * Publish `project` to the Genex gallery under `title` (cleaned; the plugin picks the name when none is
  * left), after the person approved `review` in the dialog. The game's ready apps, which the dialog
- * lists above its press, go once the web build is public (`publishedApps`).
+ * lists above its press, go once the web build is public (`publishedApps`). `replaceNativePage`: the
+ * dialog said this web build takes the place of a page that shows only the game's apps.
  */
 export async function publishFromDialog(
   core: DialogCore,
@@ -117,12 +142,19 @@ export async function publishFromDialog(
   title?: unknown,
   sendsApps = pinnedCliSendsApps(),
   remix?: unknown,
+  replaceNativePage?: unknown,
+  platforms?: unknown,
 ): Promise<void> {
   if (!isExportReview(review)) throw new Error(MESSAGE.NoFileList());
   const binding = await dialogBinding(core, project);
   const name = cleanGenexTitle(title);
-  const native = await publishedApps(core, binding.project, sendsApps);
-  const args = { ...(name ? { title: name } : {}), ...(native.length > 0 ? { native } : {}), ...remixArg(remix) };
+  const native = await publishedApps(core, binding.project, sendsApps, platformsChoice(platforms));
+  const args = {
+    ...(name ? { title: name } : {}),
+    ...(native.length > 0 ? { native } : {}),
+    ...remixArg(remix),
+    ...replaceArg(replaceNativePage),
+  };
   // Genex exports inside this call, so the approval lives exactly as long as it.
   await core.withApprovedExport(GENEX_PLUGIN_ID, binding.project, review, () =>
     core.plugins.action(GENEX_PLUGIN_ID, GenexAction.PublishGallery, args, binding),
@@ -132,8 +164,10 @@ export async function publishFromDialog(
 /**
  * Publish a game that has only apps, no web build (a Unity or Unreal game built for the Mac), from
  * the dialog: its ready apps go to Genex and the game is listed under `title`. The rows the dialog
- * lists above its press name exactly these apps, so the press is the consent. Refused when the game
- * has no ready app, or Studio's Genex CLI cannot send apps.
+ * lists above its press name exactly these apps, so the press is the consent. `release` names the
+ * platforms whose app Genex built on its own computers and keeps, or still builds: players get each
+ * with this publish, or as soon as it is built. Refused when the game has no ready app and none to
+ * release, or Studio's Genex CLI cannot send apps.
  */
 export async function publishAppsFromDialog(
   core: DialogCore,
@@ -141,15 +175,79 @@ export async function publishAppsFromDialog(
   title?: unknown,
   sendsApps = pinnedCliSendsApps(),
   remix?: unknown,
+  platforms?: unknown,
+  release?: unknown,
 ): Promise<void> {
   const binding = await boundGame(core, project);
-  const native = await publishedApps(core, binding.project, sendsApps);
-  if (native.length === 0) throw new Error(MESSAGE.NoApps());
+  const native = await publishedApps(core, binding.project, sendsApps, platformsChoice(platforms));
+  const released = cloudPlatforms(release);
+  if (native.length === 0 && released.length === 0) throw new Error(MESSAGE.NoApps());
   const name = cleanGenexTitle(title);
   await core.plugins.action(
     GENEX_PLUGIN_ID,
     GenexAction.PublishApps,
-    { native, ...(name ? { title: name } : {}), ...remixArg(remix) },
+    {
+      native,
+      ...(released.length > 0 ? { release: released } : {}),
+      ...(name ? { title: name } : {}),
+      ...remixArg(remix),
+    },
     binding,
   );
 }
+
+/** The systems in `platforms` that Genex builds apps for, each once; none when it is no list. */
+function cloudPlatforms(platforms: unknown): string[] {
+  if (!Array.isArray(platforms)) return [];
+  return [...new Set(platforms.filter((one): one is string => typeof one === "string" && CLOUD_PLATFORMS.has(one)))];
+}
+
+/**
+ * Ask Genex, from the dialog, to build `project`'s `platform` app on its own computers: the app this
+ * computer can't make (an Unreal game's Windows app on a Mac). The row's press is the consent to send
+ * the game's project privately for it, as Publish's is to send its apps. With `keep` (the Publish
+ * card's Build), Genex keeps what it builds until a publish asks for it. Refused for a system Genex
+ * builds no app for, before Genex is asked anything.
+ */
+export async function cloudBuildFromDialog(
+  core: DialogCore,
+  project: unknown,
+  platform: unknown,
+  keep?: unknown,
+): Promise<void> {
+  if (typeof platform !== "string" || !CLOUD_PLATFORMS.has(platform)) throw new Error(MESSAGE.NoCloudPlatform());
+  const binding = await boundGame(core, project);
+  const args = { platform, ...(keep === true ? { keep: true } : {}) };
+  await core.plugins.action(GENEX_PLUGIN_ID, GenexAction.CloudBuild, args, binding);
+}
+
+/**
+ * The game's new name in Studio, given to Genex too: a game already on Genex is listed under it at
+ * once (its title alone; the link stays), as the Publish dialog's own rename does, so the game has
+ * one name everywhere. A game not on Genex is asked nothing: its first publish takes Studio's name.
+ * Best effort and never in the person's way: signed out or unanswered, the rename in Studio stands,
+ * the game's publish record keeps the name Genex hasn't taken, the Publish dialog offers it and the
+ * next publish sends it.
+ */
+export function renameOnGenex(core: BindingCore, project: string, title: string): Promise<void> {
+  const name = cleanGenexTitle(title);
+  if (!name) return Promise.resolve();
+  // One game's renames reach Genex in the order they were made, so the last name is the one listed.
+  const before = renamesUnderWay.get(project) ?? Promise.resolve();
+  const sent = before.then(async () => {
+    try {
+      const binding = await boundGame(core, project);
+      await core.plugins.action(GENEX_PLUGIN_ID, GenexAction.PublishName, { title: name, fromStudio: true }, binding);
+    } catch {
+      // The publish record keeps its old name; the next publish relists the game under Studio's.
+    }
+  });
+  renamesUnderWay.set(project, sent);
+  void sent.then(() => {
+    if (renamesUnderWay.get(project) === sent) renamesUnderWay.delete(project);
+  });
+  return sent;
+}
+
+/** Each game's rename on its way to Genex, the newest last. */
+const renamesUnderWay = new Map<string, Promise<void>>();

@@ -22,6 +22,9 @@ import {
   setupPluginOf,
   setupStepChanges,
   setupStepId,
+  SLOW_GRAPH_MS,
+  SLOW_GRAPH_REPEAT_MS,
+  slowGraphProperties,
   type StepStates,
   stepStateOf,
 } from "../../src/renderer/analytics/builds-stage.ts";
@@ -37,9 +40,11 @@ import {
   buildsUiEvents,
   firstBuildsMade,
   inventoryFailures,
+  type InventoryStreaks,
   type JobPhases,
   jobPhaseChanges,
   LiveOutcome,
+  LiveWaitSaw,
   LiveTrigger,
   NodeKind,
   PartTrouble,
@@ -53,6 +58,7 @@ import {
 import type { StepsCard } from "../../src/renderer/chat/engine-steps.ts";
 import { GraphSelection } from "../../src/renderer/panels/inspector/selection.ts";
 import { MakingKind, MakingPhase } from "../../src/shared/asset-making.ts";
+import { AssetInventoryFailure } from "../../src/shared/game-assets.ts";
 import {
   AutoResumeCause,
   CustomEvent,
@@ -66,7 +72,7 @@ import { type EventEnvelope, EventKind } from "../../src/shared/event-log.ts";
 import { FinishCheckStep, StopWhy } from "../../src/shared/finish-check.ts";
 import { JobRole, JobState } from "../../src/shared/jobs.ts";
 import { LiveBehindReason } from "../../src/shared/live-behind.ts";
-import { PluginSourceKind } from "../../src/shared/plugins.ts";
+import { PluginCallFailure, PluginSourceKind } from "../../src/shared/plugins.ts";
 import { ReadyVia } from "../../src/shared/preview-contract.ts";
 import { LoopProfile } from "../../src/shared/project-facts.ts";
 import { EngineId } from "../../src/shared/providers.ts";
@@ -112,7 +118,9 @@ const only = (found: readonly BuildsTracked[]): BuildsTracked => {
 };
 
 describe("runs from the log", () => {
-  it("sends a Loop's start once its autopilot_started says how it works, with its run_started's budgets", () => {
+  // Intentionally flipped: the start carried the Loop's hours and until-satisfied flag, the person's
+  // Mode pick; with no Loop control a start sends neither, only its completion policy.
+  it("sends a Loop's start once its autopilot_started says how it works, with its run_started's completion policy", () => {
     const memory = memoryWith();
     const found = read(memory, [
       record(
@@ -130,8 +138,6 @@ describe("runs from the log", () => {
       event: BuildsEvent.RunStarted,
       properties: {
         mode: BuildMode.Loop,
-        loop_hours: 2,
-        until_satisfied: false,
         completion_policy: null,
         director: true,
         facets: 0,
@@ -220,7 +226,7 @@ describe("runs from the log", () => {
       victory: false,
       duration_ms: 80 * MINUTE_MS,
       worked_ms: 20 * MINUTE_MS,
-      loop_hours: 1.5,
+      // Flipped (no clock): `loop_hours: 1.5` was the close's hours; a Loop has none to tell.
       rounds_accepted: 2,
       rounds_rejected: 1,
       profile: LoopProfile.Web,
@@ -339,7 +345,7 @@ describe("runs from the log", () => {
       step: FinishCheckStep.Rejected,
       rejections: 2,
       stopped: false,
-      time_left: true,
+      // Flipped (no clock): `time_left: true` was the record's working time left; a settle names none.
       done_count: 1,
       not_done_count: 2,
       reviewer_engine: EngineId.ClaudeCode,
@@ -498,6 +504,37 @@ describe("chat builds, jobs and plugin calls from the log", () => {
       ],
     );
   });
+
+  it("says why a call failed, with a catalog plugin's own error code and never a local one's", () => {
+    const plugins = () => [
+      { manifest: { id: "roblox" }, source: PluginSourceKind.Bundled },
+      { manifest: { id: "my-tools" }, source: PluginSourceKind.Local },
+    ];
+    const call = (pluginId: string, payload: Record<string, unknown>, ms: number) =>
+      record(CustomEvent.PluginTool, { pluginId, images: 0, ...payload }, ms);
+    const found = read(memoryWith(plugins), [
+      call("roblox", { ok: false, failure: PluginCallFailure.Plugin, errorCode: "not-bound" }, 0),
+      call("roblox", { ok: false, failure: PluginCallFailure.InvalidArguments }, 1),
+      call("my-tools", { ok: false, failure: PluginCallFailure.Plugin, errorCode: "alice-secret" }, 2),
+      call("roblox", { ok: false, failure: "made-up", errorCode: "/Users/alice/x" }, 3),
+      call("roblox", { ok: false }, 4),
+      call("roblox", { ok: true, failure: PluginCallFailure.Plugin, errorCode: "not-bound" }, 5),
+    ]);
+    assert.deepEqual(
+      found.map((item) => {
+        assert.equal(item.event, BuildsEvent.PluginToolFinished);
+        return [item.properties.failure, item.properties.error_code];
+      }),
+      [
+        [PluginCallFailure.Plugin, "not-bound"],
+        [PluginCallFailure.InvalidArguments, null],
+        [PluginCallFailure.Plugin, null],
+        [PluginCallFailure.Other, null],
+        [null, null],
+        [null, null],
+      ],
+    );
+  });
 });
 
 describe("main's run events", () => {
@@ -537,19 +574,38 @@ describe("the library", () => {
     ]);
   });
 
-  it("counts inventory reads that fail in a row", () => {
-    const failures = new Map<string, number>();
-    const ok = { error: null };
-    const first = { error: "EACCES /Users/alice" };
-    const second = { error: "EACCES /Users/alice" };
-    assert.deepEqual(inventoryFailures({ pong: ok }, { pong: first }, failures), [
-      { event: BuildsEvent.AssetsInventoryFailed, properties: { failures_in_row: 1 } },
+  it("counts inventory reads that fail in a row, with why, sending each streak's doublings and each new why", () => {
+    const failures: InventoryStreaks = new Map();
+    const ok = { error: null, code: null };
+    const busy = () => ({ error: "EBUSY C:\\Users\\alice", code: AssetInventoryFailure.FileBusy });
+    const missing = { error: "ENOENT", code: AssetInventoryFailure.Missing };
+    let shown: Parameters<typeof inventoryFailures>[0][string] = ok;
+    const sent = [...Array.from({ length: 9 }, busy), missing].flatMap((read) => {
+      const found = inventoryFailures({ pong: shown }, { pong: read }, failures);
+      shown = read;
+      return found;
+    });
+    assert.deepEqual(
+      sent.map((tracked) => tracked.properties),
+      [
+        { failures_in_row: 1, code: AssetInventoryFailure.FileBusy },
+        { failures_in_row: 2, code: AssetInventoryFailure.FileBusy },
+        { failures_in_row: 4, code: AssetInventoryFailure.FileBusy },
+        { failures_in_row: 8, code: AssetInventoryFailure.FileBusy },
+        { failures_in_row: 10, code: AssetInventoryFailure.Missing },
+      ],
+      "a poll failing every ten seconds sends log-many events, and a new why at once",
+    );
+    assert.ok(sent.every((tracked) => tracked.event === BuildsEvent.AssetsInventoryFailed));
+    const older = { error: "walk failed", code: null };
+    assert.deepEqual(inventoryFailures({ pong: missing }, { pong: ok }, failures), []);
+    assert.equal(failures.size, 0, "a read that works ends the streak");
+    assert.deepEqual(inventoryFailures({ pong: ok }, { pong: older }, failures), [
+      {
+        event: BuildsEvent.AssetsInventoryFailed,
+        properties: { failures_in_row: 1, code: null },
+      },
     ]);
-    assert.deepEqual(inventoryFailures({ pong: first }, { pong: second }, failures), [
-      { event: BuildsEvent.AssetsInventoryFailed, properties: { failures_in_row: 2 } },
-    ]);
-    assert.deepEqual(inventoryFailures({ pong: second }, { pong: ok }, failures), []);
-    assert.equal(failures.size, 0);
   });
 });
 
@@ -598,10 +654,14 @@ describe("the stage", () => {
       firstMessageAt: T0 - 9 * MINUTE_MS,
       state: { drawCalls: 12, flow: { phase: "menu", playing: false } },
       gameRef: REF,
+      probes: { pageSeenAt: T0 + SECOND_MS, saw: LiveWaitSaw.ThisGame, mainAnswered: true },
     });
     assert.deepEqual(properties, {
       outcome: LiveOutcome.Shown,
       load_ms: 4 * SECOND_MS,
+      page_seen_ms: SECOND_MS,
+      wait_saw: LiveWaitSaw.ThisGame,
+      main_answered: true,
       trigger: LiveTrigger.FirstBuildAuto,
       first_in_launch: true,
       game_age_ms: 10 * MINUTE_MS + 4 * SECOND_MS,
@@ -613,6 +673,17 @@ describe("the stage", () => {
       crash_reason: null,
     });
     assert.equal(liveShownProperties({ ...inputWithout(), load: { since: T0 } }).trigger, null);
+    const unseen = liveShownProperties({
+      ...inputWithout(),
+      probes: { pageSeenAt: null, saw: LiveWaitSaw.Nothing, mainAnswered: false },
+    });
+    assert.deepEqual(
+      [unseen.page_seen_ms, unseen.wait_saw, unseen.main_answered],
+      [null, LiveWaitSaw.Nothing, false],
+      "a wait that never saw the page says so",
+    );
+    const refused = liveShownProperties(inputWithout());
+    assert.deepEqual([refused.page_seen_ms, refused.wait_saw, refused.main_answered], [null, null, null]);
   });
 
   it("suspects a blank game only after it showed and drew nothing for a while", () => {
@@ -662,6 +733,20 @@ describe("the stage", () => {
     assert.equal(nodeKindOf("part:facet-7"), NodeKind.Part);
     assert.equal(nodeKindOf("step-abc"), NodeKind.Step);
     assert.equal(nodeKindOf("build:3"), NodeKind.Build, "a build of a Loop's line");
+    assert.equal(nodeKindOf("asset:w3:call-j01"), NodeKind.Asset, "an asset a worker delivered");
+  });
+
+  it("sends a slow projection of the Builds graph with its size, at most once in a while", () => {
+    const slow = { ms: SLOW_GRAPH_MS + 0.4, events: 90_000, parts: 40, buildsShown: true };
+    assert.deepEqual(slowGraphProperties(slow, T0, null), {
+      ms: SLOW_GRAPH_MS,
+      events: 90_000,
+      parts: 40,
+      builds_shown: true,
+    });
+    assert.equal(slowGraphProperties({ ...slow, ms: SLOW_GRAPH_MS - 1 }, T0, null), null, "a quick one is not sent");
+    assert.equal(slowGraphProperties(slow, T0 + SLOW_GRAPH_REPEAT_MS - 1, T0), null, "nor one soon after another");
+    assert.notEqual(slowGraphProperties(slow, T0 + SLOW_GRAPH_REPEAT_MS, T0), null);
   });
 
   it("tells a press the person declined from one that failed", () => {
@@ -901,12 +986,21 @@ function hostileRecords(): EventEnvelope[] {
         making: { kind: SECRET, tool: SECRET, prompt: SECRET },
         cutOff: SECRET,
         blocked: SECRET,
+        failure: SECRET,
+        errorCode: SECRET,
       },
       22,
     ),
     record(
       CustomEvent.PluginTool,
-      { ...scope, pluginId: "genex", making: { kind: MakingKind.Image, tool: SECRET, prompt: SECRET }, error: SECRET },
+      {
+        ...scope,
+        pluginId: "genex",
+        making: { kind: MakingKind.Image, tool: SECRET, prompt: SECRET },
+        error: SECRET,
+        failure: SECRET,
+        errorCode: PATH,
+      },
       23,
     ),
   ];

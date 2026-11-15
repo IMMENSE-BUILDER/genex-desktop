@@ -15,9 +15,10 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CliInstallProblem } from "../shared/cli-install.ts";
+import { CliInstallProblem, installsInApp } from "../shared/cli-install.ts";
 import type { CodingProvider, InstallableCodingProvider } from "../shared/coding-cli.ts";
 import { MINUTE_MS, SECOND_MS } from "../shared/duration.ts";
+import { netErrorOf } from "../shared/errors.ts";
 import { EngineId } from "../shared/providers.ts";
 import { childEnv, windowsPowerShellEnv } from "./child-env.ts";
 import { killProcessTree } from "./process-tree.ts";
@@ -40,11 +41,11 @@ const EXIT_GRACE_MS = 2 * SECOND_MS;
 /** One CLI's installers, the shell its macOS/Linux script is written for, and what keeps it from asking. */
 interface Installer {
   unix: string;
-  /** The vendor's PowerShell installer, or null when it publishes none (OpenCode). */
+  /** The vendor's PowerShell installer, or null when it publishes none (OpenCode, `installsInApp`). */
   windows: string | null;
   shell: string;
   set: Record<string, string>;
-  vendor: "claude" | "codex" | "opencode" | "grok" | "cursor";
+  vendor: "claude" | "codex" | "opencode" | "grok" | "cursor" | "antigravity";
 }
 
 /** Each coding CLI's official installers, from its vendor's install instructions. */
@@ -86,6 +87,14 @@ const INSTALLERS = {
     set: {},
     vendor: "cursor",
   },
+  // Installs `agy` into `~/.local/bin`, where discovery looks; it asks nothing.
+  [EngineId.Antigravity]: {
+    unix: "https://antigravity.google/cli/install.sh",
+    windows: "https://antigravity.google/cli/install.ps1",
+    shell: "/bin/bash",
+    set: {},
+    vendor: "antigravity",
+  },
 } as const satisfies Record<InstallableCodingProvider, Installer>;
 
 /** Why an installer cannot be looked up; the renderer never sees this, main refuses first. */
@@ -105,6 +114,7 @@ export function installerSource(
   platform: NodeJS.Platform,
 ): { url: string; extension: ".sh" | ".ps1" } | null {
   const installer = installerOf(provider);
+  if (!installsInApp(provider, platform)) return null;
   if (!isWindows(platform)) return { url: installer.unix, extension: ".sh" };
   return installer.windows ? { url: installer.windows, extension: ".ps1" } : null;
 }
@@ -151,8 +161,16 @@ export interface InstallOptions {
   run?: InstallerRun;
 }
 
+/** What answered a download that failed: the status it was refused with, or Chromium's network error. */
+export interface DownloadAnswer {
+  httpStatus?: number;
+  netError?: string;
+}
+
 /** An install's end: done, or the problem and what the log should keep of it. */
-export type InstallOutcome = { ok: true } | { ok: false; problem: CliInstallProblem; detail: string };
+export type InstallOutcome =
+  | { ok: true }
+  | ({ ok: false; problem: CliInstallProblem; detail: string } & DownloadAnswer);
 
 /** Fetch `provider`'s official installer and run it; whether the CLI then works is the caller's check. */
 export async function installCodingCli(
@@ -163,9 +181,12 @@ export async function installCodingCli(
   const parent = options.env ?? process.env;
   const source = installerSource(provider, platform);
   if (!source)
-    return { ok: false, problem: CliInstallProblem.Download, detail: MESSAGE.noInstaller(provider, platform) };
+    return { ok: false, problem: CliInstallProblem.Unsupported, detail: MESSAGE.noInstaller(provider, platform) };
   const script = await download(source.url, options.fetch ?? fetch);
-  if (!script.ok) return { ok: false, problem: CliInstallProblem.Download, detail: script.detail };
+  if (!script.ok) {
+    const { ok: _ok, ...failed } = script;
+    return { ...failed, ok: false, problem: CliInstallProblem.Download };
+  }
   const folder = await mkdtemp(path.join(options.tmpRoot ?? os.tmpdir(), "genex-cli-install-"));
   try {
     const file = path.join(folder, `install${source.extension}`);
@@ -196,16 +217,17 @@ function installerOf(provider: CodingProvider): Installer {
 async function download(
   url: string,
   fetchFn: FetchInstaller,
-): Promise<{ ok: true; text: string } | { ok: false; detail: string }> {
+): Promise<{ ok: true; text: string } | ({ ok: false; detail: string } & DownloadAnswer)> {
   let response: Response;
   try {
     response = await fetchFn(url, { redirect: "follow", headers: { "user-agent": INSTALLER_USER_AGENT } });
   } catch (err) {
-    return { ok: false, detail: String(err) };
+    const netError = netErrorOf(err);
+    return { ok: false, detail: String(err), ...(netError ? { netError } : {}) };
   }
   const servedFrom = response.url || url;
   if (new URL(servedFrom).protocol !== "https:") return { ok: false, detail: MESSAGE.notHttps(servedFrom) };
-  if (!response.ok) return { ok: false, detail: MESSAGE.status(response.status) };
+  if (!response.ok) return { ok: false, detail: MESSAGE.status(response.status), httpStatus: response.status };
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength === 0 || bytes.byteLength > SCRIPT_MAX_BYTES)
     return { ok: false, detail: MESSAGE.size(bytes.byteLength) };

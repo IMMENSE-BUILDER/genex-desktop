@@ -12,7 +12,6 @@ import { coreLite } from "../helpers/core-lite.ts";
 
 const METHODS = [
   "_computerToolsFor",
-  "_directorToolsFor",
   "_runOfGame",
   "activeBuilders",
   "activityEvents",
@@ -38,6 +37,8 @@ const METHODS = [
   "defaultDelegatedEngine",
   "dispatchRun",
   "emit",
+  // The game's chat when it has one, read without making one (the review's sidebar line and restart).
+  "existingGameThread",
   "exportPublicCopy",
   "forgetPermission",
   // What freeing space deletes, and deleting it (studio:storage, studio:storage.free).
@@ -61,9 +62,10 @@ const METHODS = [
   // A game its first message left Untitled takes the name a later message gives it (conversation.ts).
   "nameFromIdea",
   "newRunId",
-  "offerBuild",
   "offerLive",
   "permissionSettings",
+  // Play for a game being made: its own folder's app (studio:game.play-build, play_build).
+  "playGameBuild",
   "playGameSnapshot",
   // The stage strip's Play/Stop (studio:preview.play, studio:preview.stop).
   "playLive",
@@ -72,6 +74,9 @@ const METHODS = [
   "previewProjectAsset",
   "projectAssets",
   "projectModelRigs",
+  // The Assets canvas's thumbnails kept between sessions (studio:game.asset.thumbnail, .keep).
+  "readAssetThumbnail",
+  "keepAssetThumbnail",
   // Publish's file list, shown in Studio's dialog before anything is uploaded (studio:plugins.genex-publish-review).
   "publicCopyFiles",
   "readGameFile",
@@ -80,6 +85,13 @@ const METHODS = [
   "checkpointPreview",
   "previewStageVisible",
   "previewForeground",
+  "genexFixReview",
+  "genexGameOfSlug",
+  "genexRequestReview",
+  "genexReviewFocus",
+  "genexReviewFollow",
+  "genexReviewLines",
+  "genexReviewStatus",
   "previewSound",
   "reconcileSeedManifest",
   "recover",
@@ -137,8 +149,11 @@ const FIELDS = [
   "budget",
   "builds",
   "contextPreferences",
+  // The games' design boards: read for the Design tab, served to its frames, shown by `show_design`.
+  "design",
   "engineLinks",
   "engines",
+  "fastDecisions",
   "games",
   "hooks",
   "host",

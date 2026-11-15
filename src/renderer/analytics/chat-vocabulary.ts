@@ -34,10 +34,14 @@ export const SendSource = {
   SetupCard: "setup_card",
   TagRetry: "tag_retry",
   PluginTurnedOn: "plugin_turned_on",
-  /** Genex telling the agent why the Loop it started didn't start (never sent from the renderer). */
+  /** Genex telling the agent why the Loop it started didn't start (never sent from the renderer; only an older Genex sent it). */
   LoopHeld: "loop_held",
   /** Genex asking the agent for the game's cover once a build landed (never sent from the renderer). */
   CoverStep: "cover_step",
+  /** Genex telling the agent a background job it started ended (never sent from the renderer). */
+  JobEnded: "job_ended",
+  /** Play on a game with no app to play yet: "Run the game" sent for the person. */
+  RunTheGame: "run_the_game",
   /** Words another surface left for this chat and asked it to send. */
   Handoff: "handoff",
 } as const;
@@ -48,12 +52,11 @@ export const SendBlock = {
   NoModel: "no_model",
   SignInNeeded: "sign_in_needed",
   ModelUnavailable: "model_unavailable",
-  RoleUnavailable: "role_unavailable",
 } as const;
 export type SendBlock = (typeof SendBlock)[keyof typeof SendBlock];
 
-/** Where a message that did not go stopped: its send was rejected, or its chat refused it. */
-export const SendFailStage = { Rejected: "rejected", Refused: "refused" } as const;
+/** Where a message that did not go stopped: its send was rejected. */
+export const SendFailStage = { Rejected: "rejected" } as const;
 export type SendFailStage = (typeof SendFailStage)[keyof typeof SendFailStage];
 
 /** How long a provider said to wait before trying again. */
@@ -72,16 +75,6 @@ export const ModelRefOther = { Custom: "custom", Default: "default", None: "none
 
 /** An effort as analytics names it when it is not one of the app's levels: the model's own default. */
 export const EffortRefOther = { Default: "default" } as const;
-
-/** How many hours a Loop runs, in steps that say enough. */
-export const HoursBucket = {
-  None: "none",
-  One: "1",
-  Few: "2-4",
-  Several: "5-8",
-  Long: "9+",
-} as const;
-export type HoursBucket = (typeof HoursBucket)[keyof typeof HoursBucket];
 
 /** How full the context was before a compaction. */
 export const ContextBucket = {
@@ -143,7 +136,7 @@ export const LeftTo = { OtherChat: "other_chat", Home: "home" } as const;
 export type LeftTo = (typeof LeftTo)[keyof typeof LeftTo];
 
 /** How Stop was asked. */
-export const StopVia = { Button: "button", Escape: "escape" } as const;
+export const StopVia = { Button: "button", Escape: "escape", SendNow: "send_now" } as const;
 export type StopVia = (typeof StopVia)[keyof typeof StopVia];
 
 /** Why a Stop press did nothing. */
@@ -207,8 +200,17 @@ export const RewindAction = { Confirm: "confirm", Cancel: "cancel" } as const;
 export type RewindAction = (typeof RewindAction)[keyof typeof RewindAction];
 
 /** Where the model menu was opened from. */
-export const ModelMenuFrom = { Composer: "composer", PlanRecovery: "plan_recovery" } as const;
+export const ModelMenuFrom = {
+  Composer: "composer",
+  PlanRecovery: "plan_recovery",
+  /** Opened while a send its model held back lit the model button. */
+  SendHeld: "send_held",
+} as const;
 export type ModelMenuFrom = (typeof ModelMenuFrom)[keyof typeof ModelMenuFrom];
+
+/** How a Raise context to 16K press ended: Ollama made the copy, or refused. */
+export const ContextRaiseOutcome = { Raised: "raised", Failed: "failed" } as const;
+export type ContextRaiseOutcome = (typeof ContextRaiseOutcome)[keyof typeof ContextRaiseOutcome];
 
 /** Which composer model setting changed. */
 export const ModelSetting = { Roles: "roles", Effort: "effort" } as const;
@@ -218,10 +220,6 @@ export type ModelSetting = (typeof ModelSetting)[keyof typeof ModelSetting];
 export const ModelReplaced = { ProviderGone: "provider_gone", ModelDropped: "model_dropped" } as const;
 export type ModelReplaced = (typeof ModelReplaced)[keyof typeof ModelReplaced];
 
-/** Where a Loop was turned on, off or changed. */
-export const LoopVia = { ModeMenu: "mode_menu", KeepBuilding: "keep_building" } as const;
-export type LoopVia = (typeof LoopVia)[keyof typeof LoopVia];
-
 /**
  * A press on the composer's sign-in card that only the gate sees. Sign in and Check connection are
  * counted by the card itself (`provider_action_clicked`, surface chat_card).
@@ -230,6 +228,10 @@ export const SignInAction = {
   ContinueLocal: "continue_local",
 } as const;
 export type SignInAction = (typeof SignInAction)[keyof typeof SignInAction];
+
+/** Which of the Genex notice's ways the person took: its main step, or a move onto another model. */
+export const GenexNoticeStep = { Primary: "primary", Use: "use" } as const;
+export type GenexNoticeStep = (typeof GenexNoticeStep)[keyof typeof GenexNoticeStep];
 
 /** Where a lost sign-in showed: the turn that needed it. */
 export const SignInFrom = { Turn: "turn" } as const;

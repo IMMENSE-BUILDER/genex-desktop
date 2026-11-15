@@ -41,8 +41,10 @@ interface FixtureGame {
   hue: number;
   multiplayer?: boolean;
   online?: number;
-  /** No cover: the card shows its plain tile. */
+  /** No cover: the card shows its plain tile; a native game's page then has no shots or description either. */
   bare?: boolean;
+  /** A native game's page has no screenshots, as genex.games serves every page today. */
+  coverOnly?: boolean;
   private?: boolean;
   /** An asset's kind on the wire (`3d`, `image`, `sound`, `video`). */
   assetKind?: string;
@@ -77,10 +79,11 @@ const GAMES: FixtureGame[] = [
     online: 8,
     private: true,
     mobileSupport: PlayMobileSupport.DesktopOnly,
-    // A web game with a Mac app beside it: its card plays the web build, the bar offers the app.
-    native: { web: true, engine: "unity", builds: [macApp("SKATE", "2.1", LARGE)] },
+    // A web game with Mac and Windows apps beside it: its card opens its page, which offers the
+    // browser and the app; the viewer's bar offers the app too.
+    native: { web: true, engine: "unity", builds: [macApp("SKATE", "2.1", LARGE), windowsApp("SKATE", "2.1", LARGE)] },
   },
-  // Native games: no web build, so a card opens the game's page.
+  // Native games: no web build, so the page offers the app alone.
   {
     slug: "dust-runners",
     title: "Dust Runners",
@@ -101,6 +104,8 @@ const GAMES: FixtureGame[] = [
     hue: 245,
     // Its source is the author's own: no Remix.
     private: true,
+    // Published with nothing yet: no cover, no shots, no description.
+    bare: true,
     native: {
       web: false,
       engine: "unreal",
@@ -129,7 +134,22 @@ const GAMES: FixtureGame[] = [
     plays: 803,
     categories: ["games", "sports"],
     hue: 6,
+    coverOnly: true,
     native: { web: false, engine: "godot", builds: [macApp("Puck Rush", "1.3", SMALL)] },
+  },
+  // The fixture account's own app-only game: its page offers its owner Rename, Change link and the Players switch.
+  {
+    slug: "night-patrol",
+    title: "Night Patrol",
+    author: "Rab Neba",
+    plays: 3,
+    categories: ["games", "shooter"],
+    hue: 222,
+    native: {
+      web: false,
+      engine: "unreal",
+      builds: [macApp("Night Patrol", "0.3", LARGE), windowsApp("Night Patrol", "0.3", LARGE)],
+    },
   },
   // Only a Windows build: a Mac's tabs leave it out, and its maker's profile says so.
   {
@@ -380,7 +400,8 @@ function counts(): GalleryAnswer {
 }
 
 /** A game's page facts, with this launch's like. */
-function world(slug: string): GalleryAnswer {
+function world(asked: string): GalleryAnswer {
+  const slug = manage.current(asked);
   const game = listed().find((candidate) => candidate.slug === slug);
   if (!game) return NOT_FOUND;
   const liked = likes.get(slug) === true;
@@ -388,13 +409,18 @@ function world(slug: string): GalleryAnswer {
   return ok({ item: { ...game, ...facts, ...pageFacts(game.id) } });
 }
 
-/** What a native game's page adds: a longer description and screenshots, drawn in the game's hue. */
+/**
+ * What a native game's page adds: a longer description and screenshots drawn in the game's hue; a
+ * cover-only game's page adds no shots, and a bare one's neither shots nor a description.
+ */
 function pageFacts(id: string): Record<string, unknown> {
   const hue = HUES.get(id) ?? 0;
   const fixture = CATALOG.find((game, index) => baseItem(game, index).id === id);
   if (!fixture?.native) return {};
+  if (fixture.bare) return { description: "", shots: [] };
   const about = `${fixture.title} is a fixture game made in an engine. It has no web build, so it installs on this Mac and plays in its own window.`;
-  return { description: about, shots: [40, 120, 200, 280].map((shift) => cover((hue + shift) % 360)) };
+  const shots = fixture.coverOnly ? [] : [40, 120, 200, 280].map((shift) => cover((hue + shift) % 360));
+  return { description: about, shots };
 }
 
 /** The search catalog: every fixture game in its slim shape, the author a name. */

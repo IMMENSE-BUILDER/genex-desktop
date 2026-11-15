@@ -62,6 +62,41 @@ export const SandboxProblemCode = {
 } as const;
 export type SandboxProblemCode = (typeof SandboxProblemCode)[keyof typeof SandboxProblemCode];
 
+/** Why a sandboxed command could not start, when the sandbox itself is set up (`SandboxLaunchError`). */
+export const SandboxLaunchCode = {
+  /** Windows: the command line would pass CreateProcess's 32,767-character limit. */
+  ArgvTooLong: "argv-too-long",
+  /** Windows: srt-win did not answer in time (its ACL calls block for up to a minute). */
+  SrtWinTimeout: "srt-win-timeout",
+  /** Windows: the working folder is on a mapped or network drive, which the sandbox user cannot see. */
+  NetworkDrive: "network-drive",
+  /** Windows: a run asked to write or read a folder outside the session's grants. */
+  NotGranted: "not-granted",
+  /**
+   * Windows: a run works in or writes to a folder Windows refused the sandbox's write grant on
+   * (the person may not change its permissions), which the session left out to start the rest.
+   */
+  WriteRefused: "write-refused",
+  /** Windows: every port of srt-win's proxy range is reserved by Windows or held by another program. */
+  ProxyPortsRefused: "proxy-ports-refused",
+  /** Windows: Windows kept refusing to start srt-win as the sandbox user, after Genex tried again. */
+  SandboxUserRefused: "sandbox-user-refused",
+} as const;
+export type SandboxLaunchCode = (typeof SandboxLaunchCode)[keyof typeof SandboxLaunchCode];
+
+/** What a folder the Windows sandbox left out is to Genex (`UiEvent.SandboxFolderLeftOut`). */
+export const SandboxFolderKind = {
+  /** A game's folder, or a folder inside the games folder. */
+  Game: "game",
+  /** The folder new games are made in. */
+  GamesRoot: "games_root",
+  /** A folder in Genex's own data: its workspaces, runs, exports or native work. */
+  GenexData: "genex_data",
+  /** Anything else: a linked project, a coding CLI's own folder. */
+  Other: "other",
+} as const;
+export type SandboxFolderKind = (typeof SandboxFolderKind)[keyof typeof SandboxFolderKind];
+
 /** Why startup is held on a failure (`BootState.failureCode`), beside the words the window shows. */
 export const BootFailure = {
   /** A watched start still running at its limit (Windows). */
@@ -77,8 +112,11 @@ export const BootFailure = {
 } as const;
 export type BootFailure = (typeof BootFailure)[keyof typeof BootFailure];
 
-/** A held start's code: the boot's own, or the sandbox's when the sandbox is what stopped it. */
-export type BootFailureCode = BootFailure | SandboxProblemCode;
+/**
+ * A held start's code: the boot's own, or the sandbox's when the sandbox is what stopped it (a setup
+ * problem, or a start its commands could not make, such as Windows' reserved proxy ports).
+ */
+export type BootFailureCode = BootFailure | SandboxProblemCode | SandboxLaunchCode;
 
 /** A step a launch's start passed through before the studio opened (`StartFacts.passed`). */
 export const StartPassage = {

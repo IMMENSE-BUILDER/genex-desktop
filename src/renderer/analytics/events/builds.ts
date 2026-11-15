@@ -7,7 +7,7 @@
  * hooks with the builders in `builds-stage.ts`. Every value is a code from the app's vocabularies,
  * a switch, a count or a duration: never a title, a task, a reason, a path or a name.
  */
-import { CallCutOff, PluginSourceKind } from "../../../shared/plugins.ts";
+import { CallCutOff, PluginCallFailure, PluginSourceKind, pluginErrorCode } from "../../../shared/plugins.ts";
 import {
   AutoResumeCause,
   CustomEvent,
@@ -40,13 +40,12 @@ import {
   RUN_START_EVENTS,
   RoundOutcome,
   type RunExecution,
-  recordedRunLoop,
   roundOutcome,
   VerdictPass,
   VerdictRule,
   workedMs,
 } from "../../../shared/run-state.ts";
-import type { AssetKind, AssetPreviewMode } from "../../../shared/game-assets.ts";
+import type { AssetInventoryFailure, AssetKind, AssetPreviewMode } from "../../../shared/game-assets.ts";
 import type { LiveBehindReason } from "../../../shared/live-behind.ts";
 import type { GameProject } from "../../../shared/studio-api.ts";
 import { UiEvent } from "../../../shared/ui-events.ts";
@@ -101,12 +100,24 @@ export type BuildSurface = (typeof BuildSurface)[keyof typeof BuildSurface];
 /** How Live's wait for a page ended: shown, or given up and why. */
 export const LiveOutcome = {
   Shown: "shown",
+  /** This game's page came but did not settle in time, or main never answered the load. */
   TimedOut: "timed_out",
+  /** No probe in the whole wait saw this game's page: there was none to show (a new game with no build yet). */
+  NoPage: "no_page",
   LoadFailed: "load_failed",
   Crashed: "crashed",
   BuildBroken: "build_broken",
 } as const;
 export type LiveOutcome = (typeof LiveOutcome)[keyof typeof LiveOutcome];
+
+/** What Live's probe saw last while it waited: no page, another game's, this one navigating, or this one's. */
+export const LiveWaitSaw = {
+  Nothing: "nothing",
+  OtherGame: "other_game",
+  Navigating: "navigating",
+  ThisGame: "this_game",
+} as const;
+export type LiveWaitSaw = (typeof LiveWaitSaw)[keyof typeof LiveWaitSaw];
 
 /** What started a load Live waits on. */
 export const LiveTrigger = {
@@ -139,8 +150,8 @@ export const EmptyAction = {
 } as const;
 export type EmptyAction = (typeof EmptyAction)[keyof typeof EmptyAction];
 
-/** A Builds graph node that is not one of its fixed nodes: a part's row, or one of its steps. */
-export const NodeKind = { Part: "part", Step: "step", Build: "build" } as const;
+/** A Builds graph node that is not one of its fixed nodes: a part's row, one of its steps, a build, or an asset a worker delivered. */
+export const NodeKind = { Part: "part", Step: "step", Build: "build", Asset: "asset" } as const;
 export type NodeKind = (typeof NodeKind)[keyof typeof NodeKind];
 
 /** How a Builds graph node was opened. */
@@ -223,6 +234,7 @@ export const BuildsEvent = {
   BuildMadeLive: "build_made_live",
   BuildsNodeOpened: "builds_node_opened",
   BuildsHistoryOpened: "builds_history_opened",
+  BuildsGraphSlow: "builds_graph_slow",
   FirstPreviewReady: "first_preview_ready",
   GameFirstBuildMade: "game_first_build_made",
   LiveGameShown: "live_game_shown",
@@ -257,12 +269,15 @@ export const BuildsEvent = {
 } as const;
 export type BuildsEvent = (typeof BuildsEvent)[keyof typeof BuildsEvent];
 
+/**
+ * One slow projection of the stage's graph from the conversation's log: how long it took, how
+ * many records it read and how many parts it drew, and whether Builds was shown (workers read).
+ */
+export type BuildsGraphSlowProperties = { ms: number; events: number; parts: number; builds_shown: boolean };
+
 /** A run's start as `run_started` carries it; also a chat turn's first worker (mode chat_turn). */
 export type RunStartedProperties = {
   mode: BuildMode;
-  /** A timed Loop's hours; null for an ∞ Loop, a goal Loop or a chat turn. */
-  loop_hours: number | null;
-  until_satisfied: boolean;
   completion_policy: CompletionPolicy | null;
   director: boolean;
   facets: number;
@@ -291,7 +306,6 @@ export type RunFinishedProperties = {
   duration_ms: number | null;
   /** The time it worked, pauses left out; null when it started before this launch. */
   worked_ms: number | null;
-  loop_hours: number | null;
   rounds_accepted: number;
   rounds_rejected: number;
   profile: LoopProfile | null;
@@ -304,6 +318,12 @@ export type RunFinishedProperties = {
 export type LiveGameShownProperties = {
   outcome: LiveOutcome;
   load_ms: number;
+  /** Since the wait began, when a probe first saw this game's page; null when none did (or main refused the load). */
+  page_seen_ms: number | null;
+  /** What the wait's last probe saw; null for a load main refused before any probe. */
+  wait_saw: LiveWaitSaw | null;
+  /** Whether main had answered the load when the wait ended (false: still loading); null for a refused load. */
+  main_answered: boolean | null;
   /** What started the load; null when its starter did not say. */
   trigger: LiveTrigger | null;
   /** The first time this launch showed this game in Live. */
@@ -357,7 +377,6 @@ export type BuildsEventProperties = {
     step: FinishCheckStep;
     rejections: number | null;
     stopped: boolean;
-    time_left: boolean;
     done_count: number;
     not_done_count: number;
     reviewer_engine: EngineId | null;
@@ -372,6 +391,7 @@ export type BuildsEventProperties = {
   [BuildsEvent.BuildPlayed]: { surface: BuildSurface; run_active: boolean; ok: boolean };
   [BuildsEvent.BuildMadeLive]: { ok: boolean };
   [BuildsEvent.BuildsNodeOpened]: { node_kind: GraphSelection | NodeKind; via: NodeVia; run_active: boolean };
+  [BuildsEvent.BuildsGraphSlow]: BuildsGraphSlowProperties;
   [BuildsEvent.BuildsHistoryOpened]: { via: HistoryVia; index_from_newest: number; running: boolean };
   [BuildsEvent.FirstPreviewReady]: {
     ms_build_to_ready: number | null;
@@ -437,6 +457,10 @@ export type BuildsEventProperties = {
     ok: boolean;
     cut_off: CallCutOff | null;
     blocked: GenexBlocked | null;
+    /** Why a failed call failed; null for an answer or a record from before it was written. */
+    failure: PluginCallFailure | Unlisted | null;
+    /** A catalog plugin's own error code; null for a plugin the person brought. */
+    error_code: string | null;
     duration_ms: number | null;
     images: number;
     retry_of_failed: boolean;
@@ -451,7 +475,7 @@ export type BuildsEventProperties = {
   [BuildsEvent.AssetCandidateApproved]: { ok: boolean; cancelled: boolean; picked: boolean };
   [BuildsEvent.AssetPreviewOpened]: { mode: AssetPreviewMode; kind: AssetKind; from: AssetOpenedFrom };
   [BuildsEvent.AssetPreviewFailed]: { mode: AssetPreviewMode; stage: PreviewFailure };
-  [BuildsEvent.AssetsInventoryFailed]: { failures_in_row: number };
+  [BuildsEvent.AssetsInventoryFailed]: { failures_in_row: number; code: AssetInventoryFailure | null };
   [BuildsEvent.AssetSearchAdded]: { from: FoundIn; ok: boolean };
   [BuildsEvent.UnrealStageStepChanged]: {
     from: UnrealStageStep;
@@ -515,8 +539,6 @@ const lengthOf = (value: unknown): number => (Array.isArray(value) ? value.lengt
 export const amountOf = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
 const flagOf = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
-const hoursOf = (value: unknown): number | null =>
-  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 
 /** A vocabulary's word, or `other` for a string it does not know; null for none. */
 function wordOrOther<V extends string>(vocabulary: Readonly<Record<string, V>>, value: unknown): V | Unlisted | null {
@@ -646,13 +668,10 @@ const runStarted: Reader = (payload, at, memory) => {
   const start = memory.starts.get(runId) ?? {};
   memory.starts.delete(runId);
   const budgets = start.budgets ?? payload.budgets;
-  const loop = recordedRunLoop(budgets);
   return {
     event: BuildsEvent.RunStarted,
     properties: {
       mode: BuildMode.Loop,
-      loop_hours: loop?.hours ?? null,
-      until_satisfied: loop?.hours === null,
       completion_policy: completionPolicyOf(budgets),
       director: payload.director === true,
       facets: lengthOf(payload.facets),
@@ -686,8 +705,6 @@ const workerStarted: Reader = (payload, at, memory) => {
     event: BuildsEvent.RunStarted,
     properties: {
       mode: BuildMode.ChatTurn,
-      loop_hours: null,
-      until_satisfied: false,
       completion_policy: null,
       director: false,
       facets: 0,
@@ -835,7 +852,6 @@ const finishCheck: Reader = (payload, at, memory) => {
       step,
       rejections: amountOf(payload.rejections),
       stopped: payload.stopped === true,
-      time_left: payload.timeLeft === true,
       done_count: lengthOf(payload.done),
       not_done_count: lengthOf(payload.notDone),
       reviewer_engine: oneOf(EngineId, fieldsOf(payload.reviewer).engine),
@@ -897,7 +913,6 @@ const runFinished: Reader = (payload, at, memory) => {
       victory: payload.victory === true,
       duration_ms: amountOf(payload.durationMs),
       worked_ms: before && closed ? workedMs(closed.worked, at.at) : null,
-      loop_hours: hoursOf(fieldsOf(payload.stillToFix).hours),
       rounds_accepted: rounds.accepted,
       rounds_rejected: rounds.rejected,
       profile: oneOf(LoopProfile, payload.profile),
@@ -999,6 +1014,7 @@ const pluginTool: Reader = (payload, at, memory) => {
   const kind = oneOf(MakingKind, fieldsOf(payload.making).kind) ?? Unlisted.Other;
   const ok = payload.ok === true;
   const tool = named ? wordOrOther(GenexTool, fieldsOf(payload.making).tool) : null;
+  const failure = ok ? null : wordOrOther(PluginCallFailure, payload.failure);
   return {
     event: BuildsEvent.PluginToolFinished,
     properties: {
@@ -1008,6 +1024,8 @@ const pluginTool: Reader = (payload, at, memory) => {
       ok,
       cut_off: oneOf(CallCutOff, payload.cutOff),
       blocked: oneOf(GenexBlocked, payload.blocked),
+      failure,
+      error_code: named && failure ? pluginErrorCode(payload.errorCode) : null,
       duration_ms: amountOf(payload.durationMs),
       images: amountOf(payload.images) ?? 0,
       retry_of_failed: retryOfFailed(memory, { key: `${at.thread}\n${ref}\n${kind}`, ok, at: at.at }),
@@ -1154,11 +1172,21 @@ export function jobPhaseChanges(
   return found;
 }
 
-/** Inventories whose read just failed, with how many reads in a row failed. */
+/** Each game's inventory reads failing in a row right now: how many, and why the last one did. */
+export type InventoryStreaks = Map<string, { inRow: number; code: AssetInventoryFailure | null }>;
+
+/** Whether a count is 1, 2, 4, 8…: a streak is told at each doubling, not at every poll. */
+const isDoubling = (count: number): boolean => (count & (count - 1)) === 0;
+
+/**
+ * Inventories whose read just failed, with how many reads in a row failed and why. A watched game
+ * is read every ten seconds, so a streak is sent at its 1st, 2nd, 4th, 8th… failure, and at once
+ * when the why changes; a read that works ends it.
+ */
 export function inventoryFailures(
-  before: Readonly<Record<string, Pick<AssetInventory, "error">>>,
-  after: Readonly<Record<string, Pick<AssetInventory, "error">>>,
-  failures: Map<string, number>,
+  before: Readonly<Record<string, Pick<AssetInventory, "error" | "code">>>,
+  after: Readonly<Record<string, Pick<AssetInventory, "error" | "code">>>,
+  failures: InventoryStreaks,
 ): BuildsTracked[] {
   const found: BuildsTracked[] = [];
   for (const [project, inventory] of Object.entries(after)) {
@@ -1167,9 +1195,12 @@ export function inventoryFailures(
       failures.delete(project);
       continue;
     }
-    const inRow = (failures.get(project) ?? 0) + 1;
-    failures.set(project, inRow);
-    found.push({ event: BuildsEvent.AssetsInventoryFailed, properties: { failures_in_row: inRow } });
+    const last = failures.get(project);
+    const inRow = (last?.inRow ?? 0) + 1;
+    const code = inventory.code ?? null;
+    failures.set(project, { inRow, code });
+    if (!isDoubling(inRow) && last?.code === code) continue;
+    found.push({ event: BuildsEvent.AssetsInventoryFailed, properties: { failures_in_row: inRow, code } });
   }
   return found;
 }
@@ -1208,7 +1239,7 @@ function assetJobChanges(before: LibraryState, after: LibraryState, seen: JobPha
 /** What the library's changes mean, watched from its store. */
 function watchLibrary(app: Studio, now: () => number, ref: (name: string) => string | null): () => void {
   const seen: JobPhases = new Map();
-  const failures = new Map<string, number>();
+  const failures: InventoryStreaks = new Map();
   return app.library.subscribe(
     guarded((after, before) => {
       const at = now();

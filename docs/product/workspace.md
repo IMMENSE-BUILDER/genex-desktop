@@ -4,32 +4,34 @@
 
 The sidebar holds Search, Notifications, Send feedback
 ([data](../../PRIVACY.md#send-feedback)), the Play/Create switch, New game, Plugins,
-Items ([Browse, Selling](../play.md#the-item-store)), Harness, Settings, Games, Friends and, once they wait, **Genex terms updated**,
+Settings, Games, Friends and, once they wait, **Genex terms updated**,
 **plugin updates** and **Relaunch to update** (Linux: **Download**). Pinned games lead, then recent activity. Every launch
 opens **home** (also the wordmark): one composer over an optional picture. A game opens its
 conversation beside the stage (Live, Builds once planned, Assets), Harness its conversation
-and Activity; Plugins and Items fill the workspace.
+and Activity; Plugins fills the workspace; Items and Harness rows are
+[hidden for now](https://github.com/genex-games/genex-desktop/issues/654).
 
-Settings (a modal): Genex account, Model Providers, Local Models, Appearance, Games, Storage,
-Harness, Permissions, Privacy, About; narrow windows: a drawer.
+Settings is a modal (narrow: drawer).
 
-The bell keeps unanswered questions, plans, permission requests, then build endings and
-sign-outs, each opening where answered; unfocused, macOS notifications and the Dock badge carry
-them.
+The bell keeps unanswered questions, plans, permissions and Genex reviews (taken down, not
+approved: **Fix**), then build endings, sign-outs and review news, each opening where answered;
+unfocused, macOS notifications and the Dock badge carry them; another game's review toasts. The
+sidebar shows each game's review state.
 
 **Play** shows genex.games' games and their [Stores](../play.md#the-item-store), the Genex account and
 nickname (kept offline), **Friends** with invites, profiles and **Stats** ([Play](../play.md)).
 
 ## First launch
 
-An empty, never-welcomed profile opens a full-window welcome connecting Claude Code, ChatGPT, local
-models, OpenRouter, OpenCode, Grok Build or Cursor; Skip or Start building opens home, keeping a
-typed idea. [Usage analytics](../usage-analytics.md) ask first, once.
+An empty, never-welcomed profile opens a full-window welcome connecting a
+[model provider](models-context.md) or Genex credits (**Use Genex**: browser sign-in); Skip or
+Start building opens home, keeping a typed idea.
+[Usage analytics](../usage-analytics.md) ask first, once.
 
-A Genex card then offers **Connect Genex plugin** once.
+Signed out, a card offers **Connect Genex plugin** once.
 
 A sandbox that cannot start opens **Set up the protected workspace** (Windows: one
-administrator prompt, two if Secondary Logon is off).
+administrator prompt, two with Secondary Logon off).
 
 ## Main actions
 
@@ -45,7 +47,7 @@ administrator prompt, two if Secondary Logon is off).
   entry; active work blocks it; reopening restores it).
 - The chat header: title, Show in Finder, Terminal, ⋯ (Export game…, Rename), **Free N GB**
   past 1 GB (not Harness or unbound drafts). Search reaches older and unbound chats.
-- Command-B toggles navigation, Command-K searches, Command-2 Harness, Command-1 the last chat.
+- Command-B: navigation, Command-K: search, Command-2: Harness, Command-1: last chat.
 
 ## State and appearance
 

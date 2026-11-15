@@ -1,18 +1,20 @@
 /**
  * The Publish dialog's platform rows for one game (`studio:plugins.genex-publish-platforms`): the
  * web build as Publish sends it, and the Mac, Windows and Linux apps the game folder holds, each ready,
- * built before the game's last change, or not built yet. A ready app goes with Publish once the
- * pinned Genex CLI can send apps (`publishedApps`). Read from the folder only; nothing is built or
- * uploaded here.
+ * built before the game's last change, or not built yet. A web build in a folder of the game (an
+ * engine's web export) says when it was made, since a build put there is new without any source
+ * changing. A ready app goes with Publish once the pinned Genex CLI can send apps (`publishedApps`).
+ * Read from the folder only; nothing is built or uploaded here.
  */
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { MINUTE_MS } from "../../shared/duration.ts";
 import { NativePlatform } from "../../shared/play-native.ts";
-import { publishesAsWebGame } from "../../shared/project-workspace.ts";
+import { publishesAsWebGame, webFolderOf } from "../../shared/project-workspace.ts";
 import { pinnedCliSendsApps } from "../../plugins/genex/native-publish.ts";
 import { type PublishPlatform, PublishPlatformState, PublishTarget } from "../../shared/publish-platforms.ts";
 import type { StudioCore } from "../studio-core.ts";
+import { readBuild } from "./live-gate.ts";
 import { type FoundBuild, findNativeBuilds } from "./native-builds.ts";
 
 /** How much newer than a build the game's last change must be before the build counts as old. */
@@ -53,8 +55,12 @@ const NOT_SOURCE_FILE = /^\.|\.(md|log)$/i;
 const isSource = (name: string, at: string, builds: ReadonlySet<string>): boolean =>
   !name.startsWith(".") && !NOT_SOURCE.has(name) && !name.endsWith(".app") && !builds.has(at);
 
+/** Whether `build` is older than the game's last change (`changed`, ms since the epoch): not what players should get. */
+export const isStaleBuild = (build: Pick<FoundBuild, "builtAt">, changed: number): boolean =>
+  changed - build.builtAt > STALE_AFTER_MS;
+
 /** When the game's sources last changed, ms since the epoch, outside its builds and caches. */
-async function lastChange(root: string, builds: readonly FoundBuild[]): Promise<number> {
+export async function lastChange(root: string, builds: readonly FoundBuild[]): Promise<number> {
   // A build's own folder, and the folder its program sits in (a Mac app's holds the app's debug symbols).
   const inBuild = new Set(
     builds.flatMap((build) => [
@@ -87,7 +93,7 @@ function nativeRow(
 ): PublishPlatform {
   if (!build)
     return { target, state: PublishPlatformState.Missing, arch: null, bytes: 0, builtAt: null, uploads: false };
-  const stale = changed - build.builtAt > STALE_AFTER_MS;
+  const stale = isStaleBuild(build, changed);
   return {
     target,
     state: stale ? PublishPlatformState.Stale : PublishPlatformState.Ready,
@@ -99,7 +105,19 @@ function nativeRow(
   };
 }
 
-/** What a game's folder holds for Publish: whether it is a web game, its newest app per platform, its last change. */
+/**
+ * When the web build in `folder` was made, ISO 8601: the time of its newest file, as Live reads a
+ * build. Null when the folder holds no file that can be read.
+ */
+async function webBuiltAt(folder: string): Promise<string | null> {
+  const newestMs = (await readBuild(folder))?.newestMs ?? 0;
+  return newestMs > 0 ? new Date(newestMs).toISOString() : null;
+}
+
+/**
+ * What a game's folder holds for Publish: whether it is a web game and the folder of it its web
+ * build sits in (null for a web game at its root), its newest app per platform, its last change.
+ */
 async function folderFacts(core: Pick<StudioCore, "games" | "pluginBinding">, project: unknown) {
   if (typeof project !== "string" || !project) throw new Error(MESSAGE.NoGame);
   const game = (await core.games.list()).find((listed) => listed.name === project);
@@ -108,8 +126,10 @@ async function folderFacts(core: Pick<StudioCore, "games" | "pluginBinding">, pr
   const builds = await findNativeBuilds(binding.directory);
   const changed = await lastChange(binding.directory, builds);
   const newest = (platform: NativePlatform) => builds.find((build) => build.platform === platform);
+  const webFolder = webFolderOf(game);
   return {
     web: publishesAsWebGame(game),
+    webFolder: webFolder === null ? null : path.join(binding.directory, ...webFolder.split("/")),
     mac: newest(NativePlatform.Mac),
     windows: newest(NativePlatform.Windows),
     linux: newest(NativePlatform.Linux),
@@ -123,33 +143,52 @@ export async function publishPlatforms(
   project: unknown,
   sendsApps = pinnedCliSendsApps(),
 ): Promise<PublishPlatform[]> {
-  const { web, mac, windows, linux, changed } = await folderFacts(core, project);
-  return [
+  const { web, webFolder, mac, windows, linux, changed } = await folderFacts(core, project);
+  const rows: PublishPlatform[] = [
     {
       target: PublishTarget.Web,
       state: web ? PublishPlatformState.Ready : PublishPlatformState.Missing,
       arch: null,
       bytes: 0,
-      builtAt: null,
+      // The folder a web build sits in is no source (`NOT_SOURCE`): the build says itself when it is new.
+      builtAt: webFolder === null ? null : await webBuiltAt(webFolder),
       uploads: web,
     },
     nativeRow(PublishTarget.Mac, mac, changed, sendsApps),
     nativeRow(PublishTarget.Windows, windows, changed, sendsApps),
     nativeRow(PublishTarget.Linux, linux, changed, sendsApps),
   ];
+  if (changed <= 0) return rows;
+  const changedAt = new Date(changed).toISOString();
+  return rows.map((row) => ({ ...row, changedAt }));
+}
+
+/** Which apps a send takes beyond Publish's own: one platform's newest whatever its age, or only builds newer than a time. */
+export interface AppsChoice {
+  /** This platform's newest build, even when it is older than the game's last change: the build a person is asked to read. */
+  force?: string;
+  /** Only builds made after this time (ms since the epoch): what the agent built after a fix press. */
+  builtAfter?: number;
+  /** Only these platforms' builds: the ones the Publish card's switches send. */
+  platforms?: readonly string[];
 }
 
 /**
  * The apps a Publish of `project` sends, by their place in its folder: each platform's newest build
- * that is not older than the game's last change. None while the CLI cannot send apps.
+ * that is not older than the game's last change (with `choice`, see {@link AppsChoice}). None while
+ * the CLI cannot send apps.
  */
 export async function publishedApps(
   core: Pick<StudioCore, "games" | "pluginBinding">,
   project: unknown,
   sendsApps = pinnedCliSendsApps(),
+  choice: AppsChoice = {},
 ): Promise<string[]> {
   if (!sendsApps) return [];
   const { mac, windows, linux, changed } = await folderFacts(core, project);
-  const fresh = (build: FoundBuild | undefined) => build !== undefined && changed - build.builtAt <= STALE_AFTER_MS;
-  return [mac, windows, linux].filter(fresh).map((build) => build?.entry ?? "");
+  const chosen = (build: FoundBuild): boolean => choice.platforms?.includes(build.platform) ?? true;
+  const builds = [mac, windows, linux].filter((build): build is FoundBuild => build !== undefined && chosen(build));
+  if (choice.force !== undefined) return builds.filter((build) => build.platform === choice.force).map((b) => b.entry);
+  const after = choice.builtAfter ?? Number.NEGATIVE_INFINITY;
+  return builds.filter((build) => !isStaleBuild(build, changed) && build.builtAt > after).map((build) => build.entry);
 }

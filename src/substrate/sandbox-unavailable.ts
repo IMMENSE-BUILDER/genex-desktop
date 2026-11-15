@@ -10,7 +10,9 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import {
+  type BootFailureCode,
   LINUX_SANDBOX_TOOLS,
+  SandboxLaunchCode,
   SandboxProblemCode,
   StudioPlatform,
   linuxInstallCommands,
@@ -30,22 +32,8 @@ const WINDOWS_SETUP_CODES: ReadonlyMap<string, WindowsSetupNeed | null> = new Ma
   ["seclogon_disabled", WindowsSetupNeed.LogonService],
 ]);
 
-/** Why a sandboxed command could not start, when the sandbox itself is set up. */
-export const SandboxLaunchCode = {
-  /** Windows: the command line would pass CreateProcess's 32,767-character limit. */
-  ArgvTooLong: "argv-too-long",
-  /** Windows: srt-win did not answer in time (its ACL calls block for up to a minute). */
-  SrtWinTimeout: "srt-win-timeout",
-  /** Windows: the working folder is on a mapped or network drive, which the sandbox user cannot see. */
-  NetworkDrive: "network-drive",
-  /** Windows: a run asked to write or read a folder outside the session's grants. */
-  NotGranted: "not-granted",
-  /** Windows: every port of srt-win's proxy range is reserved by Windows or held by another program. */
-  ProxyPortsRefused: "proxy-ports-refused",
-  /** Windows: Windows kept refusing to start srt-win as the sandbox user, after Genex tried again. */
-  SandboxUserRefused: "sandbox-user-refused",
-} as const;
-export type SandboxLaunchCode = (typeof SandboxLaunchCode)[keyof typeof SandboxLaunchCode];
+/** Why a sandboxed command could not start; its home is `shared/boot.ts`, beside the boot's own codes. */
+export { SandboxLaunchCode };
 
 /** sandbox-runtime's Windows error codes that are a launch failure, and what they stand for. */
 const WINDOWS_LAUNCH_CODES: ReadonlyMap<string, SandboxLaunchCode> = new Map([
@@ -56,9 +44,10 @@ const WINDOWS_LAUNCH_CODES: ReadonlyMap<string, SandboxLaunchCode> = new Map([
 
 /**
  * The loopback ports srt-win's egress filter lets the sandbox user reach, where its network proxies
- * must listen: sandbox-runtime's default, which Genex's install keeps.
+ * must listen: sandbox-runtime's default, which Genex's install keeps (lowest and highest, inclusive).
  */
-const SRT_PROXY_PORTS = "60080-60089";
+export const SRT_PROXY_PORT_RANGE: readonly [number, number] = [60080, 60089];
+const SRT_PROXY_PORTS = SRT_PROXY_PORT_RANGE.join("-");
 /** What Windows answers a listen on a port it reserved (EACCES) or another program holds. */
 const PORT_REFUSED: ReadonlySet<string> = new Set(["EACCES", "EADDRINUSE"]);
 const LISTEN_SYSCALL = "listen";
@@ -75,6 +64,8 @@ const MESSAGE = {
       "Commands cannot run in a folder on a mapped or network drive. Move the game to a local drive.",
     [SandboxLaunchCode.NotGranted]:
       "This folder is not open to sandboxed commands yet. It opens once the running commands finish; try again then.",
+    [SandboxLaunchCode.WriteRefused]:
+      "Windows did not let Genex open this folder to its agents: your account may not change the folder's permissions (another account owns it, or it is protected). Move the game into a folder of your own, or make your account the folder's owner, then restart Genex.",
     [SandboxLaunchCode.ProxyPortsRefused]: `Windows did not let Genex's sandbox use its network ports (${SRT_PROXY_PORTS}). Hyper-V, WSL or Docker often reserve them. Restart the PC, or run "net stop winnat" and then "net start winnat" in a terminal opened as administrator, and try again.`,
     [SandboxLaunchCode.SandboxUserRefused]:
       "Windows would not start Genex's sandbox user. Restart the PC, then try again.",
@@ -118,6 +109,24 @@ export class SandboxUnavailableError extends Error {
     super(MESSAGE.Unavailable(problem));
     this.problem = problem;
   }
+}
+
+/** How deep {@link sandboxStartFailureCode} follows an error's `cause`. */
+const CAUSE_DEPTH_MAX = 4;
+
+/**
+ * The sandbox's code for a start that failed because of it: the setup problem, or why its commands
+ * could not start (Windows' reserved proxy ports), read from the error or the causes it wraps; null
+ * for any other failure.
+ */
+export function sandboxStartFailureCode(error: unknown): BootFailureCode | null {
+  let current = error;
+  for (let depth = 0; depth < CAUSE_DEPTH_MAX && current instanceof Error; depth++) {
+    if (current instanceof SandboxUnavailableError) return current.problem.code;
+    if (current instanceof SandboxLaunchError) return current.code;
+    current = current.cause;
+  }
+  return null;
 }
 
 /** What the sandbox checks found, before `initialize`. */

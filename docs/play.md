@@ -45,18 +45,20 @@ What Play sends is in [PRIVACY](../PRIVACY.md#play).
 - Settings › Genex account: avatar (generated or photo, Regenerate), a Pro's nameplate (New one), name, nickname (`@handle` and
   Edit, once genex.games knows nicknames), credits with Get credits, Sign out by the title. Signed
   out it is the sign-in stage, with the account-card drawing.
-- Publish needs only the account: signed out it asks to sign in. Its "Share its N assets on Play"
-  switch (off; shown while some Genex asset is not on Play) shares them when the game goes live. Multiplayer needs the Genex plugin
-  on, since the agent builds it with Genex's tools.
+- Publish needs only the account: signed out it asks to sign in. It shares no assets: a game's
+  assets go to Play one by one from the Assets panel. Multiplayer needs the Genex plugin on, since the
+  agent builds it with Genex's tools.
 
 ## The dashboard
 
-- Games, Tools and Assets, each with tabs and search; Recent once something was played (opened in
-  the viewer, a native-only game's page shown however it was reached, or a native app launched). A
+- Games, Tools and Assets, each with tabs and search (the sidebar's Assets row is hidden until its
+  rework, [#654](https://github.com/genex-games/genex-desktop/issues/654)); Recent once something
+  was played (opened in the viewer, a native-only game's page shown however it was reached, or a
+  native app launched). A
   Recent row takes the newest cover any card or page shows for its game; one still without a cover,
   or whose cover no longer loads, reads its game's page once a window. A game with no cover shows a
   still wire floor (`NoCover.tsx`) on its row and card. Top creators (the last 30 days) above
-  Games' tabs. The promo card shows until the first sign-in or
+  Games' tabs, in the order genex.games ranks them. The promo card shows until the first sign-in or
   its ×.
 - Assets are square tiles under two switchers: kind (All · 3D · Images · Sounds · Videos, a kind
   read from the whole catalog) and Everyone · Mine (the account's library, Saved/Shared tags, signed
@@ -79,13 +81,18 @@ What Play sends is in [PRIVACY](../PRIVACY.md#play).
   remembered; Reduce Motion, a failed clip or a refused play stops them for the session.
 - A card's ⋯ (on the cover's corner while hovered or focused, or a right-click on the card) is
   genex.games' card menu (`src/renderer/play/card-menu/`). The game's owner gets Copy link,
-  remixing off or on, Change cover, Unpublish and Delete game; an account `/api/me` names
+  remixing off or on, Rename, Change link, Change cover, Unpublish and Delete game; an account `/api/me` names
   `isAdmin` also gets, on any game, an Admin block with Mobile support and Edit tags. Anyone else
   gets no ⋯, and neither does a search's card. Featuring stays on genex.games. Its server checks
   every call against its own admin list, so the app only decides what shows
   (`src/shared/play-manage.ts`). A change shows on every card at once. Change cover crops the
   picture to 1536×864 in the renderer and sends it through main (presigned PUT, then commit);
-  genex.games may keep the old cover and says why.
+  genex.games may keep the old cover and says why. Change link moves the game to a new address and
+  keeps its name (`keepTitle`; genex.games keeps the old one opening it, and refuses a taken or
+  reserved link, one past the game's link changes, or one while a publish of the game runs,
+  `LinkBusy`); a copy installed here moves to the new link with its saves
+  (`NativeInstaller.follow`, also on the update check). On the page of an app-only game (no web
+  build), its owner sets Players (Single player or Multiplayer) from the fact itself.
 - Friends: requests, playing now (Join), friends, sent, people search, the invite card and whether
   friends see the game the account is in. The invite link (`/api/referrals/me`, on the website
   only) opens genex.games' download page with a card from the account; the card has Copy, Post on
@@ -165,7 +172,16 @@ What Play sends is in [PRIVACY](../PRIVACY.md#play).
   LFS files come from the same repository's batch API over https, with no git-lfs needed, and each
   replaces its pointer only once its SHA-256 and size match; a download fails only once it stalls
   for a minute; a failed remix logs why in `studio.log`) into a
-  hidden folder; a source with no game in it (no `studio.json`, root page, npm scripts or engine
+  hidden folder. Download links are short-lived, so `lfs.ts` asks for them a hundred objects at a
+  time, right before those download, and once more for a link that has run out (its `expires_in` or
+  `expires_at` passed, or storage answers 401 or 403); a second refusal fails the remix. Before the
+  first byte the games folder's disk must have room for the files still to come, the files' whole size
+  once more (the copy's first save puts each into its history) and 1 GiB
+  (`LFS_RESERVE_BYTES`), or nothing is made (`PlayRemixRefusal.NoSpace`). When a file fails, the
+  copy goes but the files that came whole stay in `.remix-kept.<slug>` in the games folder, each
+  named by its SHA-256; the next remix of that game checks each one's size and SHA-256 again and
+  downloads only the rest, dropping whatever else is there. The folder goes once the copy is made
+  or when another game is remixed. A source with no game in it (no `studio.json`, root page, npm scripts or engine
   project: a creator who never shared its project, `game-source.ts`) makes nothing and says so
   (`PlayRemixRefusal`). Cards and the viewer offer Remix only once main has looked at the source
   (`studio:play.remix-ready`, `remix-ready.ts`: the head commit by `git ls-remote`, its file names by a
@@ -179,7 +195,7 @@ What Play sends is in [PRIVACY](../PRIVACY.md#play).
   builds, an Unreal plugin's too, its packaged apps (`Builds/`) included; an engine game whose project
 sits in a folder of its own also leaves out `assets/` (its models, already imported) and `docs/proof/`
 screenshots (`remix-source.ts`; at most
-5 GB and 5,000 files, as genex.games keeps; every model, picture, sound, video and Unreal package, and
+100 GiB and 50,000 files, all files together: Studio's own ceiling, never below what genex.games keeps, whose limit for the account the CLI enforces; every model, picture, sound, video and Unreal package, and
 any file of 50 MB or more, goes to Git LFS, whose blobs Genex keeps in R2 rather than on the git
 server's disk), and the CLI pushes that folder as the source
   (`--source`; a game with only apps sends it with `make-remixable` once they are live). The copy
@@ -217,6 +233,13 @@ is.
   trusts (`NATIVE_BUILD_HOSTS`: `cdn.genex.technology` by exact name, so a game's own
   `<slug>.genex.technology` site never hands out an app), with no port or credentials, never
   redirecting elsewhere, and answers `Range`. A row with anything off is dropped, the rest kept.
+  A row with `format: "chunks"` is a chunked build (`ChunkedBuild`, `isChunkedBuild`): it has no
+  `url` but `chunksUrl`, an https folder on a build host ending in `/` (no port, credentials or
+  query), which holds its manifest (`<sha256>.manifest.json`; the row's `sha256` is the
+  manifest's) and its chunks (`<hash>.bin`); its `sizeBytes` is what a fresh install downloads. A
+  row naming both `url` and `chunksUrl`, or any other `format` than `zip`, is dropped.
+  A Windows app Genex built from an Unreal game's project on its own computers (Publish's Build on
+  Genex, [plugins](plugins.md)) comes as any other row.
 - The build a computer installs is its platform's for its own processor, else a universal Mac app,
   else, on Apple silicon with Rosetta installed, an Intel-only one, where its `minOs` is met
   (`buildFor`). Games launch on the Mac, on Linux and on Windows. Play names the computer "this Mac" on a Mac and "this
@@ -226,10 +249,30 @@ is.
   needed. A card not installed shows its systems' marks on one plate. A game with no web
   build and no build for this computer is left out of the tabs and search; its maker's profile
   still lists it.
+- A native game's page (`play/GamePage.tsx`, its top `play/GameHero.tsx`, the rules in
+  `play/game-hero.ts`) opens on its art under the window's top edge, with the title, maker,
+  counts, the primary block and Like · Comments · Share over it: the cover clip over the cover
+  (it plays by the clip rules above, with the page bar's pause), the cover alone (it settles in
+  once and has no pause), or, with nothing, the no-cover floor on a shorter top in the theme's
+  colours. Two pictures or more (the cover, then the world item's `shots`) run as a slideshow
+  with thumbnails and a Shots section; Reduce Motion or the pause holds it. A picture that fails to
+  load leaves the run, so a broken cover falls back to the floor. Below: Runs on, Size (of the
+  build for this computer), Players and Made with, About when there is a description, and the
+  Store. Share copies the page's link and turns into a check; a ⋯ after it holds the card's menu (Show in Finder and Remove from this Mac for an installed game, the owner's items). On Windows in a dark theme the
+  window buttons have no box over the art (`setPictureUnderControls`); a light theme there and
+  Linux keep the bar in its own colour above it.
 - Installing (`main/play/native-installs.ts`, `studio:play.install`, progress as
   `UiEvent.PlayInstalls`): one install at a time, the rest queued; a free-space check (download,
-  unpacked game and 1 GiB); the archive streamed to `installed-games/.downloads/` (resumed by
-  range, given up after a minute without a byte), its sha256 checked, its zip directory read before
+  unpacked game and 1 GiB); the archive downloaded to `installed-games/.downloads/`
+  (`native-download.ts`): an archive of two ranges or more as 32 MiB ranges over six connections,
+  each pinned to the archive's ETag (`If-Range`) and written at its offset, the finished ones
+  recorded in `<partial>.ranges.json` so a later try asks only for the rest; a host without ranges,
+  or any answer that is not the range asked for, is not written and the archive starts over as one
+  stream (resumed by range). Each connection is given up after a minute without a byte; a cancel
+  throws the saved bytes away, a failure keeps them. The page's install bar fills with the percent
+  and says the smoothed speed, with the time left on a line under it (`shared/download-speed.ts`),
+  then Verifying and Unpacking.
+  Its sha256 is checked, its zip directory read before
   anything is unpacked (`native-zip.ts`: no entry or link outside it, nothing written through a
   link, no more than the stated size), unpacked with `ditto --noqtn`, every link resolved inside it,
   its program made runnable (an app packed on Windows carries no execute bit), the app's signature
@@ -244,6 +287,39 @@ is.
   processor (`unpackWindowsBuild`). Each
   game keeps `installed-games/<slug>/<version>/` and `saves/`; `index.json` lists them. Removing a
   game (refused while it runs) keeps its saves; an update keeps the running version until it quits.
+- Installing a chunked build (`native-chunks.ts`, `native-chunk-assemble.ts`; the `genex-chunks`
+  format, version 1). There is no archive: a manifest lists the game's files, links and empty
+  folders, and chunks of up to 16 MiB tile the bytes of its files in manifest order.
+  - **The manifest** (64 MiB at most) is downloaded by the archive's host rules, must hash to the
+    row's `sha256`, and is refused whole unless every rule holds: no unknown key; paths plain,
+    sorted, no two alike in another case, none under a file, a link or an empty folder (in any
+    case); links relative and inside the game read as text; chunk sizes adding up to the files' and to the
+    row's `installedBytes`; the row's `entry` present. Nothing is written before that. A later
+    manifest version or an unknown chunk codec fails as `needs-update` ("needs a newer Genex").
+  - **Assembling** happens in `installed-games/.downloads/<slug>-<sha16>.chunked/`: the files are
+    laid out at their sizes under `game/` (each folder made part by part, never through a link),
+    then six chunks at a time are finished. A chunk whose hash the installed version's manifest
+    lists is rebuilt from the installed files (a file of another size gives none), else downloaded
+    (`<hash>.bin`: at most its size and a codec byte, asked for up to three times after a network
+    or checksum failure, one then two seconds apart, given up after a minute without a byte) and
+    decoded (as stored or raw deflate, never past its size). Either way it is written only once
+    its sha256 is the manifest's. Genex changes a Mac app's programs and Info.plist when it signs
+    it, so those chunks fail the check and are downloaded: that is expected.
+  - **Resuming.** Each finished chunk is added to `done.log`. The next try reads every recorded
+    chunk back and checks it (Verifying), since a power loss can leave the record ahead of the
+    disk, does only the rest, and starts the folder afresh when the record is another manifest's.
+    A cancel throws the work folder away; a failure keeps it.
+  - **Finishing.** Whatever the work folder holds that the manifest does not list is removed
+    (Verifying); empty folders, program modes and, last, links are set; the game moves to the
+    staging folder and is checked, made Genex's and recorded exactly as an unpacked zip is
+    (`finishMacBuild`, `finishLinuxBuild`, `finishWindowsBuild`), and the work folder goes.
+  - **The next update.** The manifest is kept as `installed-games/<slug>/.manifest.json`, named
+    by `manifestSha256` in the index; clearing old versions leaves it, a changed link moves it
+    with the game and Remove deletes it. A zip install drops it, so the first chunked update
+    after a zip downloads every chunk.
+  - **Space and progress.** The space check asks for the part of the game the work folder does
+    not hold on disk yet, and 1 GiB. Progress counts the game's bytes in finished chunks,
+    downloaded or reused, out of `installedBytes`.
 - Playing (`main/play/native-launch.ts`): one copy per game, in the game sandbox (`spawnNativeGame`:
   the app read-only, `saves/` its HOME and `CFFIXED_USER_HOME`, its own preference domain, its
   `NSIRD_` atomic-save folder, window, GPU and sound; its only network is its Genex gateway, below).
@@ -258,42 +334,72 @@ is.
   forward. On Windows (`windowsGames`, `substrate/plugins/windows-game.ts`) srt-win can't serve:
   it puts every program on a desktop of its own, with no window on screen. A game runs instead
   through Genex's game host (`windows-game-host.ts`, compiled once with .NET Framework's `csc.exe`
-  into `<userData>/game-host/`) in an AppContainer of its own (`Genex.Play.<slug>`, no
-  capabilities). It reads its version folder, writes only `saves/` and its scratch folder (each an
-  ACL entry for the container's SID, plus a Low integrity label on the write folders), and its
-  AppData goes to the container's own folder. It reads none of the person's files and reaches no
-  network: an AppContainer reaches no loopback port without an administrator's exemption, so a
-  Windows game has no way to Genex yet. It gets the person's desktop, GPU, sound and input. It runs
-  in a job killed with the host (also with no other desktops, logging off, clipboard reads or system
-  settings); the host ends it when Genex's process or the host's stdin ends, says when its window
+  into `<userData>/game-host/`) in an AppContainer of its own (`Genex.Play.<slug>`). It reads its
+  version folder, writes only `saves/` and its scratch folder (each an ACL entry for the
+  container's SID, plus a Low integrity label on the write folders), and its AppData goes to the
+  container's own folder. It reads none of the person's files. An AppContainer reaches no loopback
+  port without an administrator's exemption, so no gateway can serve it: with a way to Genex, its
+  container gets one capability, `internetClient` (outbound to the internet, never loopback, the
+  local network Windows knows of or a server of its own), and it is told the API's own https address; with
+  none, it gets no capabilities and no network. It gets the person's desktop, GPU, sound and
+  input. It runs in a job killed with the host (also with no other desktops, logging off, clipboard
+  reads or system settings); the host ends it when Genex's process or the host's stdin ends, says when its window
   is up (Genex counts it as on screen then), brings that window forward once, and passes Quit on as
-  `WM_CLOSE`. A game opens full screen with its engine's own argument
+  `WM_CLOSE`. An Unreal game whose binary carries Microsoft's Visual C++ runtime beside it (Build on
+  Genex ships it there) starts past Unreal's launcher: the launcher reads the runtime from the
+  registry and would ask to install one the game already has, so Play starts the binary its
+  resources name, inside the app, with their arguments (`unreal-launcher.ts`); any other app
+  starts its launcher, which offers its installer. A game opens full screen with its engine's own argument
   (`launchArgs`: Unity `-screen-fullscreen 1`, Godot `--fullscreen`, Unreal `-fullscreen`; the
   engine is the catalog's, kept in the install record), unless its app sets `GenexWindowed` in its
   Info.plist (read at unpack, `WINDOWED_KEY`); the page's Quit asks it to quit, then ends its process tree;
   quitting Genex ends every game, and the next start ends a leftover only while it is the same
-  process. A web game's Mac app is offered in the viewer's bar (install, progress, play: the viewer
+  process. A game with a web build and an app opens its page from its card, as an app-only game
+  does (`opensPage`), and the page offers both (`webPlayOn`, `WebPlay`): **Play in browser** leads
+  with Install and its size beside it while the app isn't installed, and steps back beside the
+  installed app's Play; with no app for this computer the page has the one Play, and while the app
+  installs, runs, waits for an update or failed, the block is the app's alone. Its Runs on tile
+  names Web first. The app is also offered in the viewer's bar (install, progress, play: the viewer
   gives way), and opening a game whose app runs brings the app forward.
 - Genex from a native game (`main/play/genex-gateway.ts`).
-  - **The gateway.** Each launch opens a gateway on 127.0.0.1: one port for Genex's API, and six for
-    relays as answers name them (`relayHostsOf`: `relay[-<region>].<api's domain>`).
-  - **The sandbox.** The game's profile allows outbound TCP to those ports only. Seatbelt names no
-    host but `localhost`, so the gateway is how "Genex only" is enforced. On Linux the game's own
-    network namespace holds only loopback: socat inside listens on the gateway's ports on 127.0.0.1
-    and passes each connection through a unix socket to the gateway outside (no socat, no network).
-  - **What goes through.** Requests and WebSockets go on to their own Genex host over TLS. Relay
-    addresses in JSON answers (relay lists, a seat's `publicAddress`) are rewritten to their local
-    port, so the next connection comes back through the gateway. Anything else is refused: a port
-    with no host yet, a relay once the ports are full, a request over 1 MB.
-  - **What the game is told.** Its environment carries `GENEX_API_URL` (the gateway), `GENEX_GAME`
-    (its slug, so a build made before its first publish knows which rooms to join) and, while the
-    Genex account is unlocked, `GENEX_EMBED_TICKET`. That is a single-use ticket minted with
-    `delivery: "desktop"` (`gallery.ticket`); otherwise the game plays as a guest. Genex signs the
-    player in without asking first: its per-game question (App Review 4.7.3) gates only the phone
-    app's `native` delivery, and the desktop app ships outside the App Store. Genex's Godot addon
-    and Unity package read both (CLI_INTEGRATION §6b).
+  - **The gateway.** Each launch opens a gateway on 127.0.0.1: one port for Genex's API, six for
+    relays and twelve for authority servers as answers name them (`relayHostsOf`:
+    `relay[-<region>].<api's domain>`; `authorityHostsOf`: `authority[-<region>[-<node>]].<domain>`),
+    and eight UDP ports for fast@1 endpoints (`gateway-datagrams.ts`).
+  - **The sandbox.** The game's profile allows outbound TCP to the TCP ports and UDP to the datagram
+    ports, each by its own protocol (`remote tcp`/`remote udp`), plus binding a UDP socket of its own
+    (Node, Rust and .NET bind before they connect; Unreal's connected socket needs no bind). Seatbelt
+    names no host but `localhost`, so the gateway is how "Genex only" is enforced. On Linux the
+    game's own network namespace holds only loopback: socat inside listens on the gateway's ports on
+    127.0.0.1 and passes each connection through a unix socket to the gateway outside, and on each
+    datagram port gives each game socket a SOCK_SEQPACKET connection (`u<port>`) that Genex's own
+    socat outside turns into a UDP socket to the gateway (no socat, no network). Windows has no
+    gateway (an AppContainer reaches no loopback port): the game is told the API's own address
+    (`directGenexEnv`: an https origin, nothing after it) and reaches it, and the relays, authority
+    servers and fast endpoints its answers name, over the internet (`internetClient`, outbound TCP
+    and UDP); there "Genex only" is not enforced.
+  - **What goes through.** Requests and WebSockets go on to their own Genex host over TLS. Relay and
+    authority addresses in JSON answers (relay lists, `authorityUrls`, `authorityRegions`, a seat's
+    `publicAddress`) are rewritten to their local port, so region probes, joins and room sockets
+    come back through the gateway. An authority room names its fast@1 endpoint inside its WebSocket
+    (`__fast`, multiplayer PROTOCOL.md §17.12): the gateway reads the room's frames (never the
+    game's), rewrites that url to a datagram port (`gateway-frames.ts`) and drops the compression
+    offer so it can. Each game socket on a datagram port gets its own UDP socket to the endpoint, so
+    the room's path check and the seat's key work unchanged; about 0.07 ms is added on loopback.
+    Anything else is refused: a port with no host yet, a host once its pool is full, a request over
+    1 MB, a fast host that is neither `fast[-<region>].<domain>` nor a public address (or a name that
+    resolves to this computer or its network), a datagram over 1,200 bytes. Past eight senders a
+    datagram port drops the one the room answered least lately.
+  - **What the game is told.** Its environment carries `GENEX_API_URL` (the gateway; on Windows the
+    API), `GENEX_GAME` (its slug, so a build made before its first publish knows which rooms to
+    join) and, while the Genex account is unlocked, `GENEX_EMBED_TICKET`. That is a single-use
+    ticket minted with `delivery: "desktop"` (`gallery.ticket`); otherwise the game plays as a
+    guest. Genex signs the player in without asking first: its per-game question (App Review 4.7.3)
+    gates only the phone app's `native` delivery, and the desktop app ships outside the App Store.
+    Genex's Godot addon and Unity package read both (CLI_INTEGRATION §6b).
   - **Failure and shutdown.** A gateway that can't open leaves the game offline, not unplayable. The
-    gateway closes when the game ends. A fixture launch opens none.
+    gateway closes when the game ends. A fixture launch opens none, and a game being made (Play
+    from its own folder) stays offline.
   - **Its play count** (`main/play/native-plays.ts`). Most native builds never redeem the ticket, so
     once a game counts as running (its window on screen, or a minute up without one) Play reports
     the play itself (`POST /api/embed/native-play`): genex.games counts the signed-in account, or,
@@ -310,6 +416,11 @@ is.
   takes it once (`studio:play.take-game-link`, announced by `play.game-link`); the page then opens
   the game's own page in Play (`use-game-links.ts`), which shows its own error when the game
   cannot be read. Developer and test launches register nothing.
+- A creator's own published game opens there too: Open on the chat's live card and on Publish's
+  public link shows the game's page in Play (`openPlayGame` in `play/open-play.ts`; Publish closes
+  first), for a game whose public address is on this Play's website (`playPageSlug` in
+  `shared/play.ts`). A game on another Genex (a development stand's) has no page here, so its Open
+  goes to the browser through the plugin's checked `publish-open`.
 - Notices: an install finished or failed, and a newer build of an installed game (checked at start
   and every six hours, once per version), are written to the log (`play_install_finished`,
   `play_install_failed`, `play_update_available`); the feed shows them as Play rows that open the
@@ -319,7 +430,9 @@ is.
   `native-games` fixture builds their Mac apps on this Mac (Xcode, `dev/fixture-native-app.ts`),
   serves the archives from the profile at a few MB a second, and starts with Frigate installed,
   Puck Rush one version behind, and a Mac build in the library game's `Builds/Mac`, so its Publish
-  dialog lists platforms ([Genex publish](plugins.md#first-party-privileges)).
+  dialog lists platforms ([Genex publish](plugins.md#first-party-privileges)). Their pages show
+  each top: Dust Runners and Frigate a slideshow, Puck Rush its cover alone (as genex.games sends
+  every page today: no shots), Iron Tide nothing at all (no cover, shots or description).
 - `studio:play.game` reads a game's own page (`StudioApi.playGame`): its card, likes, comments,
   description, screenshots and when it changed.
 
@@ -362,7 +475,8 @@ frame only, `STUDIO_UI_ONLY`); prices, shares and counts are genex.games' own, n
   `viewerEscape`). While it is open, a game that finishes loading stays hidden, and Full screen and
   Resume do nothing. A native game's card still opens its page, with its Store under it.
 - **Create › Items** (sidebar row `[data-sidebar-room="items"]`, `panels/items/`,
-  `state/items.ts`) is a room over the workspace, like Plugins. **Browse** lists other creators'
+  `state/items.ts`) is a room over the workspace, like Plugins. Its sidebar row is hidden until its
+  rework ([#654](https://github.com/genex-games/genex-desktop/issues/654)). **Browse** lists other creators'
   shared items with a search, read once the typing pauses; the intro and You get per sale name the
   selling game's share genex.games sends (`sellerShareBps`, `panels/items/browse-model.ts`), else the
   design's words; the panel shows Players pay, You get per sale, **For \<game ▾>** (the account's
@@ -494,10 +608,12 @@ In a game's Assets tab, signed in, cards wear **Saved** or **Shared**; the opene
 (bookmark) and Share (Play's tint) beside Reveal, and Cmd/Shift-click picks several for a bar (Save,
 Share, Clear). Save marks a generation Saved, or sends a file Genex did not make (GLB, PNG/JPEG/WebP,
 MP3/WAV/OGG, MP4) to the library through genex.games' import; such a file can be saved but not
-shared. Share opens one window (a name per asset, one line of what sharing means), then each card shows
-a step line (Send · Check · Live), a bare ✓ On Play, or an orange refusal with Try again or Send a
-report; a shared one offers Open on Play and Stop sharing. genex.games keeps one page per asset: a
-second share answers the page it has and puts back one taken off Play.
+shared. Share opens one window (a name per asset, one line of what sharing means). The name offered
+is the first line of what the asset was made from, shortened to the 40 characters a page's name
+keeps on Play: at its last whole clause that fits, else its last whole phrase or word. Then each
+card shows a step line (Send · Check · Live), a bare ✓ On Play, or an orange refusal with Try again
+or Send a report; a shared one offers Open on Play and Stop sharing. genex.games keeps one page per
+asset: a second share answers the page it has and puts back one taken off Play.
 
 The Assets tab's search answers from the game, My library and Community; Add copies a library asset
 into `assets/library/<id>/` and a shared one into `assets/community/<id>/` (a code-only asset into

@@ -26,17 +26,23 @@
  * or description that names it, however spelled, is refused before any editor is reached. While a
  * play the agent started runs, the bridge keeps a marker beside it (`agent-play.ts`), so the
  * editor lock tells the agent's play from the person's: an agent's `StartPIE` the editor took sets
- * it, and its `StopPIE`, the editor crashing under a call and the bridge closing clear it.
+ * it, and its `StopPIE`, the editor crashing under a call and the bridge closing clear it. A play
+ * step Unreal refuses is checked against the helper's `play_state`: a start whose play runs anyway
+ * (the game's own errors read as a failed `StartPIE`) or a stop with no play left answers so. An
+ * agent's Blueprint write (Epic's `write_graph_dsl`) is checked by the Genex editor helper before
+ * and after (`graph-write-guard.ts`): a text too big for one write is refused, and a graph that came
+ * back short of its text fails the call, though Unreal answered ok.
  */
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MINUTE_MS, SECOND_MS } from "../../shared/duration.ts";
 import { type AgentPlayMarker, NO_AGENT_PLAY } from "./agent-play.ts";
 import { errorMessage } from "../../shared/errors.ts";
+import { isJsonObject } from "../../substrate/fsx.ts";
 import { CONNECTOR_OUTCOME_META, ToolsetGatewayArg } from "../../shared/mcp.ts";
 import {
   type CrashWatch,
@@ -48,28 +54,38 @@ import {
 } from "./editor-log.ts";
 import {
   type ChosenProject,
+  EditorBlock,
+  editorBlock,
   editorEndpoint,
   editorServes,
   HELPER_TOOLSET,
   isEpicServer,
+  namesItself,
   PROJECT_FILE_TOOL,
   sameProject,
 } from "./editor-port.ts";
 import { BUILD_TOOLSET, type CaptureClock, captureTool, helperAnswer, liftCapture } from "./editor-captures.ts";
 import { fitDescription } from "./editor-describe.ts";
-import { LOOP_TOOLSET } from "./editor-queue.ts";
+import {
+  CHECK_AFTER_MS,
+  CHECK_BEFORE_MS,
+  CHECK_GRAPH_TOOL,
+  checkArguments,
+  checkProblem,
+  type GraphWrite,
+  graphWriteOf,
+} from "./graph-write-guard.ts";
+import { LOOP_TOOLSET, LoopTool } from "./editor-queue.ts";
 import {
   OBJECT_TOOLSET,
   ObjectTool,
   CVarTool,
   EDITOR_APP_TOOLSET,
   mayLiftThrottle,
-  rayTracingArgs,
-  rayTracingIn,
-  readThrottleArgs,
-  throttleIn,
-  tookValues,
-  writeThrottleArgs,
+  readRunSettings,
+  type ThrottleAsk,
+  ThrottleTool,
+  writeThrottle,
 } from "./editor-throttle.ts";
 import { EditorStart, editorStart, type StartEnv } from "./editor-status.ts";
 import { systemEditorLog, systemSetupEnv } from "./setup.ts";
@@ -78,6 +94,11 @@ const BRIDGE_VERSION = "0.1.0";
 const CONNECT_TIMEOUT_MS = 10 * SECOND_MS;
 /** Calls run on the editor's game thread: a PIE start with warmup or an asset render takes a while. */
 const CALL_TIMEOUT_MS = 5 * MINUTE_MS;
+/** A session the host keeps with a project's editor ends after this long without a call. */
+const KEPT_IDLE_MS = 30 * SECOND_MS;
+/** What Epic's server answers a request in a session it doesn't know. */
+const HTTP_NOT_FOUND = 404;
+const HTTP_BAD_REQUEST = 400;
 /** How often a pending call's editor log is read for a crash: a crashed editor's call answers within about this. */
 const CRASH_POLL_MS = SECOND_MS;
 /** How often a call asks again for an editor Genex is starting. */
@@ -93,6 +114,8 @@ const EDITOR_START_WAIT_MS = 150 * SECOND_MS;
  * answers about a second after the editor's log says it loaded, which ends the Starting state.
  */
 const LOADED_ANSWER_MS = 10 * SECOND_MS;
+/** The time a graph write's two checks may take out of the call's own. */
+const CHECKS_MS = CHECK_BEFORE_MS + CHECK_AFTER_MS;
 /** Pictures handed over per answer; any more leave the text without becoming images. */
 const MAX_IMAGES = 4;
 /** The picture types every engine accepts as a tool-result image. */
@@ -110,6 +133,8 @@ const SESSION_END_MS = 5 * SECOND_MS;
 
 /** How long a closing bridge waits to give the user's throttle setting back. */
 const GIVE_BACK_ON_CLOSE_MS = 3 * SECOND_MS;
+/** How long the bridge asks the helper whether a play runs, after the editor refused a play step. */
+const PLAY_STATE_MS = 15 * SECOND_MS;
 
 /** The toolset holding the play-in-editor tools whose session the bridge keeps at full speed. */
 const PLAY_TOOLSET = "EditorToolset.EditorAppToolset";
@@ -128,13 +153,19 @@ const LOOP_TOOLSET_MARKS = [
 /** What hides inside a name: whitespace and the zero-width characters. */
 const HIDDEN_IN_NAME = /[\s\u200b-\u200d\u2060\ufeff]/g;
 
-/** Epic's meta-tools (the editor's default `bEnableToolSearch` mode), by their wire names. */
+/**
+ * The editor's meta-tools as agents call them, by their wire names: Epic's own on Unreal 5.8 (the
+ * editor's default `bEnableToolSearch` mode). Unreal 5.9 describes with {@link DESCRIBE_MANY}; the
+ * bridge asks it that for the agent's `describe_toolset`, so agents call the same three on both.
+ */
 export const EditorTool = {
   ListToolsets: "list_toolsets",
   DescribeToolset: "describe_toolset",
   CallTool: "call_tool",
 } as const;
 export type EditorTool = (typeof EditorTool)[keyof typeof EditorTool];
+/** Unreal 5.9's describing tool: several toolsets in one call, each answered under its name. */
+const DESCRIBE_MANY = "describe_toolsets";
 
 const MESSAGE = {
   CallTimedOut: (ms: number) => `The editor call timed out: it didn't end within ${ms / SECOND_MS} seconds.`,
@@ -142,6 +173,7 @@ const MESSAGE = {
   Redirected: "Unreal MCP redirected the connection.",
   NotUnreal: "the server there is not Unreal's MCP server",
   OtherProject: "the editor there has another project open",
+  SessionDropped: "the session with the editor ended",
   UnknownTool: (name: string) =>
     `Unknown Unreal Editor tool ${JSON.stringify(name)}. Use ${Object.values(EditorTool).join(", ")}.`,
   NoProject:
@@ -153,15 +185,24 @@ const MESSAGE = {
   NotSetUp: (name: string, file: string) =>
     `${name} isn't set up for Genex. Call unreal__use-project with ${file}: it sets the project up and links it to this game. Then retry.`,
   StillStarting: (name: string) => `Unreal is still starting ${name}. Call again in a minute.`,
+  Blocked: {
+    [EditorBlock.SlowTask]: (name: string) =>
+      `${name}'s Unreal is busy with a long task (loading, compiling or importing) and runs no tool until it ends. Nothing was changed. Call again in a minute.`,
+    [EditorBlock.ModalDialog]: (name: string) =>
+      `${name}'s Unreal is showing a window that waits for an answer, and runs no tool until it closes. Nothing was changed. Look at it with the desktop tool and answer it (or ask the user to), then call again.`,
+  } satisfies Record<EditorBlock, (name: string) => string>,
   Answered: (name: string) => `[Unreal project: ${name}]`,
   CallFailed: (reason: string) =>
     `Unreal Editor did not complete the call (${reason}), so whether it took effect is unknown. Look before you repeat it.`,
   NotCompleted: (reason: string) => `Unreal Editor did not complete the call: ${reason}`,
+  PlayRuns: (said: string) =>
+    `The play session is running. Unreal's answer to StartPIE${said ? `: ${said}` : " was an error"} (the game's own errors while play starts read as one).`,
+  NothingToStop: "No play session is running now (it had already ended), so there was nothing to stop.",
   Crashed: (detail: string | undefined) =>
     `Unreal crashed while this call ran${detail ? ` (${detail})` : ""}, so whether it took effect is unknown. Call unreal__open-editor to reopen it; once it answers, look before you repeat the call.`,
   ImageAttached: (n: number) => `[image ${n} attached]`,
   ImageOmitted: `[image omitted: at most ${MAX_IMAGES} per answer]`,
-  LoopToolset: `${LOOP_TOOLSET} is Genex's own Unreal Loop toolset, which agents can't call. Build with genex_build.tools.GenexBuildTools and play with genex_play.tools.GenexPlayTools.`,
+  LoopToolset: `${LOOP_TOOLSET} is Genex's own Unreal Loop toolset, which agents can't call. Build with genex_build.tools.GenexBuildTools; play with Genex's computer tool (genex_play.tools.GenexPlayTools suits a quick look).`,
 } as const;
 
 /** Epic's meta-tools as Studio lists them, so they are there before the editor is open. */
@@ -169,7 +210,7 @@ const TOOLS = [
   {
     name: EditorTool.ListToolsets,
     description:
-      "List the Unreal Editor's toolsets (actors, assets, Blueprints, materials, play-in-editor, captures…).",
+      "List the Unreal Editor's toolsets (actors, assets, Blueprints, materials, play-in-editor, captures…). To playtest the game (minutes of play, a bug hunt, a fight) use Genex's computer tool instead (load it first when only its name is listed): it plays every frame and runs pilots; these toolsets suit building and a quick look.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
@@ -188,7 +229,7 @@ const TOOLS = [
   {
     name: EditorTool.CallTool,
     description:
-      "Call one Unreal Editor tool by toolset_name and tool_name with arguments matching its schema from describe_toolset. Changes land in the user's open editor.",
+      "Call one Unreal Editor tool by toolset_name and tool_name with arguments matching its schema from describe_toolset. Changes land in the user's open editor. Playtesting goes through Genex's computer tool, not single calls here.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -280,8 +321,13 @@ type CallResult = Awaited<ReturnType<Client["callTool"]>>;
  */
 type EditorSession = {
   endpoint: URL;
-  /** Calls a tool; it fails once `timeoutMs` passes without an answer (default {@link CALL_TIMEOUT_MS}). */
-  call: (params: CallParams, timeoutMs?: number) => Promise<CallResult>;
+  /** Whether this editor describes toolsets with Unreal 5.9's {@link DESCRIBE_MANY}, not the older tool the agent names. */
+  describesMany: boolean;
+  /**
+   * Calls a tool; it fails once `timeoutMs` passes without an answer (default {@link CALL_TIMEOUT_MS})
+   * or `signal` aborts (default: the session's own).
+   */
+  call: (params: CallParams, timeoutMs?: number, signal?: AbortSignal) => Promise<CallResult>;
   end: () => Promise<void>;
   abandon: () => Promise<void>;
 };
@@ -376,9 +422,9 @@ async function openSession(endpoint: URL, fetchImpl: typeof fetch, signal: Abort
     await end();
     throw new Error(MESSAGE.NotUnreal);
   }
-  const call = (params: CallParams, timeoutMs = CALL_TIMEOUT_MS) =>
-    client.callTool(params, undefined, { timeout: timeoutMs, signal });
-  return { endpoint, call, end, abandon };
+  const call = (params: CallParams, timeoutMs = CALL_TIMEOUT_MS, callSignal: AbortSignal = signal) =>
+    client.callTool(params, undefined, { timeout: timeoutMs, signal: callSignal });
+  return { endpoint, describesMany: namesItself(client.getServerVersion()), call, end, abandon };
 }
 
 type Reached = { session: EditorSession; project: EditorProject } | { error: string };
@@ -395,7 +441,7 @@ async function openProjectSession(
 ): Promise<EditorSession> {
   const session = await openSession(endpointOf(project), fetchImpl, signal);
   const asked = toolsetCall(HELPER_TOOLSET, PROJECT_FILE_TOOL, {});
-  const named = await session.call(asked).then(returnValue, () => undefined);
+  const named = await session.call(asked, CONNECT_TIMEOUT_MS).then(returnValue, () => undefined);
   if (typeof named === "string" && (await sameProject(named, project.project))) return session;
   await session.end();
   throw new Error(MESSAGE.OtherProject);
@@ -470,9 +516,10 @@ async function awaitStart(project: EditorProject, bridge: Bridge, signal: AbortS
 }
 
 /**
- * The chosen project's editor, and only it: one Genex is starting is waited for, and when it
- * doesn't answer, the other set-up projects are asked only so the message can name one that is
- * open, never to forward the call there.
+ * The chosen project's editor, and only it: one Genex is starting is waited for; one that is open
+ * and says a long task or a dialog blocks it is named so; and when it doesn't answer, the other
+ * set-up projects are asked only so the message can name one that is open, never to forward the
+ * call there.
  */
 async function reachChosen(
   chosen: EditorProject,
@@ -484,6 +531,8 @@ async function reachChosen(
   if ("session" in first) return { session: first.session, project: chosen };
   const started = await awaitStart(chosen, bridge, signal);
   if (started) return started;
+  const block = await editorBlock(endpointOf(chosen), bridge.fetchImpl);
+  if (block) return { error: MESSAGE.Blocked[block](chosen.name) };
   const open = await firstAnswering(
     setUp.filter((p) => p.project !== chosen.project),
     bridge.fetchImpl,
@@ -539,32 +588,149 @@ function answerText(result: CallResult): string {
 }
 
 /**
+ * A session the host keeps with a project's editor between its calls, when it goes idle, and what
+ * ends it (its opening too: an editor that never names its project holds no wait past the drop).
+ */
+type Kept = { session: Promise<EditorSession>; idle?: NodeJS.Timeout; closing: AbortController };
+
+/** The host's kept sessions, by the fetch they go through and the project's endpoint and file. */
+const keptSessions = new WeakMap<typeof fetch, Map<string, Kept>>();
+
+/** An editor's answer to a call: the tool refused it, which says nothing against the session. */
+class ToolRefusal extends Error {}
+
+const keptKey = (project: EditorProject) => `${endpointOf(project).href} ${project.project}`;
+
+function keptFor(fetchImpl: typeof fetch): Map<string, Kept> {
+  let kept = keptSessions.get(fetchImpl);
+  if (!kept) {
+    kept = new Map();
+    keptSessions.set(fetchImpl, kept);
+  }
+  return kept;
+}
+
+/** Ends a kept session and forgets it, unless another has taken its place. */
+function dropKept(kept: Map<string, Kept>, key: string, entry: Kept): void {
+  if (kept.get(key) !== entry) return;
+  kept.delete(key);
+  if (entry.idle) clearTimeout(entry.idle);
+  entry.session.then(
+    (session) => session.end(),
+    () => undefined,
+  );
+  entry.closing.abort(new Error(MESSAGE.SessionDropped));
+}
+
+/**
+ * The kept session with a project's editor, opened (and its project checked) when there is none;
+ * it ends after {@link KEPT_IDLE_MS} without a call.
+ */
+function keptSession(
+  project: EditorProject,
+  fetchImpl: typeof fetch,
+): { kept: Map<string, Kept>; key: string; entry: Kept } {
+  const kept = keptFor(fetchImpl);
+  const key = keptKey(project);
+  let entry = kept.get(key);
+  if (!entry) {
+    const closing = new AbortController();
+    const opened: Kept = { session: openProjectSession(project, fetchImpl, closing.signal), closing };
+    opened.session.catch(() => dropKept(kept, key, opened));
+    kept.set(key, opened);
+    entry = opened;
+  }
+  const current = entry;
+  if (current.idle) clearTimeout(current.idle);
+  current.idle = setTimeout(() => dropKept(kept, key, current), KEPT_IDLE_MS);
+  current.idle.unref();
+  return { kept, key, entry: current };
+}
+
+/** Settles as `promise` does, or rejects with `signal`'s reason once it aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return Promise.race([promise, ended(signal).then(() => Promise.reject(signal.reason))]);
+}
+
+/** Whether the editor answered that it doesn't know the session (it restarted): the call never ran. */
+const forgotSession = (error: unknown) =>
+  error instanceof StreamableHTTPError && (error.code === HTTP_NOT_FOUND || error.code === HTTP_BAD_REQUEST);
+
+/** One call on the kept session; a session the editor forgot is opened anew and the call made once. */
+async function callKept(
+  project: EditorProject,
+  call: { toolset: string; tool: string; args: Record<string, unknown>; timeoutMs?: number },
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+  again: boolean,
+): Promise<unknown> {
+  const { kept, key, entry } = keptSession(project, fetchImpl);
+  try {
+    const session = await untilAborted(entry.session, signal);
+    const result = await session.call(toolsetCall(call.toolset, call.tool, call.args), call.timeoutMs, signal);
+    if (result.isError) throw new ToolRefusal(answerText(result) || MESSAGE.NotUnreal);
+    return returnValue(result);
+  } catch (error) {
+    if (error instanceof ToolRefusal) throw new Error(error.message);
+    dropKept(kept, key, entry);
+    if (again && forgotSession(error)) return callKept(project, call, fetchImpl, signal, false);
+    throw error;
+  }
+}
+
+/** How long one of Genex's own calls waits out an editor a long task or a dialog blocks, and how often it asks again. */
+export type BlockedPace = { waitMs: number; pollMs: number };
+const BLOCKED_PACE: BlockedPace = { waitMs: MINUTE_MS, pollMs: SECOND_MS };
+
+/**
+ * One call on the kept session, made again while the editor says a long task or a dialog blocks it
+ * ({@link editorBlock}): Unreal 5.9 then runs no tool and answers at once, where 5.8 held the call
+ * until it was free. A failure of an editor that isn't blocked, or a block that outlasts the wait,
+ * is the call's own.
+ */
+async function callUnblocked(
+  project: EditorProject,
+  call: { toolset: string; tool: string; args: Record<string, unknown>; timeoutMs?: number },
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+  pace: BlockedPace,
+): Promise<unknown> {
+  for (let waited = 0; ; waited += pace.pollMs) {
+    try {
+      return await callKept(project, call, fetchImpl, signal, true);
+    } catch (error) {
+      const mayWait = waited < pace.waitMs && !signal.aborted;
+      if (!mayWait || !(await editorBlock(endpointOf(project), fetchImpl))) throw error;
+      await sleep(pace.pollMs, undefined, { signal }).catch(() => undefined);
+    }
+  }
+}
+
+/**
  * Calls one tool on a project's own editor, once the Genex editor helper there names that project,
  * and answers its return value. For the editor queue and the Unreal Loop's own steps, which call
- * the editor themselves rather than through an agent's bridge. A call that blocks the editor
- * longer than most (a hot reload) names its own `timeoutMs`.
+ * the editor themselves rather than through an agent's bridge. The session (and its project's
+ * check) is kept between calls: each request waits for one of the editor's frames, and opening a
+ * session for every call made each of them several requests long. A call that blocks the editor
+ * longer than most (a hot reload) names its own `timeoutMs`. An editor that a long task or a dialog
+ * blocks is waited for, within `pace`.
  */
 export async function callProjectTool(
   project: EditorProject,
   call: { toolset: string; tool: string; args: Record<string, unknown>; timeoutMs?: number },
   fetchImpl: typeof fetch = fetch,
   signal: AbortSignal = new AbortController().signal,
+  pace: BlockedPace = BLOCKED_PACE,
 ): Promise<unknown> {
-  // A call with a limit of its own keeps its whole session within it: the connect, the helper's
-  // identity call, the call itself and the session's end.
+  // A call with a limit of its own keeps its whole wait within it: the session's opening, the
+  // helper's identity call and the call itself.
   const limit = new AbortController();
   const ms = call.timeoutMs;
   const timer = ms === undefined ? null : setTimeout(() => limit.abort(new Error(MESSAGE.CallTimedOut(ms))), ms);
   const limited = AbortSignal.any([signal, limit.signal]);
   try {
-    const session = await openProjectSession(project, fetchImpl, limited);
-    try {
-      const result = await session.call(toolsetCall(call.toolset, call.tool, call.args), call.timeoutMs);
-      if (result.isError) throw new Error(answerText(result) || MESSAGE.NotUnreal);
-      return returnValue(result);
-    } finally {
-      await session.end();
-    }
+    return await callUnblocked(project, call, fetchImpl, limited, pace);
   } catch (error) {
     throw limit.signal.aborted ? limit.signal.reason : error;
   } finally {
@@ -572,23 +738,22 @@ export async function callProjectTool(
   }
 }
 
-/** Whether the editor throttles in the background; undefined when it can't be read. */
-async function readThrottle(session: EditorSession): Promise<boolean | undefined> {
-  const read = toolsetCall(OBJECT_TOOLSET, ObjectTool.GetProperties, readThrottleArgs());
-  return throttleIn(returnValue(await session.call(read)));
-}
+/** The toolset each tool that reads or writes the throttle lives in: the helper's own, or Epic's. */
+const THROTTLE_TOOLSET_OF = {
+  [ThrottleTool.RunSettings]: LOOP_TOOLSET,
+  [ThrottleTool.SetThrottle]: LOOP_TOOLSET,
+  [ObjectTool.GetProperties]: OBJECT_TOOLSET,
+  [ObjectTool.SetProperties]: OBJECT_TOOLSET,
+  [CVarTool.Search]: EDITOR_APP_TOOLSET,
+} as const satisfies Record<Parameters<ThrottleAsk>[0], string>;
 
-/** Whether the editor ray-traces; undefined when it can't be read. */
-async function readRayTracing(session: EditorSession): Promise<boolean | undefined> {
-  const read = toolsetCall(EDITOR_APP_TOOLSET, CVarTool.Search, rayTracingArgs());
-  return rayTracingIn(returnValue(await session.call(read)));
-}
-
-/** Sets the throttle for the editor's current run; true when the editor took it. */
-async function writeThrottle(session: EditorSession, on: boolean): Promise<boolean> {
-  const write = toolsetCall(OBJECT_TOOLSET, ObjectTool.SetProperties, writeThrottleArgs(on));
-  return tookValues(returnValue(await session.call(write)));
-}
+/** The throttle's tools asked of one editor session; an answer the editor marks failed holds no value. */
+const throttleAsk =
+  (session: EditorSession): ThrottleAsk =>
+  async (tool, args) => {
+    const result = await session.call(toolsetCall(THROTTLE_TOOLSET_OF[tool], tool, args));
+    return result.isError ? undefined : returnValue(result);
+  };
 
 /** Whether a tool name means `step`, resolved the way Unreal does: case-insensitively, short or qualified. */
 function namesStep(tool: string, toolset: string, step: PlayStep): boolean {
@@ -633,22 +798,29 @@ function helperFailed(params: CallParams, content: Part[]): boolean {
  * says it runs without ray tracing is lifted (`mayLiftThrottle`).
  */
 function throttleKeeper(platform: NodeJS.Platform) {
-  /** The endpoints of the editors whose throttle the bridge turned off and still owes back. */
-  const owed = new Set<string>();
+  /**
+   * The endpoints of the editors whose throttle the bridge turned off and still owes back, each
+   * with whether the helper's own tools set it: it goes back the way it was taken.
+   */
+  const owed = new Map<string, boolean>();
   const forget = (session: EditorSession) => {
     owed.delete(session.endpoint.href);
   };
   const giveBack = async (session: EditorSession) => {
-    if (!owed.has(session.endpoint.href)) return;
-    if (await writeThrottle(session, true).catch(() => false)) owed.delete(session.endpoint.href);
+    const helper = owed.get(session.endpoint.href);
+    if (helper === undefined) return;
+    if (await writeThrottle(throttleAsk(session), helper, true).catch(() => false)) owed.delete(session.endpoint.href);
   };
   const lift = async (session: EditorSession) => {
-    if (owed.has(session.endpoint.href) || (await readThrottle(session).catch(() => undefined)) !== true) return;
-    if (!mayLiftThrottle(platform, await readRayTracing(session).catch(() => undefined))) return;
-    if (await writeThrottle(session, false).catch(() => false)) owed.add(session.endpoint.href);
+    if (owed.has(session.endpoint.href)) return;
+    const ask = throttleAsk(session);
+    const settings = await readRunSettings(ask);
+    if (settings.throttle !== true || !mayLiftThrottle(platform, settings.rayTracing)) return;
+    if (await writeThrottle(ask, settings.helper, false).catch(() => false))
+      owed.set(session.endpoint.href, settings.helper);
   };
   return {
-    owed: () => [...owed].map((href) => new URL(href)),
+    owed: () => [...owed.keys()].map((href) => new URL(href)),
     giveBack,
     forget,
     before: (session: EditorSession, step: PlayStep | undefined) =>
@@ -705,18 +877,98 @@ async function settlePlay(
   if (step === PlayStep.Stop && !failed) await marker.stopped();
 }
 
-/** What the editor is asked: a description's `tool_name` is the bridge's own, so Epic gets only the toolset. */
-function editorParams(params: CallParams): CallParams {
+/** Whether the editor is in a play session, as the helper's `play_state` says; undefined when it can't say. */
+async function playing(session: EditorSession): Promise<boolean | undefined> {
+  const read = toolsetCall(LOOP_TOOLSET, LoopTool.PlayState, {});
+  const answer = await session.call(read, PLAY_STATE_MS).catch(() => undefined);
+  const value = answer ? returnValue(answer) : undefined;
+  const state = typeof value === "string" ? parseJson(value)?.value : value;
+  const pie = state && typeof state === "object" ? Reflect.get(state, "pie") : undefined;
+  return typeof pie === "boolean" ? pie : undefined;
+}
+
+/** A forwarded call's play step: which it is, whether a play ran before a start, and the mark to give back. */
+type PlayCall = { step: PlayStep | undefined; before: boolean | undefined; giveBack: () => Promise<void> };
+
+/**
+ * Gives back or keeps the throttle and the agent's mark once the editor answered a play step. A step
+ * it refused is read by the helper's play state after it, never by the editor's words: a start that
+ * began a play nobody ran before (the game's own errors as play starts make Epic's StartPIE answer an
+ * error, though the play goes on) or a stop with no play left (its pilot, a save point or the game
+ * ended it) held, and is settled as one the editor took; a stop whose play goes on keeps both; when
+ * the helper can't say, the refusal stands. Answers whether a refused step's aim held.
+ */
+async function settleStep(session: EditorSession, play: PlayCall, refused: boolean, how: Forwarding) {
+  const { step } = play;
+  const pie = refused && step !== undefined ? await playing(session) : undefined;
+  const held = step === PlayStep.Start ? play.before === false && pie === true : pie === false;
+  const failed = refused && !held;
+  const playsOn = failed && step === PlayStep.Stop && pie === true;
+  if (!playsOn) await how.keeper.after(session, step, failed);
+  await settlePlay(how.agentPlay, step, failed, play.giveBack);
+  return refused && held;
+}
+
+/** The answer to a refused play step whose aim holds: the play runs, with Unreal's own words, or there was nothing to stop. */
+function heldAnswer(step: PlayStep, said: string, project: EditorProject) {
+  const text = step === PlayStep.Start ? MESSAGE.PlayRuns(said) : MESSAGE.NothingToStop;
+  return {
+    content: [
+      { type: "text", text },
+      { type: "text", text: MESSAGE.Answered(project.name) },
+    ],
+  };
+}
+
+/**
+ * What the editor is asked: a description's `tool_name` is the bridge's own, so Epic gets only the
+ * toolset, by the describing tool its release has ({@link DESCRIBE_MANY} from Unreal 5.9, asked for
+ * the one toolset with its tools' schemas).
+ */
+function editorParams(params: CallParams, session: EditorSession): CallParams {
   if (params.name !== EditorTool.DescribeToolset) return params;
+  if (session.describesMany) {
+    const toolset = params.arguments?.[ToolsetGatewayArg.Toolset];
+    return { name: DESCRIBE_MANY, arguments: { toolset_names: [toolset], include_schemas: true } };
+  }
   const args = Object.entries(params.arguments ?? {}).filter(([key]) => key !== ToolsetGatewayArg.Tool);
   return { ...params, arguments: Object.fromEntries(args) };
 }
 
+/**
+ * One toolset's description out of {@link DESCRIBE_MANY}'s answer, which holds each toolset under
+ * its name and Epic's words for a name it doesn't have under `errors`: the toolset's own entry, as
+ * the older tool answered it, or those words as a failed answer. Anything else is left as it came.
+ */
+function oneToolset(content: Part[], toolset: unknown): { content: Part[]; failed: boolean } {
+  const asItCame = { content, failed: false };
+  const text = content.find((part) => part.type === "text")?.text;
+  if (typeof text !== "string" || typeof toolset !== "string") return asItCame;
+  const answer = parseJson(text)?.value;
+  const described = fieldOf(fieldOf(answer, "toolsets"), toolset);
+  if (isJsonObject(described)) return { content: [{ type: "text", text: JSON.stringify(described) }], failed: false };
+  const refused = fieldOf(fieldOf(answer, "errors"), toolset);
+  return typeof refused === "string" ? { content: [{ type: "text", text: refused }], failed: true } : asItCame;
+}
+
+/** A JSON object's own field; undefined for anything that isn't an object or lacks it. */
+const fieldOf = (value: unknown, key: string): unknown =>
+  isJsonObject(value) && Object.hasOwn(value, key) ? value[key] : undefined;
+
 /** The editor's answer as the agent reads it: a toolset's description fitted to one answer (editor-describe.ts). */
-function fitAnswer(params: CallParams, content: Part[], isError: boolean): { parts: Part[]; failed: boolean } {
+function fitAnswer(
+  params: CallParams,
+  content: Part[],
+  isError: boolean,
+  session: EditorSession,
+): { parts: Part[]; failed: boolean } {
   if (params.name !== EditorTool.DescribeToolset || isError) return { parts: content, failed: false };
+  const one = session.describesMany
+    ? oneToolset(content, params.arguments?.[ToolsetGatewayArg.Toolset])
+    : { content, failed: false };
+  if (one.failed) return { parts: one.content, failed: true };
   const tool = params.arguments?.[ToolsetGatewayArg.Tool];
-  return fitDescription(content, typeof tool === "string" ? tool : undefined);
+  return fitDescription(one.content, typeof tool === "string" ? tool : undefined);
 }
 
 /** The pictures a capture tool's answer promised (see editor-captures.ts); nothing for any other call. */
@@ -738,36 +990,78 @@ async function capturedParts(
  */
 async function forward(session: EditorSession, params: CallParams, how: Forwarding, signal: AbortSignal) {
   const step = playStep(params);
+  const write = params.name === EditorTool.CallTool ? graphWriteOf(params.arguments) : undefined;
+  const refusal = write ? await checkGraph(session, write, false) : undefined;
+  if (refusal) return errorResult(`${refusal}\n${MESSAGE.Answered(how.project.name)}`);
   try {
     await how.keeper.before(session, step);
   } catch (error) {
     return errorResult(MESSAGE.NotCompleted(errorMessage(error)));
   }
-  const giveBack = await markStart(how.agentPlay, step);
+  // Whether a play already ran tells a refused start that began one from one that found the person's.
+  const before = step === PlayStep.Start ? await playing(session) : undefined;
+  const play = { step, before, giveBack: await markStart(how.agentPlay, step) };
   let result: CallResult;
   try {
-    result = await session.call(editorParams(params), how.timeoutMs);
+    // A graph write leaves its checks their time inside the call's own.
+    result = await session.call(editorParams(params, session), write ? how.timeoutMs - CHECKS_MS : how.timeoutMs);
   } catch (error) {
     // A JSON-RPC error is the editor's own answer: it is still there, and the call did not complete.
-    if (editorAnswered(error)) {
-      await settlePlay(how.agentPlay, step, true, giveBack);
-      return errorResult(MESSAGE.NotCompleted(errorMessage(error)));
-    }
+    if (editorAnswered(error)) return refusedStep(session, play, errorMessage(error), how);
     return errorResult(MESSAGE.CallFailed(errorMessage(error)), editorWentAway(error, signal));
   }
   try {
-    await how.keeper.after(session, step, Boolean(result.isError));
-    await settlePlay(how.agentPlay, step, Boolean(result.isError), giveBack);
-    const content = Array.isArray(result.content) ? (result.content as Part[]) : [];
-    const fit = fitAnswer(params, content, Boolean(result.isError));
-    const captured = result.isError ? [] : await capturedParts(params, content, how.project, how.clock, signal);
-    const named = [...liftImages(fit.parts), ...captured, { type: "text", text: MESSAGE.Answered(how.project.name) }];
-    const failed = Boolean(result.isError) || fit.failed || helperFailed(params, content);
-    return { content: named, ...(failed ? { isError: true } : {}) };
+    const held = await settleStep(session, play, Boolean(result.isError), how);
+    if (held && step) return heldAnswer(step, answerText(result), how.project);
+    return await answerOf(session, params, result, how, { write, signal });
   } catch (error) {
     // The editor answered: what failed after is Genex's own, and the editor is still there.
     return errorResult(MESSAGE.NotCompleted(errorMessage(error)));
   }
+}
+
+/**
+ * The editor's answer as the caller reads it: fitted, with a capture's pictures, naming the
+ * project; a graph write that came back short fails, the helper's words first.
+ */
+async function answerOf(
+  session: EditorSession,
+  params: CallParams,
+  result: CallResult,
+  how: Forwarding,
+  call: { write: GraphWrite | undefined; signal: AbortSignal },
+) {
+  const content = Array.isArray(result.content) ? (result.content as Part[]) : [];
+  const fit = fitAnswer(params, content, Boolean(result.isError), session);
+  const captured = result.isError ? [] : await capturedParts(params, content, how.project, how.clock, call.signal);
+  const failed = Boolean(result.isError) || fit.failed || helperFailed(params, content);
+  const lost = call.write && !failed ? await checkGraph(session, call.write, true) : undefined;
+  const said = lost ? [{ type: "text", text: lost }] : [];
+  const named = [
+    ...said,
+    ...liftImages(fit.parts),
+    ...captured,
+    { type: "text", text: MESSAGE.Answered(how.project.name) },
+  ];
+  return { content: named, ...(failed || lost ? { isError: true } : {}) };
+}
+
+/**
+ * What the Genex editor helper's check says is wrong with a graph write (`graph-write-guard.ts`):
+ * before it, a text too big for one write; after it, a graph that came back short. Undefined when
+ * nothing is, and when the helper can't check (it answers anything else, or not in time).
+ */
+async function checkGraph(session: EditorSession, write: GraphWrite, written: boolean): Promise<string | undefined> {
+  const check = toolsetCall(BUILD_TOOLSET, CHECK_GRAPH_TOOL, checkArguments(write, written));
+  const result = await session.call(check, written ? CHECK_AFTER_MS : CHECK_BEFORE_MS).catch(() => undefined);
+  if (!result || result.isError || !Array.isArray(result.content)) return undefined;
+  return checkProblem(result.content as Part[], written);
+}
+
+/** A call the editor answered with a JSON-RPC error: a play step whose aim held anyway answers so ({@link settleStep}); anything else fails. */
+async function refusedStep(session: EditorSession, play: PlayCall, said: string, how: Forwarding) {
+  const held = await settleStep(session, play, true, how);
+  return held && play.step ? heldAnswer(play.step, said, how.project) : errorResult(MESSAGE.NotCompleted(said));
 }
 
 /** The MCP SDK's own codes for a call that got no answer: it ran out of time, or its connection closed. */

@@ -18,7 +18,6 @@ import { releaseStaleLocks } from "./ownership-locks.ts";
 import { StudioBridge, answerBridgeCall, bridgeTools } from "./studio-bridge.ts";
 import { writeDelegateStills } from "./codex.ts";
 import { JUDGE_RULES, offLimitsNote, planModeNote, readOnlyNote } from "./codex-prompts.ts";
-import { leadBuildWrites } from "./session-commands.ts";
 import { parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
 import { parsePiLine, translatePiEvent, type Translated } from "./pi-events.ts";
 import {
@@ -124,8 +123,6 @@ export function piSandbox(input: {
   runDir: string;
   gameDir: string;
   gitDirs: string[];
-  /** The build a lead leads and its Git metadata (`leadBuildWrites`). */
-  leadBuilds?: string[];
   scratchDir: string;
   secretPaths: string[];
   toolPath?: () => Promise<string>;
@@ -135,13 +132,7 @@ export function piSandbox(input: {
   const piHome = path.join(home, ".pi");
   const agent = path.join(piHome, "agent");
   return {
-    writableRoots: [
-      input.runDir,
-      ...input.gitDirs,
-      ...(input.leadBuilds ?? []),
-      path.join(agent, "sessions"),
-      path.join(agent, "auth.json.lock"),
-    ],
+    writableRoots: [input.runDir, ...input.gitDirs, path.join(agent, "sessions"), path.join(agent, "auth.json.lock")],
     scratchDir: input.scratchDir,
     secretPaths: input.secretPaths,
     readableHome: [piHome],
@@ -402,7 +393,7 @@ export class PiEngine implements Engine {
   }
 
   async #invocation(
-    request: Pick<DelegateRequest, "model" | "effort" | "denyReads" | "leadBuilds">,
+    request: Pick<DelegateRequest, "model" | "effort" | "denyReads">,
     ctx: {
       cwd: string;
       runDir: string;
@@ -436,8 +427,6 @@ export class PiEngine implements Engine {
         runDir: ctx.runDir,
         gameDir: ctx.cwd,
         gitDirs: [],
-        // A building lead also writes the build it leads.
-        leadBuilds: ctx.readOnly ? [] : await leadBuildWrites(request.leadBuilds),
         scratchDir: path.join(this.#scratchRoot, "tmp"),
         secretPaths: [...this.#protectedPaths, ...(request.denyReads ?? [])],
         ...(this.#toolPath ? { toolPath: this.#toolPath } : {}),
@@ -485,7 +474,7 @@ export class PiEngine implements Engine {
 }
 
 function isReadOnly(request: DelegateRequest): boolean {
-  const readOnly = Boolean(request.readOnly) && !request.coordinator;
+  const readOnly = Boolean(request.readOnly);
   return readOnly || chatMode(request) === PermissionMode.Plan;
 }
 

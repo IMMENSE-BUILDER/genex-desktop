@@ -371,23 +371,12 @@
     opacity: 1;
   }
 }
-/* The builds graph draws what is live or selected in its own accent (themes.ts `graph`), the app's until set. */
+/* The Builds tab draws what is live or selected in its own accent (themes.ts `graph`), the app's until set. */
 [data-stage-graph] {
   --accent: var(--graph, var(--accent-primary));
   --accent-tint: color-mix(in srgb, var(--accent) 16%, transparent);
 }
-/* Ours: the run graph's "building right now" halo, and the still that is not there yet. */
-@keyframes graph-pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0;
-    transform: scale(1.06);
-  }
-}
+/* A dot that breathes once: a gate on a card, the stage's Reload when Live is behind. */
 @keyframes gate-pulse {
   0%,
   100% {
@@ -398,16 +387,6 @@
     opacity: 0.45;
     transform: scale(1.2);
   }
-}
-/* The start node has no card, so its halo pulses on the ring around its words, not on them. */
-:is([data-graph-node], [data-graph-ring])[data-working="true"]::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  border: 2px solid var(--accent);
-  pointer-events: none;
-  animation: graph-pulse 1.6s ease-in-out infinite;
 }
 [inert] [data-stage-graph] *,
 [inert] [data-stage-graph] *::after {
@@ -427,22 +406,12 @@
   .animate-spin,
   .making-spinner,
   .genex-connect-shine,
+  .step-mark-turn,
   .loader-grid > span,
   [style*="infinite"]
 ),
-:root[data-motion="rest"] :is([data-graph-node], [data-graph-ring], .graph-shimmer)::after {
+:root[data-motion="rest"] .graph-shimmer::after {
   animation-play-state: paused !important;
-}
-/* A selected node opening into its card over the zoomed canvas. */
-@keyframes focus-in {
-  0% {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
 }
 @keyframes graph-shimmer {
   0% {
@@ -1655,7 +1624,7 @@ button.chat-header-title:hover {
   color: var(--ink);
 }
 /* A narrow chat header folds the game's engine button (ChatHeader's `[data-chat-engine]`) to its
-   icon: its name goes, and its status dot or update mark moves to the icon's corner. */
+   icon: its name goes, and its status dot moves to the icon's corner. */
 [data-chat-header] {
   container-type: inline-size;
 }
@@ -1664,7 +1633,7 @@ button.chat-header-title:hover {
     width: 32px;
     padding-inline: 0;
   }
-  [data-chat-engine] :is([data-toolbar-label], [data-plugin-badge]:not([data-dot], [data-plugin-update])) {
+  [data-chat-engine] :is([data-toolbar-label], [data-plugin-badge]:not([data-dot])) {
     display: none;
   }
   [data-chat-engine] [data-fold-dot] {
@@ -1674,17 +1643,6 @@ button.chat-header-title:hover {
     position: absolute;
     top: 5px;
     inset-inline-end: 5px;
-  }
-  [data-chat-engine] [data-plugin-update] {
-    position: absolute;
-    top: 2px;
-    inset-inline-end: 2px;
-    border-radius: 50%;
-    background: var(--control-fill, var(--hover));
-  }
-  [data-chat-engine] [data-plugin-update] svg {
-    width: 11px;
-    height: 11px;
   }
 }
 .studio-shell[data-compact="true"] {
@@ -2084,6 +2042,24 @@ button.chat-header-title:hover {
   font-size: 13px;
   line-height: 24px;
   white-space: nowrap;
+}
+/* A review row's Fix is a press of its own, over the row's end. */
+.notify-item {
+  position: relative;
+}
+.notify-item > .notify-row {
+  padding-inline-end: 64px;
+}
+.notify-press {
+  position: absolute;
+  inset-inline-end: 10px;
+  top: 50%;
+  translate: 0 -50%;
+  cursor: pointer;
+  transition: background-color var(--duration-quick);
+}
+.notify-press:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--accent-primary) 26%, transparent);
 }
 .notify-dot {
   flex: none;
@@ -3118,6 +3094,28 @@ button.chat-header-title:hover {
 .sidebar-game-menu:hover {
   background: var(--inset);
   color: var(--ink);
+}
+/* A game on Genex says where it stands under its name: Public in green, Not approved and Taken down in red. */
+.sidebar-game-names {
+  display: flex;
+  min-width: 2rem;
+  flex: 1;
+  flex-direction: column;
+}
+.sidebar-game-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-3);
+}
+.sidebar-game-line[data-review-tone="ok"] {
+  color: var(--green);
+}
+.sidebar-game-line[data-review-tone="err"] {
+  color: var(--red);
 }
 /* The pin and the working dot sit where ⋯ appears, centred in its 28px slot, and give way to it on hover. */
 .sidebar-pin,
@@ -4351,22 +4349,6 @@ button.chat-header-title:hover {
   gap: 8px;
   min-width: 0;
 }
-/* Builds on its way (RunGraph.tsx): what you asked, two parts and the build, on the graph's dots. */
-.skeleton-graph {
-  display: flex;
-  align-items: center;
-  justify-content: safe center;
-  gap: 48px;
-  height: 100%;
-  padding: 32px;
-  background-image: radial-gradient(var(--line-strong) 1px, transparent 1.25px);
-  background-size: 22px 22px;
-}
-.skeleton-graph-column {
-  display: flex;
-  flex-direction: column;
-  gap: 40px;
-}
 /* The Assets tab on its way (AssetsCanvas.tsx): a first screen of tiles, each with its name. */
 .skeleton-tiles {
   display: grid;
@@ -4435,6 +4417,58 @@ button.chat-header-title:hover {
 }
 .held-send-action[data-primary]:is(:hover, :focus-visible) {
   background: var(--accent-hover);
+}
+
+/* Building with Genex: the blue notice a Genex model shows while it cannot build yet (ui/GenexNotice.tsx). */
+.genex-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  color: var(--ink);
+}
+.genex-notice-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.genex-notice-body > svg {
+  margin-top: 4px;
+}
+.genex-notice-line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 21px;
+  text-wrap: pretty;
+}
+.genex-notice-problem {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--orange);
+}
+.genex-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.genex-notice-link {
+  height: 32px;
+  padding-inline: 6px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.genex-notice-link:is(:hover, :focus-visible) {
+  color: var(--ink);
 }
 
 /* Only current work animates. History and disclosures mount without entrance choreography. */
@@ -4900,9 +4934,9 @@ button.chat-header-title:hover {
 .chat-user-toggle:hover {
   color: var(--ink);
 }
-/* Remove under a waiting message: 24px like Rewind, under the icon button's usual control size
-   (a utility class loses to it; this rule is unlayered). */
-.chat-queued-remove {
+/* Edit and Remove under a waiting message: 24px like Rewind, under the icon button's usual
+   control size (a utility class loses to it; this rule is unlayered). */
+.chat-queued-action {
   width: 24px;
   height: 24px;
 }
@@ -5017,6 +5051,32 @@ button.chat-header-title:hover {
 .chat-question-body > :first-child {
   padding-inline-end: 28px;
 }
+/* Which question of a short run this is: its count, and a dash for each, filled up to this one. */
+.chat-question-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--ink-3);
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 18px;
+}
+.chat-question-dashes {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+.chat-question-dashes > span {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+.chat-question-dashes > [data-filled] {
+  background: var(--accent);
+}
 .chat-question-recap {
   margin-bottom: 6px;
   color: var(--ink-2);
@@ -5097,10 +5157,20 @@ button.chat-header-title:hover {
   line-height: 20px;
   text-align: start;
   cursor: pointer;
+  transition: opacity var(--duration-quick) ease-out;
 }
+/* An answer that cannot be pressed dims only once the wait is long enough to read: a question shown
+   as the reply that asked it is still ending, or answered in the composer, would otherwise flash
+   half-lit for a moment. The starting style keeps a card that arrives disabled from opening dimmed. */
 .chat-answer:disabled {
   opacity: 0.5;
   cursor: default;
+  transition-delay: 600ms;
+}
+@starting-style {
+  .chat-answer:disabled {
+    opacity: 1;
+  }
 }
 /* An answer on its way looks as it did when pressed: only the pointer says it is working. */
 .chat-answer[aria-busy="true"] {
@@ -6263,36 +6333,9 @@ a:focus-visible {
   position: relative;
   z-index: 1;
 }
-/* Open in Builds, at the foot of the Building card's parts: a small filled button (`pill-quiet`)
- * above the card's own toggle. */
-.build-checklist-open {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-self: flex-start;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  padding: 3px 8px 3px 10px;
-  border: 0;
-  border-radius: var(--radius-control);
-  font-family: var(--font-family-content);
-  font-size: 13px;
-  line-height: 18px;
-  letter-spacing: -0.2px;
-  cursor: pointer;
-  transition:
-    background-color var(--duration-quick),
-    color var(--duration-quick);
-}
-.build-checklist-open:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 @media (prefers-reduced-motion: reduce) {
   .build-card,
-  .build-card-open svg,
-  .build-checklist-open {
+  .build-card-open svg {
     transition: none;
   }
 }
@@ -6563,6 +6606,12 @@ a:focus-visible {
 }
 .asset-thumbnail {
   animation: fade-in 150ms ease-out;
+}
+/* A thumbnail that keeps its whole shape (a sprite, a model's render; panels/AssetThumbnail.tsx)
+   shows on what is behind its frame: the frame drops its fill, so no band of it shows beside it. */
+.bg-inset:has(> [data-thumbnail-fit="contain"]),
+.asset-tile:has([data-thumbnail-fit="contain"]) {
+  background: transparent;
 }
 /* An asset card while its asset is being made (panels/MakingCard.tsx), in the spot it will land:
    the kind's drawing, the tool at top left, the clock at top right, the kind and prompt below. */
@@ -6840,6 +6889,15 @@ a:focus-visible {
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
+/* The caller's actions and Close in the top corner. Windows and Linux draw the window's own controls
+ * over that corner (theme.css `--window-controls-end`), so there the row sits under the title bar. */
+.lightbox-actions {
+  top: 20px;
+}
+:root[data-platform="win32"] .lightbox-actions,
+:root[data-platform="linux"] .lightbox-actions {
+  top: 56px;
+}
 .lightbox-button {
   display: inline-flex;
   align-items: center;
@@ -7055,17 +7113,6 @@ a:focus-visible {
 .chat-jump {
   animation: chat-fade-in var(--duration-quick) ease-out;
 }
-/* The running build's first picture slides in beside its words, which make room for it (gap-3). */
-@keyframes build-picture-in {
-  from {
-    width: 0;
-    margin-inline-end: -0.75rem;
-    opacity: 0;
-  }
-}
-.build-picture-in {
-  animation: build-picture-in var(--duration-fast) var(--ease-smooth-out);
-}
 .build-card-text {
   transition: padding-inline-start var(--duration-fast) var(--ease-smooth-out);
 }
@@ -7104,7 +7151,6 @@ a:focus-visible {
   .presence[data-presence],
   .chat-jump,
   .chat-waiting-card,
-  .build-picture-in,
   [data-chat-status] .chat-chevron {
     animation: none;
   }
@@ -7220,10 +7266,20 @@ a:focus-visible {
   color: var(--accent-foreground);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
 }
-.composer-connect-model[data-nudge="a"] {
+/* A send the chat's model could not take rings the model button and bumps it the same way
+   (ModelMenu.tsx); its tooltip says why. */
+.composer-text-button.composer-model[data-nudge] {
+  background: var(--accent-fill);
+  color: var(--accent-foreground);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: box-shadow 220ms var(--ease-smooth-out);
+}
+.composer-connect-model[data-nudge="a"],
+.composer-model[data-nudge="a"] {
   animation: composer-nudge-a 420ms var(--ease-smooth-out);
 }
-.composer-connect-model[data-nudge="b"] {
+.composer-connect-model[data-nudge="b"],
+.composer-model[data-nudge="b"] {
   animation: composer-nudge-b 420ms var(--ease-smooth-out);
 }
 @keyframes composer-nudge-a {
@@ -7243,7 +7299,8 @@ a:focus-visible {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .composer-connect-model[data-nudge] {
+  .composer-connect-model[data-nudge],
+  .composer-model[data-nudge] {
     animation: none;
   }
 }
@@ -7986,7 +8043,7 @@ a:focus-visible {
 .picker-seg > button[aria-checked="true"] {
   color: var(--control-text-hover, var(--ink));
 }
-/* A choice the control shows but can't take (Mode's Loop in an Unreal game); dims like the stepper's ends. */
+/* A choice the control shows but can't take; dims like the stepper's ends. */
 .picker-seg > button:disabled {
   opacity: 0.4;
 }
@@ -8118,43 +8175,25 @@ a:focus-visible {
 .picker-role[data-quiet] .picker-role-name {
   color: var(--ink-3);
 }
-/* Mode: room around the Loop control's caption. */
-.mode-panel .picker-caption {
-  padding: 8px 6px 2px;
-  line-height: 18px;
-}
-/* The Mode button's time limit, before the word Loop. */
-.composer-mode-time {
-  font-family: var(--font-family-mono);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-  color: var(--ink-3);
-}
-/* Mode, permissions, model and effort are filled pills, so the bar's choices read as controls before
+/* Permissions, model and effort are filled pills, so the bar's choices read as controls before
    hover. The effort slider is stepped Faster–Smarter; the thumb's centre travels between stops inset
    13px from each end of the track. */
-.composer-text-button:is(.composer-mode, .composer-permission, .composer-model, .composer-effort) {
+.composer-text-button:is(.composer-permission, .composer-model, .composer-effort) {
   padding-inline: 8px;
   background: var(--prompt-chip-fill, var(--control-fill, var(--hover)));
   color: var(--control-text, var(--ink-2));
 }
-.composer-text-button:is(.composer-mode, .composer-permission, .composer-model, .composer-effort):is(
+.composer-text-button:is(.composer-permission, .composer-model, .composer-effort):is(
   :enabled:hover,
   [aria-expanded="true"]
 ) {
   background: var(--chip-hover, var(--line-strong));
   color: var(--control-text-hover, var(--ink));
 }
-/* Mode while the chat's build runs or is paused: it cannot open, and dims like the composer's
-   disabled icons (`.composer-icon:disabled`). Opacity reads the same in both themes. */
-.composer-text-button.composer-mode:disabled {
-  opacity: 0.45;
-}
 /* The toolbar never sizes the composer to its content. The model's name keeps its room
    (`ui/toolbar-fit.ts`): the permissions pill's label gives way first, leaving the glyph (its
-   tooltip names the mode), then Mode's limit (its ∞ or time), then the context ring, then in the
-   narrowest chat the pill. Bypass keeps its warning glyph and tint throughout. */
+   tooltip names the mode), then the context ring, then in the narrowest chat the pill. Bypass
+   keeps its warning glyph and tint throughout. */
 [data-composer-toolbar] {
   container-type: inline-size;
 }
@@ -8162,8 +8201,6 @@ a:focus-visible {
   flex-shrink: 0;
 }
 [data-composer-toolbar][data-squeeze] .composer-permission-label,
-[data-composer-toolbar]:is([data-squeeze="mode-limit"], [data-squeeze="ring"], [data-squeeze="permission"])
-  .composer-mode-limit,
 [data-composer-toolbar]:is([data-squeeze="ring"], [data-squeeze="permission"]) .composer-ring,
 [data-composer-toolbar][data-squeeze="permission"] .composer-permission:not([data-mode="bypassPermissions"]) {
   display: none;
@@ -8750,6 +8787,21 @@ p.usage-divider {
     transition: none;
   }
   .remix-stage {
+    animation: none;
+  }
+}
+
+/* A step at work: its dashed ring turns slowly, so the person sees something is happening (StepMark). */
+@keyframes step-mark-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.step-mark-turn {
+  animation: step-mark-turn 2.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .step-mark-turn {
     animation: none;
   }
 }

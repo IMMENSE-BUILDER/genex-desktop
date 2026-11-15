@@ -8,7 +8,8 @@
  * big for Genex's source store is refused before anything is pushed. A model, picture, sound, video or
  * Unreal package, and any file big enough to trip the upload's request limit, is named in the copy's
  * `.gitattributes`, so it goes to Git LFS (Genex keeps those blobs in its object store, not on the
- * git server's disk).
+ * git server's disk). A build on Genex stages the game's Unreal project alone (`stageBuildSource`),
+ * and only Genex judges its size, by the account's own limit.
  */
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
@@ -22,10 +23,14 @@ import { HOST_GIT_CONFIG, hostGitEnv } from "../../substrate/git-policy.ts";
 
 const exec = promisify(execFile);
 
-/** The most Genex keeps of a game's source by default (its source store's limit for an account). */
-export const SOURCE_MAX_BYTES = 5 * 1024 ** 3;
-/** The most files Genex keeps of a game's source by default. */
-export const SOURCE_MAX_FILES = 5_000;
+/**
+ * The most of a game's source Studio stages, all files together. genex.games' own limit for an
+ * account reaches only the CLI (with its push token), never Studio, so this one is the most Genex
+ * keeps for anyone: it never refuses what Genex would take, and Genex refuses what an account may not.
+ */
+export const SOURCE_MAX_BYTES = 100 * 1024 ** 3;
+/** The most files of a game's source Studio stages: as with the bytes, never fewer than Genex keeps. */
+export const SOURCE_MAX_FILES = 50_000;
 /** A file at least this big goes to Git LFS by its own name: the upload refuses requests near 100 MB. */
 export const LFS_FILE_BYTES = 50 * 1024 ** 2;
 /** Unreal's packages and levels: binary, and most of an Unreal project's size. */
@@ -60,6 +65,8 @@ export interface StagedSource {
 /** How a staging lists the game's own files: paths relative to the folder, with `/` between parts. */
 export interface RemixSourceDeps {
   listFiles(gameDir: string): Promise<string[]>;
+  /** The most a remix's source may be; {@link SOURCE_MAX_FILES} and {@link SOURCE_MAX_BYTES} when not given. */
+  limits?: { files: number; bytes: number };
 }
 
 /** Folders that are never a game's own, wherever they are: history, Studio's, Genex's, packages, agent settings. */
@@ -167,17 +174,27 @@ function isProjectFile(file: string, caches: readonly string[]): boolean {
   return !caches.some((cache) => file.startsWith(cache));
 }
 
-/** The game's own files as its git sees them: tracked, or new and not ignored, without history. */
-export async function gitListFiles(gameDir: string): Promise<string[]> {
-  const { stdout } = await exec(
-    "git",
-    [...HOST_GIT_CONFIG, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-    { cwd: gameDir, env: hostGitEnv(), windowsHide: true, maxBuffer: LIST_OUTPUT_MAX_BYTES, timeout: LIST_TIMEOUT_MS },
-  ).catch(() => {
+/** The files `git ls-files` lists with `flags` in the game's folder, without repeats. */
+async function gitFiles(gameDir: string, flags: readonly string[]): Promise<string[]> {
+  const { stdout } = await exec("git", [...HOST_GIT_CONFIG, "ls-files", "-z", ...flags], {
+    cwd: gameDir,
+    env: hostGitEnv(),
+    windowsHide: true,
+    maxBuffer: LIST_OUTPUT_MAX_BYTES,
+    timeout: LIST_TIMEOUT_MS,
+  }).catch(() => {
     throw new RemixSourceError(GenexRemixProblem.NoRepository);
   });
   return [...new Set(stdout.split("\0").filter(Boolean))];
 }
+
+/** The game's own files as its git sees them: tracked, or new and not ignored, without history. */
+export const gitListFiles = (gameDir: string): Promise<string[]> =>
+  gitFiles(gameDir, ["--cached", "--others", "--exclude-standard"]);
+
+/** The files the game's `.gitignore` keeps out of its checkpoints: Fab kits and the like. */
+export const gitListIgnored = (gameDir: string): Promise<string[]> =>
+  gitFiles(gameDir, ["--others", "--ignored", "--exclude-standard"]);
 
 /** A file of the game to copy: where it is, its size and mode, or null when it is not a real file inside the folder. */
 async function realFile(root: string, file: string): Promise<{ at: string; bytes: number; mode: number } | null> {
@@ -207,6 +224,40 @@ async function routeBigFiles(dest: string, big: readonly string[]): Promise<void
   await writeFile(file, `${own}${lead}${lines.join("\n")}\n`);
 }
 
+/** A file of the game to stage: its path in the game (`/` between parts), where it really is, its size and mode. */
+interface ProjectFile {
+  file: string;
+  at: string;
+  bytes: number;
+  mode: number;
+}
+
+/** The game's own files among `listed`, each a real file inside `root`, without what is never a game's own. */
+async function projectFiles(root: string, listed: readonly string[]): Promise<ProjectFile[]> {
+  const caches = [...engineCaches(listed), ...engineGameExtras(listed)];
+  const files: ProjectFile[] = [];
+  for (const file of listed.filter((candidate) => isProjectFile(candidate, caches))) {
+    const real = await realFile(root, file);
+    if (real) files.push({ file, ...real });
+  }
+  return files;
+}
+
+/** Copy `files` into `dest`, made afresh (anything there before goes), each at its `file` path. */
+async function writeStaged(dest: string, files: readonly ProjectFile[]): Promise<void> {
+  await rm(dest, { recursive: true, force: true });
+  await mkdir(dest, { recursive: true });
+  for (const file of files) {
+    const to = path.join(dest, ...file.file.split("/"));
+    await mkdir(path.dirname(to), { recursive: true });
+    // A clone on APFS: a big engine project costs no extra disk and no time to copy.
+    await copyFile(file.at, to, constants.COPYFILE_FICLONE);
+    await chmod(to, file.mode);
+  }
+}
+
+const totalBytes = (files: readonly ProjectFile[]): number => files.reduce((sum, file) => sum + file.bytes, 0);
+
 /**
  * Copy `gameDir`'s project into `dest`, which is made afresh (anything there before goes): the files
  * its git would keep, without what is never a game's own. Refused, with nothing copied, when the
@@ -218,28 +269,88 @@ export async function stageRemixSource(
   deps: RemixSourceDeps = { listFiles: gitListFiles },
 ): Promise<StagedSource> {
   const root = await realpath(gameDir);
-  const listed = await deps.listFiles(root);
-  const caches = [...engineCaches(listed), ...engineGameExtras(listed)];
-  const files: Array<{ file: string; at: string; bytes: number; mode: number }> = [];
-  for (const file of listed.filter((candidate) => isProjectFile(candidate, caches))) {
-    const real = await realFile(root, file);
-    if (real) files.push({ file, ...real });
-  }
-  const bytes = files.reduce((sum, file) => sum + file.bytes, 0);
+  const files = await projectFiles(root, await deps.listFiles(root));
+  const bytes = totalBytes(files);
   if (files.length === 0) throw new RemixSourceError(GenexRemixProblem.Empty);
-  if (files.length > SOURCE_MAX_FILES || bytes > SOURCE_MAX_BYTES) throw new RemixSourceError(GenexRemixProblem.TooBig);
-  await rm(dest, { recursive: true, force: true });
-  await mkdir(dest, { recursive: true });
-  for (const file of files) {
-    const to = path.join(dest, ...file.file.split("/"));
-    await mkdir(path.dirname(to), { recursive: true });
-    // A clone on APFS: a big engine project costs no extra disk and no time to copy.
-    await copyFile(file.at, to, constants.COPYFILE_FICLONE);
-    await chmod(to, file.mode);
-  }
+  const limits = deps.limits ?? { files: SOURCE_MAX_FILES, bytes: SOURCE_MAX_BYTES };
+  if (files.length > limits.files || bytes > limits.bytes) throw new RemixSourceError(GenexRemixProblem.TooBig);
+  await writeStaged(dest, files);
   await routeBigFiles(
     dest,
     files.filter((file) => file.bytes >= LFS_FILE_BYTES || isBinaryAsset(file.file)).map((file) => file.file),
   );
   return { files: files.length, bytes };
+}
+
+/** The folder of the game's one Unreal project (`""` at the top), or null when it has none or several. */
+function unrealProjectRoot(listed: readonly string[]): string | null {
+  const roots = new Set(listed.filter((file) => file.endsWith(".uproject")).map(parentOf));
+  return roots.size === 1 ? [...roots][0] : null;
+}
+
+/**
+ * The Unreal version the game's one project names (its `.uproject`'s `EngineAssociation`, `""` when
+ * it names none), or null for a game with no such project or one that can't be read: Genex answers those.
+ */
+export async function unrealEngineOf(
+  gameDir: string,
+  deps: RemixSourceDeps = { listFiles: gitListFiles },
+): Promise<string | null> {
+  const root = await realpath(gameDir);
+  const own = await projectFiles(root, await deps.listFiles(root));
+  if (unrealProjectRoot(own.map((file) => file.file)) === null) return null;
+  const project = own.find((file) => file.file.endsWith(".uproject"));
+  try {
+    const text = await readFile(project?.at ?? "", "utf8");
+    const { EngineAssociation: engine } = JSON.parse(text.replace(/^\uFEFF/, "")) as { EngineAssociation?: unknown };
+    return typeof engine === "string" ? engine : "";
+  } catch {
+    return null;
+  }
+}
+
+/** The folders of an Unreal project a cook reads, whatever the game's `.gitignore` keeps out of its checkpoints. */
+const BUILD_FOLDERS = ["Content", "Config", "Plugins"];
+
+/** The ignored files among `ignored` the cook of the project at `unreal` needs. Never another project. */
+const neededByBuild = (ignored: readonly string[], unreal: string): string[] =>
+  ignored.filter(
+    (file) => BUILD_FOLDERS.some((folder) => file.startsWith(under(unreal, folder))) && !file.endsWith(".uproject"),
+  );
+
+/** How a build lists the game: its own files, and those its `.gitignore` keeps out. */
+export interface BuildSourceDeps extends RemixSourceDeps {
+  listIgnored?(gameDir: string): Promise<string[]>;
+}
+
+/**
+ * Copy what Genex needs to build the app of the game in `gameDir` into `dest`, made afresh: for a
+ * game with one Unreal project, that project alone, its `.uproject` at the top (the game's other
+ * files, its web build or notes, are no part of the app); for any other game, its project as
+ * remixers get it. Caches, builds and what is never a game's own stay out as for remixing. Unlike a
+ * remix, a build also takes what `.gitignore` keeps out of checkpoints under `BUILD_FOLDERS`: a Fab
+ * kit or Epic's sample stays out of what others get, but the game's Blueprints need it to cook, and
+ * this copy goes only to the build. No size limit here: the build is Genex's to take or refuse, by
+ * the account's own limit, and its refusal says the sizes. Refused, with nothing copied, when the
+ * folder has no repository or nothing of its own.
+ */
+export async function stageBuildSource(
+  gameDir: string,
+  dest: string,
+  deps: BuildSourceDeps = { listFiles: gitListFiles, listIgnored: gitListIgnored },
+): Promise<StagedSource> {
+  const root = await realpath(gameDir);
+  const listed = await deps.listFiles(root);
+  const tracked = await projectFiles(root, listed);
+  // Counted among the game's own files: a `.uproject` in a cache or a package is no project of its.
+  const unreal = unrealProjectRoot(tracked.map((file) => file.file));
+  const inProject = (file: string): boolean => unreal === null || unreal === "" || file.startsWith(`${unreal}/`);
+  const ignored = unreal === null ? [] : neededByBuild((await deps.listIgnored?.(root)) ?? [], unreal);
+  const own = ignored.length > 0 ? await projectFiles(root, [...listed, ...ignored]) : tracked;
+  const files = own
+    .filter((file) => inProject(file.file))
+    .map((file) => (unreal ? { ...file, file: file.file.slice(unreal.length + 1) } : file));
+  if (files.length === 0) throw new RemixSourceError(GenexRemixProblem.Empty);
+  await writeStaged(dest, files);
+  return { files: files.length, bytes: totalBytes(files) };
 }

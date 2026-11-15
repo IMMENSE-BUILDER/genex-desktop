@@ -17,6 +17,7 @@
 import type { StudioApi } from "./studio-api.ts";
 import type { StudioErrorCode } from "./error-codes.ts";
 import type { AddSource, ShareItem } from "./asset-library.ts";
+import type { DesignMarks } from "./design-marks.ts";
 import type { ExportReview, GithubVersion } from "./plugins.ts";
 import type { PlayControl, PlayPoint, PlayShelf } from "./play.ts";
 import type { SessionAction } from "./play-native.ts";
@@ -62,6 +63,7 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:thread.rename": "renameThread",
   "studio:compact": "compactThread",
   "studio:game.archive": "archiveGame",
+  "studio:game.play-build": "playGameBuild",
   "studio:storage": "storageSpace",
   "studio:storage.free": "freeStorage",
   "studio:data-folder": "dataFolder",
@@ -114,6 +116,11 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:plugins.genex-publish-platforms": "genexPublishPlatforms",
   "studio:plugins.genex-publish": "genexPublish",
   "studio:plugins.genex-publish-apps": "genexPublishApps",
+  "studio:plugins.genex-cloud-build": "genexCloudBuild",
+  "studio:plugins.genex-review-status": "genexReviewStatus",
+  "studio:plugins.genex-review-lines": "genexReviewLines",
+  "studio:plugins.genex-fix-review": "genexFixReview",
+  "studio:plugins.genex-request-review": "genexRequestReview",
   "studio:plugins.index": "pluginsIndex",
   "studio:plugins.install-github": "pluginInstallGithub",
   "studio:plugins.lookup-github": "pluginLookupGithub",
@@ -154,8 +161,12 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:grok.signin": "grokSignIn",
   "studio:cursor.signin": "cursorSignIn",
   "studio:cursor.signout": "cursorSignOut",
+  "studio:antigravity.signin": "antigravitySignIn",
   "studio:openrouter.key.save": "openRouterKeySave",
   "studio:openrouter.key.clear": "openRouterKeyClear",
+  "studio:typesafe.key.status": "typeSafeKeyStatus",
+  "studio:typesafe.key.save": "typeSafeKeySave",
+  "studio:typesafe.key.clear": "typeSafeKeyClear",
   "studio:openrouter.signin": "openRouterSignIn",
   "studio:openrouter.signin.reopen": "openRouterSignInReopen",
   "studio:openrouter.signin.cancel": "openRouterSignInCancel",
@@ -257,6 +268,7 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:genex-account.sign-in": "genexSignIn",
   "studio:genex-account.cancel": "genexCancelSignIn",
   "studio:genex-account.sign-out": "genexSignOut",
+  "studio:genex-account.build": "genexBuild",
   "studio:notify": "notify",
   "studio:badge": "setBadge",
   "studio:rollback": "rollback",
@@ -266,11 +278,16 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:build.preview": "buildPreview",
   "studio:preview.screens": "agentScreens",
   "studio:run.still": "readRunStill",
-  "studio:game.references": "readReferenceStills",
   "studio:game.asset.preview": "previewProjectAsset",
   "studio:game.asset.present": "presentProjectAssets",
   "studio:game.asset.rigs": "projectModelRigs",
+  "studio:game.asset.thumbnail": "readAssetThumbnail",
+  "studio:game.asset.thumbnail.keep": "keepAssetThumbnail",
   "studio:game.assets": "projectAssets",
+  "studio:design.board": "designBoard",
+  "studio:design.drop": "dropOnDesign",
+  "studio:design.marks": "designMarks",
+  "studio:design.marks.save": "saveDesignMarks",
   "studio:game.asset.still": "readProjectAsset",
   "studio:run.feedback": "runFeedback",
   "studio:review.play": "playSnapshot",
@@ -288,7 +305,6 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:preview.cover-still": "previewCoverStill",
   "studio:build.problem": "buildProblem",
   "studio:packages.install": "installPackages",
-  "studio:run.start": "startRun",
   "studio:run.stop": "stopRun",
   "studio:run.finish": "finishRun",
   "studio:autopilot.resume": "resumeAutopilot",
@@ -300,6 +316,7 @@ export const STUDIO_INVOKE_CHANNELS = {
   "studio:pull-model": "pullModel",
   "studio:models.lookup": "lookupModel",
   "studio:models.remove": "removeModel",
+  "studio:models.raise-context": "raiseModelContext",
   "studio:reveal-project": "revealProject",
   "studio:game-file.read": "readGameFile",
   "studio:game-file.reveal": "revealGameFile",
@@ -313,6 +330,20 @@ export const STUDIO_INVOKE_CHANNELS = {
 } as const satisfies Record<`studio:${string}`, keyof StudioApi>;
 
 export type StudioInvokeChannel = keyof typeof STUDIO_INVOKE_CHANNELS;
+
+/** Is `value` one of the app's invoke channels? */
+export const isInvokeChannel = (value: unknown): value is StudioInvokeChannel =>
+  typeof value === "string" && Object.hasOwn(STUDIO_INVOKE_CHANNELS, value);
+
+/**
+ * The invoke channel a failed call was on, as the preload stamps it on the error it throws; null for
+ * any other thrown value or for a `channel` that is not one of the app's.
+ */
+export function failedChannel(error: unknown): StudioInvokeChannel | null {
+  if (error === null || typeof error !== "object") return null;
+  const channel: unknown = Reflect.get(error, "channel");
+  return isInvokeChannel(channel) ? channel : null;
+}
 
 /** What the preload sends on each invoke channel; `undefined` when it sends nothing. */
 export interface StudioInvokePayloads {
@@ -351,6 +382,7 @@ export interface StudioInvokePayloads {
   "studio:thread.rename": { threadId: string; title: string };
   "studio:compact": { threadId: string } & NonNullable<Arg<"compactThread", 1>>;
   "studio:game.archive": { project: string };
+  "studio:game.play-build": { project: string };
   "studio:storage": { project?: string };
   "studio:storage.free": { project?: string };
   "studio:data-folder": undefined;
@@ -401,8 +433,26 @@ export interface StudioInvokePayloads {
   "studio:plugins.choose-file": { id: string; request: Arg<"pluginChooseFile", 1> };
   "studio:plugins.genex-publish-review": { project: string };
   "studio:plugins.genex-publish-platforms": { project: string };
-  "studio:plugins.genex-publish": { project: string; review: ExportReview; title?: string; remix?: boolean };
-  "studio:plugins.genex-publish-apps": { project: string; title?: string; remix?: boolean };
+  "studio:plugins.genex-publish": {
+    project: string;
+    review: ExportReview;
+    title?: string;
+    remix?: boolean;
+    replaceNativePage?: boolean;
+    platforms?: string[];
+  };
+  "studio:plugins.genex-publish-apps": {
+    project: string;
+    title?: string;
+    remix?: boolean;
+    platforms?: string[];
+    release?: string[];
+  };
+  "studio:plugins.genex-cloud-build": { project: string; platform: string; keep?: boolean };
+  "studio:plugins.genex-review-status": { project: string; refresh?: boolean };
+  "studio:plugins.genex-review-lines": undefined;
+  "studio:plugins.genex-fix-review": { project: string; autoPublish: boolean; fixId?: string; rebuild?: boolean };
+  "studio:plugins.genex-request-review": { project: string; platform?: string; arch?: string; note?: string };
   "studio:plugins.index": { refresh?: boolean };
   "studio:plugins.install-github": { spec: string };
   "studio:plugins.lookup-github": { link: string; version?: GithubVersion };
@@ -444,8 +494,12 @@ export interface StudioInvokePayloads {
   "studio:grok.signin": undefined;
   "studio:cursor.signin": undefined;
   "studio:cursor.signout": undefined;
+  "studio:antigravity.signin": undefined;
   "studio:openrouter.key.save": { key: string };
   "studio:openrouter.key.clear": undefined;
+  "studio:typesafe.key.status": undefined;
+  "studio:typesafe.key.save": { key: string };
+  "studio:typesafe.key.clear": undefined;
   "studio:openrouter.signin": undefined;
   "studio:openrouter.signin.reopen": undefined;
   "studio:openrouter.signin.cancel": undefined;
@@ -540,6 +594,7 @@ export interface StudioInvokePayloads {
   "studio:genex-account.sign-in": undefined;
   "studio:genex-account.cancel": undefined;
   "studio:genex-account.sign-out": undefined;
+  "studio:genex-account.build": { idea?: string };
   "studio:notify": Arg<"notify", 0>;
   "studio:badge": { count: number };
   "studio:rollback": { snapshotId: string };
@@ -549,11 +604,16 @@ export interface StudioInvokePayloads {
   "studio:build.preview": Arg<"buildPreview", 0>;
   "studio:preview.screens": undefined;
   "studio:run.still": { file: string; maxPx?: number };
-  "studio:game.references": { project: string };
   "studio:game.asset.preview": Arg<"previewProjectAsset", 0>;
   "studio:game.asset.present": Arg<"presentProjectAssets", 0>;
   "studio:game.asset.rigs": Arg<"projectModelRigs", 0>;
+  "studio:game.asset.thumbnail": Arg<"readAssetThumbnail", 0>;
+  "studio:game.asset.thumbnail.keep": Arg<"keepAssetThumbnail", 0>;
   "studio:game.assets": { project: string };
+  "studio:design.board": { project: string };
+  "studio:design.drop": { project: string; name: string; data: Uint8Array };
+  "studio:design.marks": { project: string };
+  "studio:design.marks.save": { project: string; marks: DesignMarks };
   "studio:assets.library": Arg<"assetLibrary", 0>;
   "studio:assets.states": { project: string };
   "studio:assets.save": { project: string; files: string[]; saved: boolean };
@@ -578,7 +638,6 @@ export interface StudioInvokePayloads {
   "studio:preview.cover-still": undefined;
   "studio:build.problem": { project: string };
   "studio:packages.install": { project: string; scripts?: boolean };
-  "studio:run.start": Arg<"startRun", 0>;
   "studio:run.stop": { runId: string };
   "studio:run.finish": { runId: string; threadId: string };
   "studio:autopilot.resume": { runId: string };
@@ -590,6 +649,7 @@ export interface StudioInvokePayloads {
   "studio:pull-model": { model: string };
   "studio:models.lookup": { model: string };
   "studio:models.remove": { model: string };
+  "studio:models.raise-context": { model: string };
   "studio:reveal-project": { project: string; file?: string };
   "studio:game-file.read": { threadId: string; path: string };
   "studio:game-file.reveal": { threadId: string; path: string };

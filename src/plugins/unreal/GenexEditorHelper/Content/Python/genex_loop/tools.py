@@ -6,7 +6,7 @@ import unreal
 
 import toolset_registry
 
-from genex_loop import activity, assets, capture, cpp, parts, probes, project, reference, session
+from genex_loop import activity, assets, capture, cpp, parts, probes, project, reference, reload, session
 from genex_loop.errors import Refused
 
 
@@ -90,6 +90,34 @@ class GenexLoopTools(unreal.ToolsetDefinition):
 
     @toolset_registry.tool_call
     @staticmethod
+    def save_during_play(check_only: bool = False) -> str:
+        """Saves every unsaved level and asset without asking, keeping a play session running (Genex
+        calls it at a save point while the agent plays).
+
+        Args:
+            check_only: Only answer {ready: true}, saving nothing: an older helper has no such tool.
+
+        Returns:
+            JSON {saved, dirty, ms, pie}: dirty names the packages still unsaved; pie whether play runs.
+        """
+        return _answer(parts.ready if check_only else parts.save_during_play)
+
+    @toolset_registry.tool_call
+    @staticmethod
+    def reload_helper(check_only: bool = False) -> str:
+        """Reloads the helper's Python behind its toolsets after Genex wrote newer files, so the
+        editor runs them without a restart. Refused during a play session.
+
+        Args:
+            check_only: Only say whether a reload can run now, reloading nothing.
+
+        Returns:
+            JSON {reloaded, ms}, or with check_only {ready, why?}.
+        """
+        return _answer(reload.check if check_only else reload.reload_helper)
+
+    @toolset_registry.tool_call
+    @staticmethod
     def part_trace(part: str) -> str:
         """Reads what of a part is in the editor.
 
@@ -125,21 +153,23 @@ class GenexLoopTools(unreal.ToolsetDefinition):
 
     @toolset_registry.tool_call
     @staticmethod
-    def capture_play(name: str, width: int = 1280, height: int = 720) -> str:
+    def capture_play(name: str, width: int = 1280, height: int = 720, ui: bool = False) -> str:
         """Queues a shot of the running play session's game view, without the editor around it.
 
-        The PNG appears in <project>/Saved/Genex/captures/<name>.png a frame or two later; wait
-        for the file.
+        The PNG appears in <project>/Saved/Genex/captures/<name>.png a frame or two later (with ui,
+        about a second later); wait for the file.
 
         Args:
             name: The shot's name: 1 to 64 letters, digits, _ or - (never a path).
             width: Width in pixels, 320 to 3840 (0 for 1280).
-            height: Height in pixels, 240 to 2160 (0 for 720).
+            height: Height in pixels, 240 to 2160 (0 for 720); with ui, the play view's own shape.
+            ui: Whether the shot shows the game's on-screen UI (its HUD, menus, inventory) as the
+                player sees it, not the 3D frame alone.
 
         Returns:
-            JSON {queued, file}.
+            JSON {queued, file, ui}.
         """
-        return _answer(capture.capture_play, name, width, height)
+        return _answer(capture.capture_play, name, width, height, ui)
 
     @toolset_registry.tool_call
     @staticmethod
@@ -160,6 +190,31 @@ class GenexLoopTools(unreal.ToolsetDefinition):
             JSON {pie, world}.
         """
         return _answer(session.play_state)
+
+    @toolset_registry.tool_call
+    @staticmethod
+    def run_settings() -> str:
+        """Says whether this editor slows down behind other apps and whether it ray-traces.
+
+        Returns:
+            JSON {throttle, rayTracing}; throttle is null where the editor keeps no such setting.
+        """
+        return _answer(session.run_settings)
+
+    @toolset_registry.tool_call
+    @staticmethod
+    def set_background_throttle(on: bool) -> str:
+        """Turns Unreal's "Use Less CPU when in Background" on or off for this run of the editor.
+
+        Nothing is saved: the person's own preference is back the next time Unreal starts.
+
+        Args:
+            on: True to slow down behind other apps, false to keep playing at full speed there.
+
+        Returns:
+            JSON {throttle}, or {error} where the editor keeps no such setting.
+        """
+        return _answer(session.set_background_throttle, on)
 
     @toolset_registry.tool_call
     @staticmethod

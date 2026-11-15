@@ -6,18 +6,22 @@
  *
  * | Handler at its moment | In a run | In a chat |
  * |---|---|---|
- * | `save-all` at `checkpoint.before` | not answering, can't tell, a play, or the save refused: block; saved: nothing | a play: block; anything else: a note of what was saved or why not |
+ * | `save-all` at `checkpoint.before` | not answering, can't tell, a play, or the save refused: a note that the save point holds the files on disk only; saved: nothing | a note of what was saved or why not, a play among them |
  * | `save-all` at `restore.before` | not running: nothing; busy past the wait, or a save that fails or leaves work: block | same |
  * | `end-editor` at `restore.before` | still answering after it ended everything: block | same |
- * | `reopen-editor` at `restore.after`, `crash` | starts reopening (an outdated helper updated while closed): nothing | same, after a restore only when it closed a running Unreal |
+ * | `reopen-editor` at `restore.after` | starts reopening (an outdated helper updated while closed): nothing | same, only when the restore closed a running Unreal |
  * | `editor-state` at `health` | answers: nothing; reopening, starting, busy or can't tell: pending; reopening failed, port blocked, unlinked or gone: block | same, gone in the chat's words |
- * | `log-errors` at `run.prepare` / `checkpoint.before` | marks the log's end / notes the new errors | same |
+ * | `log-errors` at `run.prepare` / `checkpoint.before` | marks the log's end, and notes an open Unreal's outdated helper / notes the new errors | — / same |
  * | `hero-shots` at `checkpoint.after` | the hero cameras' stills as images, their tone as measures | nothing: no stills taken |
- * | `open-for-run` at `run.prepare` | opens Unreal, updates an outdated helper, exports missing facts; block when it can't | — |
  * | `editor-activity` as the lock's probe | no editor: nobody, nothing unsaved; a play counts only when neither the agent nor the queue started it | same |
+ *
+ * A checkpoint's block would only be a note (Genex refuses no checkpoint for a step), so its answers
+ * are notes; only a restore's are blocks, which keep the files when Unreal's work can't be saved.
  */
 import type { HookAnswer, HookContext, HookImage } from "../../shared/plugin-hooks.ts";
 import { EngineReadiness } from "./editor-wait.ts";
+import { NEW_GAMES_ENGINE_GB } from "./engine-line.ts";
+import { HelperState, installEngineVersion } from "./setup.ts";
 
 /** How many of the names left unsaved an answer lists, and how many new log errors a note names. */
 const NAMED_UNSAVED = 3;
@@ -65,18 +69,20 @@ export type HealthRead = { health: EditorHealth; error?: string; project?: strin
 
 /** The words of every answer. The person and the lead read them as written. */
 export const MOMENT_WORDS = {
-  // A run's save point (the lead's `save_point` says "No save point: <reason>").
-  NoEditor: "Unreal doesn't answer, so nothing was saved.",
-  Playing: "The game is playing in the editor: stop the play session first, then save. Nothing was saved.",
+  // A run's save point, kept either way: the lead reads these after "Saved save point".
+  NoEditor: "Unreal doesn't answer, so nothing was saved in it: this save point holds the files on disk only.",
+  Playing:
+    "The game is playing in the editor, so nothing was saved in Unreal: this save point holds the files on disk only.",
   CantTell:
-    "Unreal can't tell whether the game is playing, and saving would end a play session, so nothing was saved. Try again in a moment.",
-  NotSaved: (problem: string) => `${problem}. No save point was made; save what is left, then try again.`,
+    "Unreal can't tell whether the game is playing, and saving would end a play session, so nothing was saved in it: this save point holds the files on disk only.",
+  NotSaved: (problem: string) =>
+    `Unreal's work wasn't saved: ${sentence(problem)} This save point holds the files on disk only.`,
   LeftAssets: (dirty: readonly string[]) =>
     `the editor's save left ${dirty.length} assets unsaved${dirty.length ? ` (${dirty.slice(0, NAMED_UNSAVED).join(", ")})` : ""}`,
   SaveFailed: (why: string) => `the editor's save failed: ${why}`,
   // A chat's checkpoint: the agent's checkpoint answer, and the person's line at a turn's end, so no tool is named.
   ChatPlaying:
-    "The game is playing in the Unreal editor, so nothing was saved and no snapshot was taken. Stop the play session, then save again.",
+    "The game is playing in the Unreal editor, so nothing was saved there: this checkpoint holds the files on disk only. Stop the play session, then save again.",
   Clean: "Unreal had nothing unsaved.",
   Unknown: "Genex couldn't tell whether the game is playing in Unreal, so nothing was saved there.",
   Saved: (count: number) => `Saved ${count} unsaved ${count === 1 ? "file" : "files"} in Unreal.`,
@@ -101,22 +107,10 @@ export const MOMENT_WORDS = {
   NoProject: "This game isn't linked to an Unreal project.",
   Waiting: (project: string | null) =>
     `Unreal is opening ${project ?? "this game's project"}; a first start can take several minutes. This chat goes on by itself when it's ready. Stop ends the wait.`,
-  NotReady: (project: string | null) =>
-    `Unreal didn't finish opening ${project ?? "this game's project"}. Open it from the Unreal button above the game, then send a message to go on.`,
+  NotReady: (project: string | null) => `Unreal isn't running with ${project ?? "this game's project"} open.`,
   // A run's start.
-  NotSetUp: (why: string) => `Genex couldn't set this game's Unreal project up for the Loop: ${why}`,
-  NoHelper:
-    "This game's Unreal project has no Genex editor helper, so the Loop can't save or capture it. Link it again with unreal__use-project, which sets it up.",
-  HelperUpdated: (to: string) => `Updated this game's Genex editor helper to ${to} before the Loop.`,
-  HelperNotUpdated: (reason: string) =>
-    `The Genex editor helper couldn't be updated (${reason}); the Loop goes on with it.`,
-  NotOpened: (why: string) => `Unreal couldn't be reopened (${why}).`,
-  OpenTimedOut: (minutes: number) => `Unreal didn't answer within ${minutes} minutes of reopening`,
-  Stopped: "the run was stopped while Unreal reopened",
-  StoppedBeforeOpen: "The run was stopped before Unreal was opened.",
-  StoppedBeforeClose: "The run was stopped before Unreal was closed, so the Genex editor helper wasn't updated.",
-  StoppedAfterClose:
-    "The run was stopped once Unreal was closed, so the Genex editor helper wasn't updated; Unreal is being reopened.",
+  HelperOutdated:
+    "Unreal is open with an older Genex editor helper than the plugin's, so some Unreal tools may fail: quit-editor, then open-editor updates it.",
   // The log.
   LogErrors: (lines: readonly string[], since: string) => {
     const more = lines.length > NAMED_LOG_LINES ? ` (and ${lines.length - NAMED_LOG_LINES} more)` : "";
@@ -134,30 +128,33 @@ function sentence(why: string): string {
   return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
-/** A run's save point: blocked unless the editor's work was saved, else nothing to say. */
+/**
+ * A run's save point: a note, for the lead, that it holds the files on disk only when the editor's
+ * work wasn't saved; nothing to say when it was.
+ */
 function runSave(read: SaveRead): HookAnswer {
   switch (read.outcome) {
     case SaveOutcome.NotAnswering:
-      return { block: MOMENT_WORDS.NoEditor };
+      return { note: MOMENT_WORDS.NoEditor };
     case SaveOutcome.CantTell:
-      return { block: MOMENT_WORDS.CantTell };
+      return { note: MOMENT_WORDS.CantTell };
     case SaveOutcome.Playing:
-      return { block: MOMENT_WORDS.Playing };
+      return { note: MOMENT_WORDS.Playing };
     case SaveOutcome.LeftUnsaved:
-      // As the runner did: only a save that said it saved nothing refuses the save point.
-      return read.saved ? {} : { block: MOMENT_WORDS.NotSaved(MOMENT_WORDS.LeftAssets(read.names)) };
+      // As the runner did: only a save that said it saved nothing counts as Unreal's work not saved.
+      return read.saved ? {} : { note: MOMENT_WORDS.NotSaved(MOMENT_WORDS.LeftAssets(read.names)) };
     case SaveOutcome.Failed:
-      return { block: MOMENT_WORDS.NotSaved(MOMENT_WORDS.SaveFailed(read.why)) };
+      return { note: MOMENT_WORDS.NotSaved(MOMENT_WORDS.SaveFailed(read.why)) };
     default:
       return {};
   }
 }
 
-/** A chat's checkpoint: blocked only by a play session; anything else is a note of what was saved. */
+/** A chat's checkpoint: a note of what was saved, or why not (a play session among them). */
 function chatSave(read: SaveRead): HookAnswer {
   switch (read.outcome) {
     case SaveOutcome.Playing:
-      return { block: MOMENT_WORDS.ChatPlaying };
+      return { note: MOMENT_WORDS.ChatPlaying };
     case SaveOutcome.NotAnswering:
     case SaveOutcome.CantTell:
       return { note: MOMENT_WORDS.Unknown };
@@ -181,6 +178,16 @@ export function saveAnswer(read: SaveRead, hook: HookContext | undefined): HookA
 
 /** Why a restore may not go on: Unreal's work couldn't be saved, so it stays open. */
 export const restoreBlock = (why: string): HookAnswer => ({ block: MOMENT_WORDS.RestoreNotSaved(why) });
+
+/**
+ * What a run's start tells its lead of the project's Genex editor helper: a note when Unreal is open
+ * (answering, or its editor running) with an older one than the plugin's, which only a quit and the
+ * lead's next open update; nothing otherwise, as the lead's open of a closed Unreal updates it.
+ */
+export function helperAnswer(state: { answering: boolean; running: boolean | null; helper: HelperState | null }) {
+  const open = state.answering || state.running === true;
+  return open && state.helper === HelperState.Outdated ? { note: MOMENT_WORDS.HelperOutdated } : {};
+}
 
 /** The new error lines of Unreal's log at a checkpoint, as a note; nothing when there are none. */
 export function logAnswer(lines: readonly string[], hook: HookContext | undefined): HookAnswer {
@@ -271,17 +278,17 @@ const toUnrealButton = (how: string) =>
 
 /** How the engine question offers Unreal beside an Unreal that makes no new games here. */
 const beside = (version: string) =>
-  `offer it as "Unreal Engine 5.8" with the description "Needs 5.8 installed beside your ${version}, about 45 GB".`;
+  `offer it as "Unreal Engine ${installEngineVersion()}" with the description "Needs ${installEngineVersion()} installed beside your ${version}, about ${NEW_GAMES_ENGINE_GB} GB".`;
 
 /** The engine question's words for this computer's Unreal: ready to make a game with, or what it needs first. */
 function readinessNote(readiness: Readiness): string {
   const version = readiness.version ?? "";
   if (readiness.engine === EngineReadiness.None)
-    return `Unreal Engine isn't installed on this computer yet, so offer it as "Unreal Engine" with the description "Plays in Epic's free editor on this computer; needs a 45 GB install first". ${toUnrealButton("get Unreal 5.8 free from Epic")}`;
+    return `Unreal Engine isn't installed on this computer yet, so offer it as "Unreal Engine" with the description "Plays in Epic's free editor on this computer; needs a ${NEW_GAMES_ENGINE_GB} GB install first". ${toUnrealButton(`get Unreal ${installEngineVersion()} free from Epic`)}`;
   if (readiness.engine === EngineReadiness.NewerOnly)
-    return `This computer has Unreal ${version}, and Genex makes new Unreal projects with 5.8 only, so ${beside(version)} ${toUnrealButton(`install 5.8 beside ${version} in the Epic Games Launcher`)}`;
+    return `This computer has Unreal ${version}, and Genex makes new Unreal projects with ${installEngineVersion()} only, so ${beside(version)} ${toUnrealButton(`install ${installEngineVersion()} beside ${version} in the Epic Games Launcher`)}`;
   if (readiness.engine === EngineReadiness.OlderOnly)
-    return `This computer has Unreal ${version}, older than the 5.8 Genex makes Unreal games with, so ${beside(version)} ${toUnrealButton("get 5.8 free from Epic")}`;
+    return `This computer has Unreal ${version}, older than the ${installEngineVersion()} Genex makes new Unreal games with, so ${beside(version)} ${toUnrealButton(`get ${installEngineVersion()} free from Epic`)}`;
   return `Offer ${OPTION}; when the answer (or the request) is Unreal Engine, call ${NEW_GAME} with a template and a name: it makes the game's Unreal project in this folder, links this game to it and opens it in Unreal; then build the game there through the Unreal tools, never as a web page.`;
 }
 

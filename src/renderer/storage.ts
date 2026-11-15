@@ -16,11 +16,8 @@ export const STORAGE_KEYS = {
   effort: "studio.effort",
   lastModel: "studio.model.last",
   studioChatModel: "studio.studioChat.model",
-  composerLoop: "studio.composer.loop",
   /** Which subscription models the picker lists, as set in Settings (`state/model-picker.ts` owns the format). */
   pickerModels: "studio.models.picker",
-  autopilotHours: "studio.autopilotHours",
-  autopilotReview: "studio.autopilotReview",
   terminalHeight: "studio.terminalHeight",
   /** The Live game's sound switch (`panels/stage/game-sound.ts` owns the values). */
   gameSound: "studio.gameSound",
@@ -79,14 +76,14 @@ export const storageKeyFor = {
   /** Model preferences (context size, …) per model, split the same way. */
   preferences: (studio: boolean, modelKey: string | null): string =>
     `${studio ? "studio.studioChat" : "studio"}.preferences.${modelKey}`,
-  /** A game chat's own Loop, as JSON (`loop-setting.ts` owns the format). */
-  threadLoop: (threadId: string): string => `studio.loop.${threadId}`,
   /** A game chat's own effort; the per-model effort only seeds fresh chats. */
   threadEffort: (threadId: string): string => `studio.threadEffort.${threadId}`,
   /** The engine steps offer a game's Not now hid, by its record id (`chat/EngineStepsCard.tsx`). */
   engineStepsDismissed: (project: string): string => `studio.engineSteps.dismissed.${project}`,
   /** A game's asks for another Genex cover or clip and how long the last took (`genex/cover-asks.ts` owns the format). */
   coverAsks: (project: string): string => `studio.genex.coverAsks.${project}`,
+  /** The stamp of a game's design board as the person last saw it (`panels/design/use-design-board.ts`). */
+  designSeen: (project: string): string => `studio.design.seen.${project}`,
   /** The Live view last chosen for a game whose folder has more than one, as its observer key (`live-views.ts`). */
   liveView: (project: string): string => `studio.liveView.${project}`,
   /** Set ("1") once a Genex account has met its generated avatar (`play/AvatarWelcome.tsx`). */

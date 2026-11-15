@@ -70,11 +70,13 @@ import {
   type CompileResult,
   canCompileCpp,
   compileEditor,
+  cppToolsState,
   type PrepareSandbox,
   pathScrubber,
   projectPluginDirs,
   type RunCommand,
 } from "./ubt.ts";
+import { type VisualStudioStatus, visualStudioLacking } from "./visual-studio.ts";
 import type { XcodeStatus } from "./xcode.ts";
 
 /** The four tools, by their names after `unreal__`. */
@@ -109,15 +111,28 @@ export type ShipOutcome = Partial<AutomationResult> & {
 };
 /** One job as `plugin-status` reads it: its state, why it failed, how long it took, and what it left. */
 export type ShipRecord = ShipOutcome & { state: ShipState; error?: string; seconds?: number };
-/** `plugin-status`'s answer: the plugin, its three jobs, and the proof a finish can name, by paths inside the game. */
-export type ShipStatus = { plugin: string; build: ShipRecord; test: ShipRecord; package: ShipRecord; proof: string[] };
+/**
+ * `plugin-status`'s answer: the plugin, its three jobs, the proof a finish can name (by paths inside
+ * the game), and whether any of the jobs runs now (`jobRunning`, read by Genex to wake the chat when it ends).
+ */
+export type ShipStatus = {
+  plugin: string;
+  build: ShipRecord;
+  test: ShipRecord;
+  package: ShipRecord;
+  proof: string[];
+  jobRunning: boolean;
+};
 
 /** What the plugin's tools need from the computer, the editor and the clock; tests stand in for every program. */
 export type ShipToolsDeps = RestartDeps & {
   platform: NodeJS.Platform;
-  engine(): Promise<Engine | undefined>;
+  /** The installed engine `game`'s tools run with: its project's own, else the newest supported one. */
+  engine(storage: string, game: string): Promise<Engine | undefined>;
   project(storage: string, game: string): Promise<string | undefined>;
   xcode(engineDir: string | undefined): Promise<Pick<XcodeStatus, "state"> & Partial<Pick<XcodeStatus, "app">>>;
+  /** Where Microsoft's C++ tools stand on Windows, which BuildPlugin compiles the plugin with; none off Windows. */
+  visualStudio?(engineDir: string | undefined): Promise<Pick<VisualStudioStatus, "state">>;
   editorCall(storage: string, game: string, tool: CppEditorTool, args: Record<string, unknown>): Promise<unknown>;
   /** Builds the host's editor target; UnrealBuildTool's own unless a test stands in. */
   compile?(options: CompileOptions): Promise<CompileResult>;
@@ -169,8 +184,10 @@ const MESSAGE = {
   NoProject: "This game isn't linked to an Unreal project, so there is no plugin to build.",
   OutsideGame: "This game's Unreal project isn't inside its folder; the plugin tools work on a project in unreal/.",
   NoEngine: "No supported Unreal is installed, so Genex can't build, test or package the plugin.",
-  CannotCompile: (xcode: string) =>
-    `This computer can't build Unreal C++ (Xcode: ${xcode}); an Unreal plugin is built on a Mac whose Xcode is ready.`,
+  CannotCompile: (tools: string) =>
+    `This computer can't build Unreal C++ (${tools}); an Unreal plugin is built on a Mac whose Xcode is ready, or on Windows with Microsoft's Visual Studio Build Tools, which unreal__install-unreal installs.`,
+  NeedsBuildTools: (state: string) =>
+    `Packaging an Unreal plugin on Windows compiles its C++ with Microsoft's Visual Studio Build Tools (Visual Studio: ${state}). Call unreal__install-unreal, which installs them (Windows asks the user for permission), end your reply, and package again once the chat says they are installed.`,
   NoHostModule: "The host project has no C++ module of its own, so Genex can't build its plugin.",
   BadPlugin: "A plugin is named by its folder under Plugins/: a letter first, then letters, digits or _.",
   NoPlugin: "This project holds no Unreal plugin: new-plugin makes one.",
@@ -285,13 +302,21 @@ const jobOf = (target: ShipTarget, job: ShipJob): JobOf => ({
   job,
 });
 
-/** A target with the supported engine; with `compiles`, refused where Unreal C++ can't be built. */
+/** A target with its game's engine; with `compiles`, refused where Unreal C++ can't be built. */
 async function engineTarget(deps: ShipToolsDeps, target: ShipTarget, compiles: boolean): Promise<EngineTarget> {
-  const engine = await deps.engine();
+  const engine = await deps.engine(target.storage, target.game);
   if (!engine) throw new Error(MESSAGE.NoEngine);
   const xcode = await deps.xcode(engine.directory);
-  if (compiles && !canCompileCpp(xcode, deps.platform)) throw new Error(MESSAGE.CannotCompile(xcode.state));
+  if (compiles) await assertCompiles(deps, engine.directory, xcode);
   return { ...target, engine, xcodeApp: xcode.app ?? null };
+}
+
+/** Refuses where Unreal C++ can't be built: a Mac without a ready Xcode, Windows without Microsoft's C++ tools. */
+async function assertCompiles(deps: ShipToolsDeps, engineDir: string, xcode: Pick<XcodeStatus, "state">) {
+  const visualStudio =
+    deps.platform === WINDOWS ? await deps.visualStudio?.(engineDir).catch(() => undefined) : undefined;
+  const tools = { xcode, visualStudio };
+  if (!canCompileCpp(tools, deps.platform)) throw new Error(MESSAGE.CannotCompile(cppToolsState(tools, deps.platform)));
 }
 
 /**
@@ -724,6 +749,7 @@ async function startPackage(deps: ShipToolsDeps, jobs: Jobs, call: ShipCall) {
   const windows = deps.platform === WINDOWS;
   const engine = await engineTarget(deps, target, !windows);
   if (jobs.running(packaging)) return STARTED;
+  if (windows) await assertBuildTools(deps, engine);
   jobs.refuseBusy(target.project);
   const packageDir = path.join(target.projectDir, ...PACKAGES_FOLDER, target.plugin.name);
   const problem = windows ? windowsPackageProblem(windowsPackage(engine, packageDir)) : undefined;
@@ -744,6 +770,12 @@ async function startPackage(deps: ShipToolsDeps, jobs: Jobs, call: ShipCall) {
   });
   job.hand(started.id, async (ended) => packaged(engine, folders, await packageResultOf(ended, folder), deps.platform));
   return STARTED;
+}
+
+/** Refuses a Windows package while Microsoft's C++ tools aren't ready; a computer that can't tell is let through. */
+async function assertBuildTools(deps: ShipToolsDeps, engine: EngineTarget): Promise<void> {
+  const tools = await deps.visualStudio?.(engine.engine.directory).catch(() => undefined);
+  if (tools && visualStudioLacking(tools)) throw new Error(MESSAGE.NeedsBuildTools(tools.state));
 }
 
 /** Whether a plain file is at `file` (never a link). */
@@ -772,12 +804,14 @@ async function shipStatus(deps: ShipToolsDeps, jobs: Jobs, storage: string, cont
   const packaged = jobs.record(jobOf(target, ShipJob.Package));
   // A summary or note is proof only of a run that finished: none running, failed or stopped.
   const standing = [proofOf(test), proofOf(packaged), true];
+  const build = jobs.record(jobOf(target, ShipJob.Build)) ?? IDLE;
   const status: ShipStatus = {
     plugin: name,
-    build: jobs.record(jobOf(target, ShipJob.Build)) ?? IDLE,
+    build,
     test: test ?? (kept[0] ? { ...IDLE, report } : IDLE),
     package: packaged ?? (kept[1] ? { ...IDLE, note } : IDLE),
     proof: shown.filter((_, n) => kept[n] && standing[n]),
+    jobRunning: [build, test, packaged].some((record) => record?.state === ShipState.Running),
   };
   return status;
 }

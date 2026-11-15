@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import {
@@ -11,15 +11,11 @@ import {
   CoreFact,
   FactSource,
   factsOfFiles,
-  FolderHolds,
   globMatches,
-  LoopProfile,
-  loopProfileOf,
   parsePortedFrom,
   pluginFactSource,
   scopePaths,
   type FactRule,
-  WEB_LOOP_FACTS,
 } from "../../src/shared/project-facts.ts";
 import { GameEngine } from "../../src/shared/game-engine.ts";
 import { webFolderOf } from "../../src/shared/project-workspace.ts";
@@ -116,41 +112,8 @@ describe("the core table", () => {
   });
 });
 
-describe("a Loop's profile", () => {
-  it("is web only for a web game served at the root beside nothing but Blender files; anything else is open", () => {
-    const at = (id: string, where: string) => ({ id, path: where, source: FactSource.Core });
-    const { Web, Open } = LoopProfile;
-    const table: Array<[string, Parameters<typeof loopProfileOf>[0], LoopProfile]> = [
-      ["a folder with no kind yet", { facts: [] }, Web],
-      ["a folder of its own files of a kind no rule knows", { facts: [], holds: FolderHolds.OwnFiles }, Open],
-      ["a web game", { facts: [at(CoreFact.WebGame, ".")] }, Web],
-      ["a web game with a second site", { facts: [at(CoreFact.WebGame, "."), at(CoreFact.WebGame, "site")] }, Web],
-      [
-        "a web game holding Blender files",
-        { facts: [at(CoreFact.WebGame, "."), at(CoreFact.BlenderAssets, "assets")] },
-        Web,
-      ],
-      ["a site in a subfolder only", { facts: [at(CoreFact.WebGame, "site")] }, Open],
-      ["an Unreal project", { facts: [at(CoreFact.UnrealProject, ".")] }, Open],
-      [
-        "a web game with an Unreal project linked in",
-        { facts: [at(CoreFact.WebGame, "."), at(CoreFact.UnrealProject, "unreal")] },
-        Open,
-      ],
-      [
-        "an Unreal project with a site",
-        { facts: [at(CoreFact.UnrealProject, "."), at(CoreFact.WebGame, "site")] },
-        Open,
-      ],
-      ["a Godot project", { facts: [at(CoreFact.GodotProject, ".")] }, Open],
-      ["a plugin's kind", { facts: [at("toy-project", ".")] }, Open],
-      ["Blender files alone", { facts: [at(CoreFact.BlenderAssets, ".")] }, Open],
-      ["an Unreal plugin", { facts: [at(CoreFact.UnrealPlugin, ".")] }, Open],
-    ];
-    for (const [name, game, profile] of table) assert.equal(loopProfileOf(game), profile, name);
-    assert.deepEqual([...WEB_LOOP_FACTS].sort(), [CoreFact.BlenderAssets, CoreFact.WebGame]);
-  });
-});
+// Flipped (one Loop): "a Loop's profile" tabled which folders got the web Loop (`loopProfileOf`,
+// `WEB_LOOP_FACTS`); every Loop works in place now, and the profile is only read from old records.
 
 describe("walking a folder", () => {
   let dir: string;
@@ -582,6 +545,63 @@ describe("a listed game's facts", () => {
     );
     assert.deepEqual(await factsOf(cased.name), ["web-game@Web:core", "unity-project@unity:core"]);
     assert.equal(webFolderOf(await listed(cased.name)), "Web", "Web/ is the same folder");
+  });
+
+  it("a web starter whose page is gone leaves only its record: an engine's web build is the game's web game", async () => {
+    /** A game New game made from the web starter, an engine's files written into it, then the starter's page removed. */
+    const pageGone = async (name: string, files: string[]) => {
+      const game = await lite.core.games.scaffold(name);
+      for (const file of files) {
+        await mkdir(path.dirname(path.join(game.dir, file)), { recursive: true });
+        await writeFile(path.join(game.dir, file), "made by the engine\n");
+      }
+      await unlink(path.join(game.dir, "index.html"));
+      return game.name;
+    };
+    const unity = await pageGone("unity-page-gone", [
+      "unity/ProjectSettings/ProjectVersion.txt",
+      "web/index.html",
+      "web/Build/web.loader.js",
+    ]);
+    // Publish sent the root page before, which is not there: "Selected public path is missing: index.html".
+    assert.deepEqual(await factsOf(unity), ["unity-project@unity:core", "web-game@web:core"]);
+    assert.equal(webFolderOf(await listed(unity)), "web", "the page Live plays and Publish sends");
+    const godot = await pageGone("godot-page-gone", ["godot/project.godot", "web/index.html", "web/index.pck"]);
+    assert.deepEqual(await factsOf(godot), ["godot-project@godot:core", "web-game@web:core"]);
+    assert.equal(webFolderOf(await listed(godot)), "web");
+    // A hidden file beside the starter's untouched code (Finder's, an editor's) is nobody's game.
+    const finder = await pageGone("unity-page-gone-finder", [
+      "unity/ProjectSettings/ProjectVersion.txt",
+      "web/index.html",
+      "web/Build/web.loader.js",
+      "src/.DS_Store",
+    ]);
+    assert.deepEqual(await factsOf(finder), ["unity-project@unity:core", "web-game@web:core"]);
+    assert.equal(webFolderOf(await listed(finder)), "web");
+
+    // With no web build to take its place, the record still makes the folder a web game, as it did.
+    const noBuild = await pageGone("unity-page-gone-no-web", ["unity/ProjectSettings/ProjectVersion.txt"]);
+    assert.deepEqual(await factsOf(noBuild), ["web-game@.:core", "unity-project@unity:core"]);
+    assert.equal(webFolderOf(await listed(noBuild)), null);
+    // The starter's code somebody built on is still their web game, page or no page: the root keeps it.
+    const ownCode = await pageGone("unity-page-gone-own-code", [
+      "unity/ProjectSettings/ProjectVersion.txt",
+      "web/index.html",
+      "web/Build/web.loader.js",
+      "src/main.js",
+    ]);
+    assert.deepEqual(await factsOf(ownCode), ["web-game@.:core", "unity-project@unity:core"]);
+    assert.equal(webFolderOf(await listed(ownCode)), null);
+    // So is a game written in other files of the starter's code folder, its own page made by a build step.
+    const otherCode = await pageGone("unity-page-gone-other-code", [
+      "unity/ProjectSettings/ProjectVersion.txt",
+      "web/index.html",
+      "web/Build/web.loader.js",
+      "src/game.ts",
+    ]);
+    assert.deepEqual(await factsOf(otherCode), ["web-game@.:core", "unity-project@unity:core"]);
+    assert.equal(webFolderOf(await listed(otherCode)), null);
+    // And a page that is there and built on keeps its place (the case above this one).
   });
 
   it("a link to a project outside the game is one absolute fact, and stands for the game's Unreal project", async () => {

@@ -8,7 +8,6 @@ import type { StudioApi } from '../../src/shared/studio-api.ts';
 import type { PluginInfo } from '../../src/shared/plugins.ts';
 import type { McpConnectorView } from '../../src/shared/mcp.ts';
 import { RunState } from '../../src/shared/run-state.ts';
-import type { ComposerBuild } from '../../src/renderer/loop-setting.ts';
 const galleryModels:ModelChoice[]=[
  {key:'codex::fixture-astra',name:'Astra fixture',group:'OpenAI fixtures',contextWindow:258400,supportsFast:true,supportsSessions:true,efforts:['low','medium','high','xhigh','max','ultra'],defaultEffort:'medium'},
  {key:'claude-code::fixture-opus',name:'Opus fixture',group:'Claude fixtures',contextWindow:1000000,supportsSessions:true,efforts:['low','medium','high','max'],defaultEffort:'high'},
@@ -39,7 +38,7 @@ if(!window.studio)Object.defineProperty(window,'studio',{value:{
  // A dropped file's place on disk, as the preload answers it.
  pathOfFile:(file:File)=>`/Users/you/Downloads/${file.name}`,
  // Two subscriptions with fixed plan limits: one high, one nearly spent, and an exhausted model
- // bucket the panel leaves out.
+ // bucket of its own.
  providerUsage:async()=>[
   {engine:'claude-code',state:'ready',account:'terminal',usage:{measuredAt:new Date().toISOString(),plan:'max',windows:[
    {id:'five_hour',label:'5-hour limit',percent:0,resetsAt:new Date(Date.now()+(3*60+54)*60_000+30_000).toISOString()},
@@ -50,15 +49,14 @@ if(!window.studio)Object.defineProperty(window,'studio',{value:{
  ],
  openUrl:async(url:string)=>{document.body.dataset.openedUrl=url;},
 } as unknown as StudioApi});
-/** The builds a gallery chat can hold: none, running (∞ or 30 m), paused (30 m) or finished. */
-const SPECIMEN_BUILDS:Record<string,ComposerBuild|null>={
+/** The builds a gallery chat can hold: none, running, paused or finished. */
+const SPECIMEN_BUILDS:Record<string,{state:RunState}|null>={
  none:null,
- 'running-inf':{state:RunState.Running,loop:{on:true,hours:null}},
- 'running-30':{state:RunState.Running,loop:{on:true,hours:0.5}},
- 'paused-30':{state:RunState.Paused,loop:{on:true,hours:0.5}},
- finished:{state:RunState.Finished,loop:{on:true,hours:0.5}},
+ running:{state:RunState.Running},
+ paused:{state:RunState.Paused},
+ finished:{state:RunState.Finished},
 };
-/** Two gallery chats and the build each holds, so the composer's per-chat Loop can be switched. */
+/** Two gallery chats and the build each holds, so the composer can be switched between them. */
 function SpecimenSwitches({chat,onChat,build,onBuild}:{chat:string;onChat:(key:string)=>void;build:string;onBuild:(key:string)=>void}){
  const button=(on:boolean)=>`rounded px-1.5 py-0.5 ${on?'bg-hover text-ink':'text-ink-3'}`;
  return <div className="flex flex-wrap gap-1 text-xs">

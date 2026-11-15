@@ -1,6 +1,6 @@
 /**
- * What a terminal session runs: the game's shell, a Claude Code, OpenCode, Grok Build, Cursor or Pi
- * sign-in, or one command a chat reply offered.
+ * What a terminal session runs: the game's shell, a Claude Code, OpenCode, Grok Build, Cursor, Pi or
+ * Antigravity sign-in, or one command a chat reply offered.
  */
 export const TerminalKind = {
   Shell: "shell",
@@ -9,6 +9,7 @@ export const TerminalKind = {
   PiLogin: "pi-login",
   GrokLogin: "grok-login",
   CursorLogin: "cursor-login",
+  AntigravityLogin: "antigravity-login",
   Command: "command",
 } as const;
 export type TerminalKind = (typeof TerminalKind)[keyof typeof TerminalKind];
@@ -19,10 +20,8 @@ const SETTINGS_TERMINALS: ReadonlySet<TerminalKind> = new Set([
   TerminalKind.PiLogin,
   TerminalKind.GrokLogin,
   TerminalKind.CursorLogin,
+  TerminalKind.AntigravityLogin,
 ]);
-
-/** Whether this terminal is a sign-in Settings shows in its own row. */
-export const settingsSignIn = (kind: TerminalKind): boolean => SETTINGS_TERMINALS.has(kind);
 
 /** Whether the dock lists this session; a Settings sign-in shows in Settings instead. */
 export const inDock = (session: { kind: TerminalKind }): boolean => !SETTINGS_TERMINALS.has(session.kind);

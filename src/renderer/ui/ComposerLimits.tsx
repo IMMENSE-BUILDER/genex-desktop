@@ -11,7 +11,7 @@ import {
   PLAN_PROVIDERS,
   planWords,
   resetWords,
-  shownLimits,
+  shownPlans,
 } from "./usage-words.ts";
 import { MINUTE_MS } from "../../shared/duration.ts";
 import { usePolling } from "../use-polling.ts";
@@ -120,6 +120,23 @@ function PlanAccounts({
   );
 }
 
+/**
+ * A plan's accounts once there are two to switch between, read again when the account in use or the
+ * engine's sign-in changes.
+ */
+function PlanAccountsLine({
+  report,
+  onSwitched,
+}: {
+  report: ProviderUsageReport;
+  onSwitched: (reloadAccounts: () => void) => void;
+}): JSX.Element | null {
+  const status = useEngines((s) => s.list.find((engine) => engine.id === report.engine)?.status.code);
+  const { accounts, reload } = useSubscriptionAccounts(report.engine, `${report.account}:${status}`);
+  if (accounts.length < 2) return null;
+  return <PlanAccounts engine={report.engine} accounts={accounts} onSwitched={() => onSwitched(reload)} />;
+}
+
 /** Start an account's web sign-in and open Model Providers, where that sign-in shows. */
 async function signInAgain(engine: string, account: string | null): Promise<void> {
   await window.studio.subscriptionSignIn({ engine, ...(account ? { account } : {}) });
@@ -148,9 +165,12 @@ function PlanProblem({
   );
 }
 
-/** What a plan shows under its name, by where its limits stand. */
-function PlanBody({ report, onRetry }: { report: ProviderUsageReport; onRetry: () => void }): JSX.Element {
-  const limits = shownLimits(report.usage?.windows ?? []);
+/**
+ * What a plan shows under its name, by where its limits stand: every limit the account reports, a
+ * model's own weekly limit (such as Fable's) among them.
+ */
+export function PlanBody({ report, onRetry }: { report: ProviderUsageReport; onRetry: () => void }): JSX.Element {
+  const limits = report.usage?.windows ?? [];
   const brand = PLAN_PROVIDERS[report.engine]?.brand ?? report.engine;
   if (report.state === UsageState.SignedOut)
     return (
@@ -201,9 +221,6 @@ function PlanLimits({
   const usage: ProviderUsage | null = report.usage;
   const page = PLAN_PROVIDERS[report.engine]?.usagePage;
   const title = planWords(report.engine, usage?.plan);
-  // The accounts are read again when the account in use or the engine's sign-in changes.
-  const status = useEngines((s) => s.list.find((engine) => engine.id === report.engine)?.status.code);
-  const { accounts, reload } = useSubscriptionAccounts(report.engine, `${report.account}:${status}`);
   return (
     <section className="usage-plan" data-usage-engine={report.engine} data-usage-state={report.state}>
       <div className="usage-plan-head">
@@ -226,9 +243,8 @@ function PlanLimits({
           </span>
         )}
       </div>
-      {accounts.length > 1 && (
-        <PlanAccounts engine={report.engine} accounts={accounts} onSwitched={() => onSwitched(reload)} />
-      )}
+      {/* A subscription's accounts; Genex's credits belong to the one Genex sign-in. */}
+      {PLAN_PROVIDERS[report.engine] && <PlanAccountsLine report={report} onSwitched={onSwitched} />}
       <PlanBody report={report} onRetry={onRetry} />
     </section>
   );
@@ -314,7 +330,7 @@ function PlanUsage({
   if (reports === null) return <PendingPlans usedBy={usedBy} />;
   // The orchestrator's plan first, then the others this setup draws on, then any left to switch to.
   const rank = (engineId: string) => planRank(usedBy[engineId]);
-  const plans = [...reports].sort((a, b) => rank(a.engine) - rank(b.engine));
+  const plans = shownPlans(reports).sort((a, b) => rank(a.engine) - rank(b.engine));
   return (
     <>
       {plans.map((report) => (
@@ -332,8 +348,11 @@ function PlanUsage({
   );
 }
 
-/** The orchestrator's context and each signed-in subscription's plan limits. The ring is the
- * context summary; the panel adds the numbers, Compact now and the plans' remaining room. */
+/**
+ * The orchestrator's context, each signed-in subscription's plan limits and a Genex Pro member's
+ * monthly credits. The ring is the context summary; the panel adds the numbers, Compact now and the
+ * plans' remaining room.
+ */
 export function ComposerLimits({
   models,
   modelKey,

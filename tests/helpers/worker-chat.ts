@@ -8,8 +8,9 @@
 import assert from "node:assert/strict";
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
-import { customRecord } from "../../src/shared/custom-events.ts";
+import { CustomEvent, customRecord } from "../../src/shared/custom-events.ts";
 import type { ToolPermissionEvent } from "../../src/shared/permissions.ts";
+import type { PluginConsentEvent } from "../../src/shared/plugins.ts";
 import { UiEvent } from "../../src/shared/ui-events.ts";
 import type {
   DelegateRequest,
@@ -19,6 +20,7 @@ import type {
 } from "../../src/substrate/engines/types.ts";
 import type { AppLookPort, ScreenAccess } from "../../src/substrate/app-look.ts";
 import type { JobSpawn } from "../../src/substrate/jobs.ts";
+import { Changes, until } from "./changes.ts";
 import { type CoreLite, type CoreLiteOptions, coreLite } from "./core-lite.ts";
 import { tmpDir } from "./tmp.ts";
 
@@ -48,28 +50,6 @@ const lites: CoreLite[] = [];
 /** Stop every core a worker chat started; a test file calls it in its `after`. */
 export async function closeWorkerChats(): Promise<void> {
   for (const lite of lites.splice(0)) await lite.close();
-}
-
-/** Something a test waits to be told of: a promise for the next change, and its signal. */
-export class Changes {
-  #waiters: Array<() => void> = [];
-  /** The next change. Ask for it before reading the state it changes, so none is missed. */
-  next(): Promise<void> {
-    return new Promise((resolve) => this.#waiters.push(resolve));
-  }
-  /** A change happened: everyone waiting hears it. */
-  notify(): void {
-    for (const resolve of this.#waiters.splice(0)) resolve();
-  }
-}
-
-/** Wait until `done` holds, reading it again on each change. */
-export async function until(changes: Changes, done: () => boolean | Promise<boolean>): Promise<void> {
-  for (;;) {
-    const next = changes.next();
-    if (await done()) return;
-    await next;
-  }
 }
 
 /** What kind of engine a fake is: a delegated one carries a worker's seat; a direct one (a local model) does not. */
@@ -109,6 +89,24 @@ export async function permissionRows(core: CoreLite["core"], threadId: string): 
   });
 }
 
+/**
+ * The ids of a thread's plugin consent cards still waiting for an answer, as the chat keeps them:
+ * an answer is a later row of the same card, so a card with one is left out.
+ */
+async function pendingConsents(core: CoreLite["core"], threadId: string): Promise<string[]> {
+  const asked: string[] = [];
+  const answered = new Set<string>();
+  for (const event of await core.store.listEvents(threadId)) {
+    const custom = customRecord(event.data);
+    if (custom?.event_type !== CustomEvent.PluginConsent) continue;
+    const { consentId, state } = custom.payload as Partial<PluginConsentEvent>;
+    if (!consentId) continue;
+    if (state === "pending") asked.push(consentId);
+    else answered.add(consentId);
+  }
+  return asked.filter((consentId) => !answered.has(consentId));
+}
+
 /** The seat's way to ask, when it has one. */
 export const workerAsks = (request: DelegateRequest) => request.worker?.asks;
 
@@ -125,7 +123,6 @@ export async function realNearest(target: string): Promise<string> {
  */
 export async function workerChat(
   options: {
-    leadAskTimeoutMs?: number;
     consentTimeoutMs?: number;
     neverTouchGames?: string[];
     /** How the core starts agent jobs (`job-tools`); a lite core's default is the sandbox's. */
@@ -140,10 +137,13 @@ export async function workerChat(
 ) {
   /** The core announced a card (`UiEvent.ToolPermission`): a test waiting for one reads the rows again. */
   const cards = new Changes();
+  /** The core announced a plugin's consent card (`UiEvent.PluginConsent`): a test waiting for one reads the rows again. */
+  const consents = new Changes();
   const lite = await coreLite({
     gamesRoot: await realpath(await tmpDir("worker-seats-games-")),
     onUiEvent: (event) => {
       if (event.type === UiEvent.ToolPermission) cards.notify();
+      if (event.type === UiEvent.PluginConsent) consents.notify();
     },
     ...options,
   });
@@ -221,6 +221,16 @@ export async function workerChat(
     if (!card) throw new Error("no card reached the chat");
     return card;
   };
+  /** Wait for a plugin consent card on the chat that is still waiting for the person; its id. */
+  const nextConsent = async (): Promise<string> => {
+    let consentId: string | undefined;
+    await until(consents, async () => {
+      consentId = (await pendingConsents(core, threadId))[0];
+      return consentId !== undefined;
+    });
+    if (!consentId) throw new Error("no consent card reached the chat");
+    return consentId;
+  };
   /** Wait until the engines have seen `count` requests. */
   const untilSeen = (count: number) => until(saw, () => seen.length >= count);
   /** Wait until the engines have seen a request `matches` holds for. */
@@ -284,6 +294,7 @@ export async function workerChat(
     untilSeen,
     untilRequest,
     nextCard,
+    nextConsent,
     whileRunning: (does: During) => {
       during = does;
     },

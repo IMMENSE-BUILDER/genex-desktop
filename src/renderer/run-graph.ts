@@ -1,3 +1,5 @@
+import { cleanBuildTitle } from "../shared/build-title.ts";
+import { withoutMentionContext } from "../shared/prompt-mention.ts";
 import { graphKeyOf, type RunGraphEvent, turnOfGraphKey, workerKeyOf } from "../shared/run-graph-events.ts";
 /**
  * Run graph — the pure data model behind the Build room's node-graph view of an Autopilot run.
@@ -20,7 +22,6 @@ import { graphKeyOf, type RunGraphEvent, turnOfGraphKey, workerKeyOf } from "../
  */
 import { CustomEvent } from "../shared/custom-events.ts";
 import { finishRecordOf } from "../shared/finish-check.ts";
-import { HOUR_MS } from "../shared/duration.ts";
 import { t } from "../shared/i18n.ts";
 import { type EventEnvelope, EventKind } from "../shared/event-log.ts";
 import type { MakingPhase } from "../shared/asset-making.ts";
@@ -32,7 +33,6 @@ import {
   RoundOutcome,
   type RunExecution,
   RunState,
-  recordedRunLoop,
   roundOutcome,
 } from "../shared/run-state.ts";
 import type { RunSummary } from "../shared/run-summary.ts";
@@ -62,7 +62,6 @@ import {
   parseMerge,
   parseMove,
   parseScoreboard,
-  parseAdvice,
   parseShot,
   parseShots,
   parseVerdict,
@@ -273,19 +272,6 @@ export interface Shot {
   path: string;
 }
 
-/**
- * A critic's fresh look at a round the lead saved (`director_verdict` with `advice: true`): what it
- * saw wrong with the fix for each, one bold move, and its answers to the lead's gates. It is
- * advice: it decided nothing, so it is never a verdict.
- */
-export interface AdviceInfo {
-  at: string;
-  defects: Array<{ defect: string; fix: string }>;
-  boldMove: string;
-  gates: string[];
-  shots: string[];
-}
-
 export interface DiffInfo {
   camera: string;
   diffFraction: number | null;
@@ -319,9 +305,11 @@ export interface RunNode {
   id: "run";
   runId: string;
   project: string | null;
+  /** What the build was asked: its goal, or the words the chat last went on with it for. */
   goal: string;
+  /** The title the chat gave the build as it started it (shared/build-title.ts); null on an older run. */
+  title: string | null;
   reference: { name: string; kind: string | null } | null;
-  durationMs?: number;
   startedAt: string | null;
   finishedAt: string | null;
   active: boolean;
@@ -334,7 +322,7 @@ export interface RunNode {
   builderEngine: string | null;
   /** labels of the reference stills the run was given */
   referenceFrames: string[];
-  /** The pictures the person sent with the message the run answers, for its start node; null when none. */
+  /** The pictures sent with the message `goal` answers, for its start node and card; null when none. */
   asked: AskedPictures | null;
   /**
    * A run the lead runs itself (`autopilot_started.director`). It has no shared-base stage
@@ -435,8 +423,6 @@ export interface IterationNode {
   notes: NoteInfo[];
   /** The round's own verdict record — null on a run from before the round wrote one. */
   verdict: VerdictRecord | null;
-  /** The critic's advice on this round, when the lead asked for it: never a verdict. */
-  advice: AdviceInfo | null;
   /** Why a stopped round stopped, in the app's code: the run's own close, or the lead. */
   stopCode: WorkerStopCode | null;
 }
@@ -628,6 +614,8 @@ export interface HealthLook {
   findings: HealthFinding[] | null;
   /** its record's place in the log */
   seq: number;
+  /** when its record was written; null on a draft that read no time */
+  at: string | null;
 }
 
 export interface RunGraph {
@@ -750,6 +738,17 @@ interface GraphDraft {
   sentPictures: Map<string, number>;
   /** The person's message the chat answers now, with its pictures: what a run starting now was asked with. */
   answering: AskedPictures | null;
+  /** What the chat said to go on with the build while it was closed: what its next start is asked. */
+  goingOn: GoingOn | null;
+  /** The words the latest start that went on with the build was asked; null while only its first start asked. */
+  wentOnWith: string | null;
+}
+
+/** The chat's words for going on with a closed build (`run_steering`, its `resume_run`), and the message they answer. */
+interface GoingOn {
+  text: string;
+  threadId: string;
+  messageId: string | null;
 }
 
 /** One record of this run, read once: the part and round it names, after restarts are folded in. */
@@ -856,7 +855,7 @@ export function buildRunGraph(events: RunGraphEvent[], key: string | null = last
 function readRecord(graph: GraphDraft, event: RunGraphEvent): boolean {
   const custom = customOf(event);
   if (!custom) return false;
-  graph.eventAt = event.graphLastAt ?? event.created_at;
+  graph.eventAt = event.created_at;
   graph.seq = event.graphSequence ?? graph.seq + 1;
   if (custom.event_type === CustomEvent.UserFeedback) {
     if (!graph.turn) readNote(graph, event, custom.payload);
@@ -897,6 +896,8 @@ function newGraphDraft(runId: string, turn: string | null): GraphDraft {
     turn,
     sentPictures: new Map(),
     answering: null,
+    goingOn: null,
+    wentOnWith: null,
     workers: newWorkerLedger(),
     leadsWorkers: false,
     jobs: new Map(),
@@ -949,6 +950,7 @@ function newRunNode(runId: string): RunNode {
     runId,
     project: null,
     goal: "",
+    title: null,
     reference: null,
     startedAt: null,
     finishedAt: null,
@@ -1062,7 +1064,6 @@ function iteration(graph: GraphDraft, facetId: string, n: number, title?: string
     judgedSeq: null,
     notes: [],
     verdict: null,
-    advice: null,
     stopCode: null,
   };
   owner.iterations.set(n, node);
@@ -1149,6 +1150,9 @@ function applyRunEvent(graph: GraphDraft, custom: { event_type: string }, entry:
     case CustomEvent.RunRegistered:
     case CustomEvent.RunStarted:
       onRunStarted(graph, entry);
+      break;
+    case CustomEvent.RunSteering:
+      onSteer(graph, entry);
       break;
     case CustomEvent.BlenderAsset:
       onBlenderAsset(graph, entry);
@@ -1278,13 +1282,13 @@ function onRunStarted(graph: GraphDraft, entry: RunEntry): void {
   const { run } = graph;
   const { payload } = entry;
   run.project = strOrNull(payload.project);
-  run.goal = str(payload.goal, "");
-  // Its first start record is the message it answers; a resume or a later steer is not.
+  // Its first start record is the message it answers; a later start, what the chat went on with it for.
   if (run.startedAt === null) run.asked = graph.answering;
+  else goOn(graph);
+  run.goal = graph.wentOnWith ?? str(payload.goal, "");
+  // A resume registers the run again, maybe without its title: the first one named stays.
+  run.title ??= cleanBuildTitle(payload.title);
   run.startedAt = entry.event.created_at;
-  // Absent budgets leave the earlier value; an ∞ build has only a safety ceiling, never a duration.
-  const loop = recordedRunLoop(payload.budgets);
-  if (loop) run.durationMs = loop.hours === null ? undefined : loop.hours * HOUR_MS;
   const reference = record(payload.reference);
   run.reference = reference ? { name: str(reference.name, "reference"), kind: strOrNull(reference.kind) } : null;
   run.referenceFrames = reference ? strings(reference.frames) : [];
@@ -1293,6 +1297,32 @@ function onRunStarted(graph: GraphDraft, entry: RunEntry): void {
   run.builderEngine = strOrNull(payload.builderEngine) ?? run.engine;
   const modeller = record(payload.blender);
   if (modeller) graph.blender = blenderNode(strOrNull(modeller.version));
+}
+
+/**
+ * A start after the build closed goes on with what the chat said meanwhile, when it said anything:
+ * those words are what this start was asked, with that message's pictures. A start with nothing
+ * said (Resume on its card) goes on with what it was last asked.
+ */
+function goOn(graph: GraphDraft): void {
+  const said = graph.goingOn;
+  if (!said) return;
+  graph.goingOn = null;
+  graph.wentOnWith = said.text;
+  const count = said.messageId ? (graph.sentPictures.get(said.messageId) ?? 0) : 0;
+  graph.run.asked = said.messageId && count > 0 ? { threadId: said.threadId, messageId: said.messageId, count } : null;
+}
+
+/**
+ * Words for the build while it is closed are what the chat goes on with it for (`resume_run`); while
+ * it works they steer its lead, and are not what it was asked.
+ */
+function onSteer(graph: GraphDraft, entry: RunEntry): void {
+  if (graph.turn || graph.run.active) return;
+  const text = str(entry.payload.text, "").trim();
+  if (!text) return;
+  const messageId = strOrNull(entry.payload.sourceMessageId);
+  graph.goingOn = { text, threadId: entry.event.thread_id, messageId };
 }
 
 function onBlenderAsset(graph: GraphDraft, entry: RunEntry): void {
@@ -1378,7 +1408,7 @@ function onDirectorWorker(graph: GraphDraft, payload: Payload): void {
 function onWorkerRecord(graph: GraphDraft, entry: RunEntry, started: boolean): void {
   const row = (workerId: string, title: string | undefined) => facet(graph, restartOf(graph, workerId).id, title).node;
   const fold = started ? onWorkerStarted : onWorkerFinished;
-  if (!fold(graph.workers, row, entry.payload, graph.seq) || !graph.turn) return;
+  if (!fold(graph.workers, row, entry.payload, { seq: graph.seq, at: graph.eventAt }) || !graph.turn) return;
   graph.run.startedAt ??= entry.event.created_at;
   if (started && !graph.run.goal) graph.run.goal = str(entry.payload.ask, "").trim();
 }
@@ -1410,7 +1440,8 @@ export function queuedAsk(events: EventEnvelope[], queue: QueueView, turn: strin
   const queued = queue.messages.get(turn);
   const said = queued?.eventId ? events.find((event) => event.id === queued.eventId) : undefined;
   const asked = said?.data.type === EventKind.Messages ? said.data.messages.find((m) => m.role === "user") : undefined;
-  return (asked?.content ?? queued?.action?.text ?? "").trim();
+  // The person's own words: never the context a send added under them (@ tags, the Design board's notes).
+  return withoutMentionContext(asked?.content ?? queued?.action?.text ?? "").trim();
 }
 
 /**
@@ -1576,26 +1607,11 @@ function onMerge(graph: GraphDraft, entry: RunEntry): void {
 
 /**
  * The lead's own passes — the fork gate, its judge, a health pass, the close. Each one is a
- * build somebody looked at, with the sentence that look produced. A critic's advice comes the
- * same way and is no verdict: it goes on the round it looked at, and nothing else reads it.
+ * build somebody looked at, with the sentence that look produced.
  */
 function onDirectorVerdict(graph: GraphDraft, entry: RunEntry): void {
-  if (entry.payload.advice === true) {
-    onAdvice(graph, entry);
-    return;
-  }
   const verdict = parseVerdict(entry.payload);
   if (verdict) graph.verdicts.push(verdict);
-}
-
-/** A critic's advice, on the round it names, else its part's latest round; dropped when its part has none. */
-function onAdvice(graph: GraphDraft, entry: RunEntry): void {
-  const advice = parseAdvice(entry.payload, entry.event.created_at);
-  const draft = entry.facetId ? graph.facets.get(entry.facetId) : undefined;
-  if (!advice || !draft) return;
-  const latest = Math.max(0, ...draft.iterations.keys());
-  const round = draft.iterations.get(entry.round ?? latest) ?? draft.iterations.get(latest);
-  if (round) round.advice = advice;
 }
 
 /**
@@ -1615,6 +1631,7 @@ function onHealth(graph: GraphDraft, payload: Payload): void {
     problems: strings(payload.problems),
     findings: Array.isArray(payload.findings) ? payload.findings.filter(isHealthFinding) : null,
     seq: graph.seq,
+    at: graph.eventAt,
   });
 }
 

@@ -75,6 +75,10 @@ export async function activate(host) {
 - `ctx` carries `project`, `directory`, `threadId`, an `AbortSignal`, a `callId` and `host`. **Do
   not store it**: concurrent calls can belong to different games and different workers, and host
   services answer only during an active invocation.
+- A tool fails by throwing. The agent reads the error's message; give the error a short `code`
+  too (`Object.assign(new Error("…"), { code: "not-connected" })`: letters, digits, `.`, `_`, `-`,
+  at most 48 characters) and Studio keeps it in the call's record as `errorCode`, so a failure
+  can be counted without its words. A code of another shape is dropped.
 - The host never retries a failed invocation. Persist a remote reference before you return, and
   reconcile an uncertain submission instead of creating it again. Cancellation stops local
   waiting; it promises nothing about remote work or refunds.
@@ -120,6 +124,7 @@ undeclared method is a compile error.
 | `events.emit` | `jobs` | Sanitized progress, attributed to the bound project/thread. `{kind:'toolbar', …}` updates a toolbar badge |
 | `observe` | `observe` | Loading/capture/audio evidence for authorized files in the bound worktree. API 3: with `still: { camera?, width, height, maxBytes? }` and `files: []`, a plain frame of the game's page on a hidden window at that size (nothing is asked of the game: `camera` may only be `default`, any other name answers `view_unknown` with `available: ["default"]`, and a `demo` is refused), as a PNG (or JPEG past `maxBytes`) with exposure numbers, or a `stillProblem` code; a picture that is still a blank or loading screen is taken again up to three times, two seconds of play apart, and the last one is answered; an older host ignores `still` and answers a plain observation (`PluginStillIgnored`), so check for each. `observe` records no clip: a call with a `clip` is refused |
 | `export.stage` | `export` | Studio writes the public export of the bound game under `storage.root/publish/<project>/dist` and returns the result |
+| `export.room` | `export` | A server-authoritative game's room module alone, staged into `storage.root/publish/<project>` with no web export, for a game whose apps go without one; returns `{genex}` as `export.stage` does |
 | `credentials.session` | `credentials`, API 3 | Reuse an explicitly unlocked host-memory lease; never opens the OS store |
 | `runtime.detect` / `runtime.installation` | `native-runtime`, API 3 | Read declared native runtime readiness and durable installation progress |
 | `runtime.install` / `runtime.cancelInstall` | `native-runtime`, API 3 | Fixed pinned installation through a real declared user action, or an agent tool of the same name with a `confirmation` card the person answers (the call answers once the download starts); cancelling is the person's action only |
@@ -128,6 +133,7 @@ undeclared method is a compile error.
 | `game.engine.steps` | `game-engine` | Show your setup card (your `steps` action's answer, read live) in the calling chat; see [Setup in the chat](#setup-in-the-chat) |
 | `game.snapshot` | `game-engine` | `{reason}` → `{snapshotId}`: a game snapshot of the bound game, listed in Rewind under `reason` (one plain line, at most 200 characters), before you change files there |
 | `game.engine.canAssist` | `game-engine` | `true` when Do it for me (`game.engine.assist`) can run for your plugin on this computer: a desktop with its driver, and apps your `engine.apps` names here. Asks nothing; offer the click path when it is `false` |
+| `game.computer.control` | `game-engine` | Computer control for the bound game's chat, `{ task }`: when it is off, Genex asks the person on its card to turn it on (then macOS's grants) and starts the chat's next turn with the task; when on, `{ started: false, reason: "already-on" }` and nothing is posted. Grants no app (each still asks on its own card); a plugin that did not come with Genex reaches it only on the person's own call |
 | `game.engine.assisting` | `game-engine` | `true` while the bound game's chat still runs the turn your Do it for me started; `false` once that turn has ended (answered, failed or taken back) or after 20 minutes. End a progress display the agent never ended with it |
 | `game.engine.runs` | `game-engine` | `{game, title, project}[]`: the games whose run (a Loop) is going now that your plugin linked to a project, with that project file; needs no bound game. Read it before you offer to quit an editor a run may be using |
 | `game.create` | `game-engine` | `{title}` → `{project, directory}`: a new Genex game (title one plain line, at most 80 characters) for an engine project made with no game open; link it with `game.engine.link {project, game}`, which accepts only a game your plugin made, from outside any game |
@@ -161,7 +167,7 @@ inline and put a long guide in a file:
   `[my-plugin/level-kit] <summary> Read it with my-plugin__skill {"name":"level-kit"} before that
   work.` Write the summary so an agent knows *when* to read the file. Studio adds the
   `my-plugin__skill` tool itself and answers it from your package, never through your backend, so
-  do not declare a tool named `skill`.
+  do not declare a tool named `skill`. Its description lists the file skills that reach the game.
 - The file and each reference are `.md` paths inside the package: no `..`, no absolute path, no
   dot file or dot folder (packing leaves those out), no link. The agent passes a reference as
   `file` exactly as you listed it; long files come back in pages it continues with `offset`.
@@ -175,8 +181,12 @@ inline and put a long guide in a file:
   (never started for another game); a tool that makes a project of your kind says
   `"makes": ["toy-project"]`: it is refused while a run of the game is going, Genex snapshots the
   game before it runs, records the web game it replaced as the game's `portedFrom`, and tells the
-  session to end its reply, which then goes on with your tools. A game with no kind yet is served as
-  a web game (`web-game`); a folder of a kind Genex can't name is served by no fact. The
+  session to end its reply, which then goes on with your tools. A tool that links the game to a
+  project file also says `"links": "project"` (its string parameter for the file): during a run
+  it may still link the game's own project, one in the game's folder that already gives your fact. A game with no kind yet is served as
+  a web game (`web-game`); a folder of a kind Genex can't name is served by no fact. So a tool that
+  makes a project of your kind names `"facts": ["web-game"]`: a game with no kind yet and a web game
+  get it, a game of another kind never does; scope your other tools to your own fact. The
   older `"engines": ["web"]` / `["unreal"]` still works and reads as `web-game` / `unreal-project`;
   anything that names neither reaches every game.
 - The trust dialog lists your skills, and an update marks each new or changed one and names each
@@ -235,12 +245,15 @@ your harness tools answering `{ "personActive": false, "unsaved": 0 }`: while th
 editor, the agents' work in it waits. Hooks run your harness tools at Genex's moments, such as
 `"hooks": [{ "on": "checkpoint.before", "tool": "save-scenes" }]`; your handler reads
 `context.hook` (`{ on, runId?, worker?, … }`, absent when called directly) and answers `{ block?,
-note?, pending?, images? }`. A handler that throws blocks a moment that can be blocked, so answer
-`note` for trouble that should not stop the work. It never changes another call's arguments, and
+note?, pending?, images? }`. Only `restore.before`, `tool.before` and `finish` can be blocked (a
+handler that throws there blocks too); anywhere else a block or a throw is a note the lead reads,
+and nothing stops a Loop. It never changes another call's arguments, and
 git stays Genex's. A quick `checkpoint.before` save may add `"messages": true` to run before each
 chat message's checkpoint too, so a Rewind brings back what it saved ([Before each chat
 message](plugins.md#before-each-chat-message)). An agent tool that `makes` a kind
-may name a harness tool in `ready` that answers `{ ready, note }`. See
+may name a harness tool in `ready` that answers `{ ready, note }`. A tool whose job runs on after it
+answers `{ started: true }` (a build, a package) names its status tool in `jobStatus`, an agent tool
+answering `{ jobRunning, … }`: Genex reads it and wakes the chat once the job has ended. See
 [Hooks](plugins.md#hooks-genexs-moments) and [Locks](plugins.md#locks-the-person-comes-first).
 
 A plugin whose tools make more than one kind of project names each with a label:
@@ -269,8 +282,9 @@ nothing was captured. See [Observers](plugins.md#observers).
 
 Together these give your kind of project a Loop with no code in Genex. While your plugin is on, a
 Loop on a folder your `detect` recognises is led in place by the chat's own session: your hooks run
-at its start, its save points, rewinds, restarts, health checks and its end, its lead starts your
-worker types, and your observers feed the reviewer who checks its finish. The toy engine plugin in
+at its start, its save points, rewinds, restarts, health checks and its end and tell its lead what
+they found; its lead opens and builds your app with your agent tools and starts your worker types,
+and your observers feed the reviewer who checks its finish. The toy engine plugin in
 Genex's tests (`tests/fixtures/toy-engine-plugin/`) runs such a Loop, and so does a copy of it with
 every tool renamed. See [the open Loop](harness-runtime.md).
 
@@ -323,7 +337,7 @@ A panel is served into an opaque-origin sandboxed frame with
   (`inlinePanelFonts` in the same script pastes Genex's own type in at `<!-- STUDIO_PANEL_FONTS -->`), and
   `project.read` is utf8-only, so a panel cannot display a PNG read from the game folder.
 - The whole bridge is `window.studioPlugin`: `call(method, name?, args?)` with
-  `call('context')` → `{project, apiVersion, theme, surface, locale}` (`theme` carries `background`, `foreground`,
+  `call('context')` → `{project, title, apiVersion, theme, surface, locale}` (`title` is the game's name as Genex shows it, or `null`; `theme` carries `background`, `foreground`,
   `accent` and the readable button colours `accentFill`, `accentForeground`, `accentHover`),
   `call('settings')` → your standard settings
   and `call('action', name, args)` → a declared action, plus
@@ -336,7 +350,9 @@ A panel is served into an opaque-origin sandboxed frame with
   title, its first `p` the line under it) and each page's Back `data-panel-back`. On a card the SDK
   hides both (the dialog draws them, and its arrow presses your Back), marks the document
   `data-surface="card"` so you can drop your own padding, and sizes the frame to your content, so
-  the dialog scrolls once. A page without a marked heading keeps the manifest's panel title.
+  the dialog scrolls once. A page without a marked heading keeps the manifest's panel title. A
+  panel that is one short list declares `"width": "narrow"` in its `panels[]` entry, and the dialog
+  is Genex's narrow one (480px).
 - A panel speaks Genex's language (`context.locale`: `en`, `ru`, `es`, `pt-BR`, `de`, `fr`, `ja`,
   `ko`, `zh-Hans`). Write each word once, in English, as `studioPlugin.t("Set up {name}", { name })`
   in the ICU message syntax the app uses (`{count, plural, one {# file} other {# files}}`,
@@ -380,6 +396,7 @@ Two different things, both asked by the host and never by the plugin or the agen
   offers **Allow in this chat**, covering that tool for the rest of the chat.
 - **`tools[].timeoutMs`** (API 3) — whole milliseconds, 1,000 to 540,000: how long one call may
   run when that is longer than the host's 190-second ceiling, such as an engine's import or export.
+  A card the host shows inside the call (`export.stage`'s file list) does not count against it.
 - **`actions[].confirmation`** — a user-invoked action behind a Studio-owned review and a native
   dialog. Your optional `review` returns `{message, detail, images:[{label, dataUrl}]}`: `message`
   (at most 2,000 characters) is the dialog's question instead of the manifest's `confirmation`, and

@@ -3,8 +3,8 @@
  * offers and the Allow / Deny questions it asks, answered in the chat instead of a terminal. Every
  * engine's chat session follows the chat's mode as far as it can (`permissionModesFor`).
  *
- * Whoever answers the person in a game chat asks: the chat's own session, and a build's lead or the
- * run's coordinator on Claude Code while it answers a message the person sent. Workers of the
+ * Whoever answers the person in a game chat asks: the chat's own session, and a build's lead on
+ * Claude Code while it answers a message the person sent. Workers of the
  * chat's lead follow the chat's mode: Bypass in a box that writes the home folder too, Auto, Accept
  * edits and Manual in a box that writes only their folders, Plan read-only; their questions wait in the chat, naming the
  * worker, until the person answers, and "always" counts for the whole chat. A Codex worker cannot
@@ -78,20 +78,22 @@ interface EnginePermissions {
 }
 
 /**
- * Each engine's row. Claude Code asks mid-turn in every mode. Bonsai's tools run in the studio,
+ * Each engine's row. Claude Code asks mid-turn in every mode, and so does Genex, which runs it. Bonsai's tools run in the studio,
  * which asks before each edit or command; its commands always run in the studio's sandbox, so it
  * has no Bypass. Codex has no Manual or Accept edits: Auto keeps its sandbox (on its app server, what
  * the sandbox would not run is asked about and settled by the Auto check), Plan only reads, Bypass
  * drops its sandbox. OpenRouter's and a local server's tools run in the studio's own session
  * loop, as Bonsai's do.
  * OpenCode (`opencode run`), Pi (`pi --mode json`), Grok Build (`grok -p`) and Cursor
- * (`cursor-agent --print`) cannot ask mid-turn: Auto runs them in the studio's sandbox, Plan reads
- * only, and Grok Build's Bypass runs it as the person outside that sandbox, as Codex's does. Any
- * other engine (Ollama, whose tools run in the harness, or one added later) keeps its own sandboxed
- * contract, which is Auto.
+ * (`cursor-agent --print`) cannot ask mid-turn, and Antigravity (`agy acp`) asks before every tool
+ * whatever its mode: Auto runs them in the studio's sandbox, Plan reads only, and Grok Build's and
+ * Antigravity's Bypass run it as the person outside that sandbox, as Codex's does. Any other engine
+ * (Ollama, whose tools run in the harness, or one added later) keeps its own sandboxed contract,
+ * which is Auto.
  */
 const ENGINE_PERMISSIONS: Readonly<Record<string, EnginePermissions>> = {
   [EngineId.ClaudeCode]: { modes: PERMISSION_MODES, withheld: UnavailableModeReason.CannotAsk, plansMidTurn: true },
+  [EngineId.Genex]: { modes: PERMISSION_MODES, withheld: UnavailableModeReason.CannotAsk, plansMidTurn: true },
   [EngineId.Bonsai]: {
     modes: [PermissionMode.Auto, PermissionMode.Manual, PermissionMode.AcceptEdits, PermissionMode.Plan],
     withheld: UnavailableModeReason.AlwaysSandboxed,
@@ -122,6 +124,10 @@ const ENGINE_PERMISSIONS: Readonly<Record<string, EnginePermissions>> = {
   },
   [EngineId.Cursor]: {
     modes: [PermissionMode.Auto, PermissionMode.Plan],
+    withheld: UnavailableModeReason.CannotAsk,
+  },
+  [EngineId.Antigravity]: {
+    modes: [PermissionMode.Auto, PermissionMode.Plan, PermissionMode.Bypass],
     withheld: UnavailableModeReason.CannotAsk,
   },
 };
@@ -174,15 +180,6 @@ export function isPermissionMode(value: unknown): value is PermissionMode {
 export function isSteadyPermissionMode(value: unknown): value is SteadyPermissionMode {
   return isPermissionMode(value) && STEADY_PERMISSION_MODES.has(value);
 }
-
-/** Claude Code's mode names in English, as a session reads them in a notice. */
-export const PERMISSION_MODE_NAMES: Record<PermissionMode, string> = {
-  [PermissionMode.Auto]: "Auto",
-  [PermissionMode.Manual]: "Manual",
-  [PermissionMode.AcceptEdits]: "Accept edits",
-  [PermissionMode.Plan]: "Plan",
-  [PermissionMode.Bypass]: "Bypass permissions",
-};
 
 /**
  * The menu's words: Claude Code's mode names, each described in one line of the menu, in the

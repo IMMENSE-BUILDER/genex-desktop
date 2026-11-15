@@ -3,11 +3,11 @@
  * turn, stopping and rewinding. Every value is one of the app's own vocabularies, a switch, a count
  * or a duration: never the words, a name, a path or an id (they are paired in `chat-memory.ts`).
  */
-import type { PlanReviewState, SendFailure, SendRefusal } from "../../../shared/composer.ts";
+import type { PlanReviewState, SendFailure } from "../../../shared/composer.ts";
 import type { ChatActivityPhase } from "../../../shared/chat-activity.ts";
 import type { FilesStay } from "../../../shared/chat-rewind.ts";
 import type { EngineKind } from "../../../shared/engine-descriptor.ts";
-import type { EngineFailureKind, LimitKind } from "../../../shared/engine-requests.ts";
+import type { EngineFailureKind, LimitKind, TurnErrorName, TurnFailureCode } from "../../../shared/engine-requests.ts";
 import type { ToolCategory } from "../../../shared/eval-lane.ts";
 import type { SteerDelivery } from "../../../shared/message-queue.ts";
 import type { ReasoningEffort } from "../../../shared/model-preferences.ts";
@@ -20,6 +20,7 @@ import type {
 import type { MentionKind, MentionOrigin } from "../../../shared/prompt-mention.ts";
 import type { ConsentChoice } from "../../chat/consent-card.ts";
 import type { SendPlacement } from "../../chat/pending-sends.ts";
+import type { GenexNeed } from "../../genex-build.ts";
 import type { CommandState } from "../../state/command-runs.ts";
 import { type ChatMemory, chatMemory } from "../chat-memory.ts";
 import type { SendEvent } from "../chat-observe.ts";
@@ -30,9 +31,8 @@ import type {
   ComposerRoom,
   CompactTrigger,
   ContextBucket,
-  HoursBucket,
+  ContextRaiseOutcome,
   LeftTo,
-  LoopVia,
   ModelMenuFrom,
   ModelReplaced,
   ModelSetting,
@@ -48,6 +48,7 @@ import type {
   SendFailStage,
   SendRoute,
   SendSource,
+  GenexNoticeStep,
   SignInAction,
   SignInFrom,
   StopEndedBy,
@@ -92,9 +93,12 @@ export const ChatEvent = {
   ModelPicked: "model_picked",
   ModelSettingsChanged: "model_settings_changed",
   ModelPickReplaced: "model_pick_replaced",
-  LoopModeChanged: "loop_mode_changed",
+  ModelListReread: "model_list_reread",
+  ContextRaiseFinished: "context_raise_finished",
   ChatSignInNeeded: "chat_sign_in_needed",
   SignInCardAction: "sign_in_card_action",
+  GenexNoticeShown: "genex_notice_shown",
+  GenexNoticeAction: "genex_notice_action",
   EngineFellBack: "engine_fell_back",
   ChatContextCompacted: "chat_context_compacted",
   ChatOpened: "chat_opened",
@@ -122,8 +126,6 @@ export type MessageSentProperties = {
   engine_kind?: EngineKind;
   model: ModelRef;
   effort?: ReasoningEffort;
-  loop_on: boolean;
-  loop_hours_bucket: HoursBucket;
   plan_review: boolean;
   pictures: number;
   files: number;
@@ -155,19 +157,26 @@ export type ChatTurnEndedProperties = {
   stream_failed: boolean;
   /** How its engine failed: a direct engine's call, or main's word on a delegated one. */
   failure_kind?: EngineFailureKind;
+  /**
+   * Why a turn the harness ran threw (`turn_ended`'s `harnessFailure`): its code, the host call
+   * that failed and the error's type. A direct engine's turn that died before its model was asked
+   * has no `failure_kind`, only these.
+   */
+  failure_code?: TurnFailureCode;
+  failure_method?: string;
+  error_name?: TurnErrorName;
   /** The provider's limit it ended on, and how long the provider said to wait. */
   limit_kind?: LimitKind;
   retry_after_bucket?: RetryAfterBucket;
   launched_build: boolean;
+  /** The turn ran on an Ollama copy raised to 16K (`ollama-context.ts`); absent otherwise. */
+  raised_context?: true;
 };
 
-/**
- * A message that did not go: its send rejected (`rejected`, with the send's facts) or its chat
- * refusing what it commissions (`refused`, heard from main), with the code of either.
- */
+/** A message that did not go: its send rejected (`rejected`, with the send's facts and its code). */
 export type MessageSendFailedProperties = {
   stage: SendFailStage;
-  code: SendFailure | SendRefusal | null;
+  code: SendFailure | null;
   route?: SendRoute;
   ack_ms?: number;
   pictures?: number;
@@ -180,6 +189,8 @@ export type ChatEventProperties = {
     reason: SendBlock;
     room: ComposerRoom;
     engine: EngineRef;
+    /** What a Genex model still needs (a sign-in, a plan, credits…); null for any other model. */
+    genex_need: GenexNeed | null;
     /** Presses on a dead Send since the last message that went. */
     attempts_in_row: number;
   };
@@ -288,10 +299,18 @@ export type ChatEventProperties = {
     after_failure: boolean;
   };
   [ChatEvent.ModelSettingsChanged]: { setting: ModelSetting; effort?: string };
-  [ChatEvent.ModelPickReplaced]: { engine: EngineRef; reason: ModelReplaced };
-  [ChatEvent.LoopModeChanged]: { on: boolean; hours_bucket: HoursBucket; via: LoopVia };
+  /** `listed_again`: a second listing of the provider's models left the pick out too. */
+  [ChatEvent.ModelPickReplaced]: { engine: EngineRef; reason: ModelReplaced; listed_again: boolean };
+  /** A provider's list left out a chat's saved pick, so its models are listed again before the pick counts as gone. */
+  [ChatEvent.ModelListReread]: { engine: EngineRef };
+  /** A Raise context to 16K press under an Ollama turn its context refused: whether the copy was made, and how long it took. */
+  [ChatEvent.ContextRaiseFinished]: { outcome: ContextRaiseOutcome; duration_ms: number };
   [ChatEvent.ChatSignInNeeded]: { engine: EngineRef; from: SignInFrom };
   [ChatEvent.SignInCardAction]: { action: SignInAction; engine: EngineRef };
+  /** The blue Genex notice came up: what Genex needs, the engine it offered instead (null: none) and how many plans are connected. */
+  [ChatEvent.GenexNoticeShown]: { need: GenexNeed; offered: EngineRef | null; plans_ready: number };
+  /** The person pressed one of the notice's ways; `engine` is the model's engine for `use`. */
+  [ChatEvent.GenexNoticeAction]: { need: GenexNeed; step: GenexNoticeStep; engine: EngineRef | null };
   [ChatEvent.EngineFellBack]: { from: EngineRef; to: EngineRef; kind?: EngineFailureKind };
   [ChatEvent.ChatContextCompacted]: {
     trigger: CompactTrigger;

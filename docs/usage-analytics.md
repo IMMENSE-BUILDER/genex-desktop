@@ -60,9 +60,16 @@ stops recording, opts out and resets the id.
 - **Failure codes**: a failure is told by a typed code, never its words. Main throws a refusal it
   names as a `CodedError` (`shared/errors.ts`); `main/ipc-handle.ts` sends its code beside the words
   (`IpcResult.code`), the preload rejects with it again, and the renderer reads it with `errorCode`
-  (`errorCodeIn` for one vocabulary). Only values of the vocabularies in `shared/error-codes.ts`
-  cross, each unique across them, so `error_toast_shown` (from `notify`'s code) says which failure
-  it was; a Node `ENOENT`, words or a path read as none. Other failures ride their own records:
+  (`errorCodeIn` for one vocabulary). Electron's context bridge passes an `Error` into the page as
+  its message alone, so the preload's calls reject with a plain record instead, and a wrapper run in
+  the page (`preload/main-world.ts`) throws it again as an `Error` with its `code` and `channel`.
+  Only values of the vocabularies in `shared/error-codes.ts` cross, each unique across them, so
+  `error_toast_shown` (from `notify`'s code, and `channel` for the call that failed) says which
+  failure it was; a Node `ENOENT`, words or a path read as none. A direct engine's chat turn that
+  threw (Ollama, a local server) ends with `turn.end`'s `failure`: a `TurnFailureCode`, the host
+  call that failed and the error's type (`loop/turn-record.ts`). Main re-checks it into the turn's
+  `harnessFailure`, and `chat_turn_ended` says it as `failure_code`, `failure_method` and
+  `error_name`. Other failures ride their own records:
   the sign-in states' `problem` (`ClaudeLoginProblem`, `CodexLoginProblem`), OpenRouter's
   `OpenRouterSignInProblem`, a model install job's `problem` and `failedPhase`, `EngineStatus.reason`,
   `chat.error`'s `failure` or `refusal`, `PlanReview.failure`, `compaction_failed`'s `failure`, and
@@ -78,11 +85,23 @@ stops recording, opts out and resets the id.
   `plugin_action_finished` and the sidebar's update toasts, while `plugin_updates_run` counts
   `failed` and `declined` apart and `plugin_failed` says how a running plugin failed
   (`PluginChange.failure`, a `PluginFailure`).
+  A game's asset inventory that could not be read crosses with the file system's why
+  (`AssetInventoryFailure`: a held file, access refused, a missing file, too many open files);
+  `assets_inventory_failed` says it as `code`, at the 1st, 2nd, 4th… failure in a row of its
+  ten-second poll and at once when the why changes. One file Unity or a scanner holds open is left
+  out of the read instead of failing it.
   Live's status (`previewLive`) names why its page did not load (`loadFailure`, a
   `LiveLoadFailure`: Chromium's error by kind, a page still loading after a minute, or the game's own
   build that failed or fell back to the last one that worked) and why its renderer went away
   (`gone`); a load Electron refused
   crosses IPC with its kind, and `live_game_shown` says both as `load_failure` and `crash_reason`.
+  It also says when a probe first saw this game's page (`page_seen_ms`), what the last one saw
+  (`wait_saw`) and whether main had answered the load (`main_answered`). A wait that ran out
+  without ever seeing the page ends `no_page`, not `timed_out`.
+  A Codex sign-in's `provider_sign_in_finished` says whether the CLI printed a sign-in link, its
+  window was shown and how many lines it printed (`link_seen`, `card_shown`, `output_lines`). Main's
+  log gets each sign-in step with the same counts, and a send that failed with its code, plus the
+  agents' own code when they never started.
   The harness writes `refusal` (`RunStartRefusal`) beside `run_start_blocked`'s words for
   `run_start_refused`, and a refused Resume throws a `ResumeRefusal`.
 - **Main's own facts**: a launch that may send keeps a small marker of its session in the data
@@ -93,10 +112,23 @@ stops recording, opts out and resets the id.
   start facts (`StartPassage`, and `BootState.failureCode`, a `BootFailure` or the sandbox's code).
   Main's own uncaught errors and a window's hangs arrive as `app.diagnostic` (`app_error_caught`
   with process `main`, `window_unresponsive`), background update failures as `update.failed`
-  (`update_background_failed`), agents that would not start as `harness.start-failed`'s
-  `failureCode` (`agents_start_failed`), and Relaunch to update answers a `RestartAnswer`.
+  (`update_background_failed`: the stage, what the feed answered Genex's own request, Chromium's
+  network error code, whether Squirrel's Update.exe is there and whether a download was offered), agents that would not start as `harness.start-failed`'s
+  `failureCode` (`agents_start_failed`: a `BootFailure`, the sandbox's setup problem, or a
+  `SandboxLaunchCode` such as Windows' reserved proxy ports), a folder Windows refused the sandbox's
+  write grant on as `sandbox.folder-left-out` (`sandbox_folder_left_out`: a `SandboxFolderKind` and
+  whether it is on another drive than the profile, never its path), and Relaunch to update answers a `RestartAnswer`.
 - **The welcome** keeps the step an unfinished welcome stood on (`studio.analytics.welcomeScreen`),
-  so the next launch's `welcome_shown` says it resumed and where.
+  so the next launch's `welcome_shown` says it resumed and where. A CLI install whose installer
+  download failed says what answered it (`cli_install_finished`'s `http_status`, or Chromium's
+  `net_error`), so a vendor refusing a region (403) reads apart from a machine that is offline.
+- **Long tasks**: `ui_stall_summarized` sums each five minutes of the window's long tasks per
+  screen, with `chat_log_events`, the size of the open chat's log then, so a stall that grows
+  with a long Loop reads apart from one that does not.
+- **A dead Send** counts presses in a row (`message_send_blocked`'s `attempts_in_row`) until a
+  message actually goes: a send refused for its model is noted first and still counts as dead.
+  The composer holds a send whose model cannot take it (`model_unavailable`) and lights the model
+  button with why; a menu opened while it is lit closes as `model_menu_closed` from `send_held`.
 - **Every event** carries app version, platform, language, a per-launch id, first launch, the
   ready engines and whether a Genex account is signed in. There is no `identify()`: the id is
   random and kept in the renderer's storage.

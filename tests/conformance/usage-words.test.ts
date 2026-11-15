@@ -8,9 +8,9 @@ import {
   pendingPlans,
   planWords,
   resetWords,
-  shownLimits,
+  shownPlans,
 } from "../../src/renderer/ui/usage-words.ts";
-import { normalizeClaudeUsage } from "../../src/shared/provider-usage.ts";
+import { type ProviderUsageReport, UsageState } from "../../src/shared/provider-usage.ts";
 
 const context = (over: Partial<ContextUsage>): ContextUsage => ({ ...over }) as ContextUsage;
 
@@ -109,6 +109,17 @@ describe("a plan's limits", () => {
     assert.equal(planWords("other", "team-pro"), "other Team pro plan");
   });
 
+  it("names Genex's plan by the name genex.games gives it", () => {
+    assert.equal(planWords("genex", "Genex Pro"), "Genex Pro");
+    assert.equal(planWords("genex"), "Genex");
+  });
+
+  it("says a reset more than a week off by its date: a month's credits renew on a day, not a weekday", () => {
+    const now = Date.parse("2026-10-28T10:00:00Z");
+    assert.equal(resetWords("2026-11-12T12:00:00Z", now), "Resets Nov 12");
+    assert.match(resetWords("2026-11-03T12:00:00Z", now) ?? "", /^Resets Tue /, "a week's reset keeps its weekday");
+  });
+
   it("counts down to a reset within a day", () => {
     const now = Date.parse("2026-09-24T10:00:00Z");
     assert.equal(resetWords("2026-09-24T12:30:00Z", now), "Resets in 2 h 30 m");
@@ -119,22 +130,6 @@ describe("a plan's limits", () => {
 
   it("marks a limit high from three quarters and full from nine tenths", () => {
     assert.deepEqual([null, 10, 75, 89, 90].map(limitLevel), [undefined, undefined, "high", "high", "full"]);
-  });
-
-  it("leaves model-scoped weekly limits off the panel and keeps the plan's own", () => {
-    const usage = normalizeClaudeUsage({
-      rate_limits_available: true,
-      rate_limits: {
-        five_hour: { utilization: 12 },
-        seven_day: { utilization: 40 },
-        seven_day_sonnet: { utilization: 20 },
-        model_scoped: [{ display_name: "Fable", utilization: 0 }],
-      },
-    });
-    assert.deepEqual(
-      shownLimits(usage?.windows ?? []).map((window) => window.label),
-      ["5-hour limit", "Weekly · all models", "Weekly · Sonnet"],
-    );
   });
 });
 
@@ -147,5 +142,34 @@ describe("plans drawn while usage is read", () => {
     assert.deepEqual(pendingPlans({ codex: ["planner"], "claude-code": [] }), ["codex"]);
     assert.deepEqual(pendingPlans({ opencode: ["planner"] }), [null], "a provider without plan limits draws no plan");
     assert.deepEqual(pendingPlans({}), [null]);
+  });
+});
+
+describe("the plans the panel shows", () => {
+  const credits = {
+    measuredAt: "2026-10-28T10:00:00Z",
+    plan: "Genex Pro",
+    windows: [{ id: "credits", label: "Monthly credits", percent: 40 }],
+  };
+  const genex = (state: UsageState, usage: ProviderUsageReport["usage"]): ProviderUsageReport => ({
+    engine: "genex",
+    state,
+    account: null,
+    usage,
+  });
+
+  it("shows Genex only with a Pro member's monthly credits, and never a sign-in to redo there", () => {
+    const claude: ProviderUsageReport = {
+      engine: "claude-code",
+      state: UsageState.SignedOut,
+      account: "studio",
+      usage: null,
+    };
+    assert.deepEqual(
+      shownPlans([claude, genex(UsageState.Ready, credits)]).map((report) => report.engine),
+      ["claude-code", "genex"],
+    );
+    for (const state of Object.values(UsageState)) assert.deepEqual(shownPlans([genex(state, null)]), [], state);
+    assert.equal(shownPlans([genex(UsageState.Failed, credits)]).length, 1, "a failed re-read keeps the last numbers");
   });
 });

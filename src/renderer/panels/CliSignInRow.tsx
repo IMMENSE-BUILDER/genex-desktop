@@ -46,6 +46,8 @@ const TerminalView = lazy(() => import("./TerminalView.tsx"));
 /** What a CLI's row can do: install, recheck, sign in or stop signing in, sign out (Cursor), update. */
 type CliRowActions = {
   install: () => void;
+  /** Open the CLI's install guide, or null where Genex installs it itself (`useCliInstall`'s `inApp`). */
+  openGuide: (() => void) | null;
   recheck: () => void;
   signIn: () => void;
   cancelSignIn: () => void;
@@ -144,6 +146,25 @@ const PI_ROW: CliRowWords = {
   again: { title: WORDS.pi.addProvider, line: WORDS.pi.addProviderLine },
 };
 
+/** Antigravity's row, in the person's language (the renderer loads it before this module). */
+const ANTIGRAVITY_WORDS = {
+  name: "Antigravity",
+  guide: "https://antigravity.google/docs/cli",
+  install: t("Install Antigravity"),
+  installLine: t("Install Antigravity's CLI to build with your Google AI plan."),
+  installingLine: t("Installing Antigravity. This can take a minute."),
+  signIn: t("Sign in"),
+  signInLine: t("Sign in with your Google account to build with your plan."),
+  signingIn: t("Open the sign-in page, then paste the code it gives you here. Antigravity keeps the sign-in."),
+  cancelSignIn: t("Cancel"),
+  openSignInPage: t("Open sign-in page"),
+  signInAgain: t("Sign in again…"),
+  signInAgainLine: t("Switch to another Google account"),
+  update: t("Update Antigravity"),
+  connectedLine: t("Uses your Google AI plan"),
+  unreachable: t("Antigravity didn't answer. Check the installation, then try again."),
+} as const;
+
 const OPEN_CODE_ROW: CliRowWords = {
   ...WORDS.openCode,
   card: { name: WORDS.openCode.name, plans: "", guide: WORDS.openCode.guide },
@@ -164,6 +185,36 @@ const CURSOR_ROW: CliRowWords = {
   signOut: { title: CURSOR_WORDS.signOut, line: CURSOR_WORDS.signOutLine },
 };
 
+const ANTIGRAVITY_ROW: CliRowWords = {
+  ...ANTIGRAVITY_WORDS,
+  card: { name: ANTIGRAVITY_WORDS.name, plans: "", guide: ANTIGRAVITY_WORDS.guide },
+  again: { title: ANTIGRAVITY_WORDS.signInAgain, line: ANTIGRAVITY_WORDS.signInAgainLine },
+};
+
+/** Not installed: Install, or where Genex can't install it, the CLI's install guide; and Check again. */
+function notInstalledView(act: CliRowActions, words: CliRowWords): RowView {
+  const { openGuide } = act;
+  return {
+    tone: RowTone.Off,
+    status: WORDS.notInstalled,
+    line: openGuide ? WORDS.installByGuideLine(words.card.name) : words.installLine,
+    actions: (
+      <>
+        {openGuide ? (
+          <Button variant="default" onClick={openGuide}>
+            {WORDS.installGuide}
+          </Button>
+        ) : (
+          <Button variant="default" onClick={act.install}>
+            {words.install}
+          </Button>
+        )}
+        <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
+      </>
+    ),
+  };
+}
+
 /** The row by its state: installing, missing, signing in, free models only, connected, outdated or unreachable. */
 function cliRowView(state: OpenCodeRowState, act: CliRowActions, words: CliRowWords): RowView {
   switch (state) {
@@ -175,19 +226,7 @@ function cliRowView(state: OpenCodeRowState, act: CliRowActions, words: CliRowWo
         actions: null,
       };
     case OpenCodeRowState.NotInstalled:
-      return {
-        tone: RowTone.Off,
-        status: WORDS.notInstalled,
-        line: words.installLine,
-        actions: (
-          <>
-            <Button variant="default" onClick={act.install}>
-              {words.install}
-            </Button>
-            <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
-          </>
-        ),
-      };
+      return notInstalledView(act, words);
     case OpenCodeRowState.SigningIn:
       return signingInView(act, words);
     case OpenCodeRowState.SignedOut:
@@ -336,6 +375,7 @@ const CLI_WORDS: Record<CliProvider, CliRowWords> = {
   [EngineId.Pi]: PI_ROW,
   [EngineId.Grok]: GROK_ROW,
   [EngineId.Cursor]: CURSOR_ROW,
+  [EngineId.Antigravity]: ANTIGRAVITY_ROW,
 };
 
 /** The row of one CLI that signs in in its own terminal. */
@@ -383,6 +423,12 @@ export default function CliSignInRow({
         if (words.guideOnly) void window.studio.openUrl(words.card.guide);
         else void install.install();
       },
+      openGuide: install.inApp
+        ? null
+        : () => {
+            press(ProviderAction.InstallGuide);
+            void run(() => window.studio.openUrl(words.card.guide));
+          },
       recheck: () => {
         press(cliRecheckAction(state));
         void run(recheck);

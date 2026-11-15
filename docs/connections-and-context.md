@@ -40,9 +40,9 @@ or a sidebar game returns without a reload. Skills has these sections, in order
   `studio:plugins.skill`; a plugin’s page shows what its last update added, changed or removed.
 
 A plugin’s switch, here and in the composer’s Add menu (hint “All games”), turns it on or off for
-every game. When a plugin or skill a resumed builder session was given has been withdrawn since,
-that session’s next brief opens with a notice to ignore its earlier instructions and not to call
-its tools. Discovery does not execute skills, import hooks/MCP servers or prove use in a
+every game. A session's plugins are its tool list on each launch and its system text as it started:
+a resumed Claude Code or Codex session keeps the plugin guidance it started with, and no notice
+says one was turned on or off since it last ran. Discovery does not execute skills, import hooks/MCP servers or prove use in a
 conversation. Refresh skills rechecks the inventory; errors are distinct from an empty list.
 Studio archives remain excluded; Claude shared-skill links are confined to known skill roots.
 
@@ -88,8 +88,11 @@ except in first launch: discovery starts the CLI, so a signed-in subscription wh
 loaded is not shown connected there but offers a check again, which retries discovery too.
 
 Aliases retain their request IDs and show reported canonical targets. Explicit model IDs and saved
-cross-provider roles are never silently replaced. New unset roles and effort defer to CLI defaults
-under Genex's launch policy. Settings can update the selected CLI; provider operations and updates
+cross-provider roles are never silently replaced. New unset roles defer to CLI defaults under
+Genex's launch policy. An unset effort is the default the provider reports for the model, sent with
+the turn; where none is reported, no effort is sent and the CLI's own applies. Claude Code reports
+one for the model its default resolves to: discovery's idle session asks `get_settings` what it
+applies, and a running session, which applies its send's effort, is never asked. Settings can update the selected CLI; provider operations and updates
 are mutually exclusive. The app never silently installs a different executable or auto-updates.
 A sign-in event names its own provider; its adjacent harness reply replaces duplicate narration.
 
@@ -116,12 +119,17 @@ Install (Update for a CLI too old) in Settings → Model Providers and the chat'
 Set up in first launch, installs Claude Code or Codex with its vendor's own installer, in the background:
 `install.sh` on macOS and Linux, `install.ps1` on Windows, from `claude.ai` and
 `chatgpt.com/codex`. Settings installs OpenCode the same way from `opencode.ai/install` (macOS and
-Linux only; it publishes no Windows script) into `~/.opencode/bin`, and updates it with
-`opencode upgrade`; Grok Build from `x.ai/cli/install.sh` (`install.ps1` on Windows) into
+Linux only) into `~/.opencode/bin`, and updates it with `opencode upgrade`. OpenCode publishes no
+Windows script (it installs there with Chocolatey, Scoop or npm), so on Windows its row and its
+first-launch screen offer its install guide and Check again instead of Install
+(`installsInApp` in [cli-install.ts](../src/shared/cli-install.ts)), and an install asked for anyway
+fails as `unsupported`, never as a download; Grok Build from `x.ai/cli/install.sh` (`install.ps1` on Windows) into
 `~/.grok/bin`, updated with `grok update`; and Cursor from `cursor.com/install` (`?win32=true` on
 Windows) into `~/.local/bin` (`%LOCALAPPDATA%\cursor-agent` on Windows), updated with
 `cursor-agent update`. Cursor's installer also links `~/.local/bin/agent`, a name Grok Build's
-installer uses too, so discovery looks only for `cursor-agent`. Main fetches the script over HTTPS
+installer uses too, so discovery looks only for `cursor-agent`. Antigravity's CLI (`agy`) comes from
+`antigravity.google/cli/install.sh` (`install.ps1` on Windows) into `~/.local/bin`, updated with
+`agy update`. Main fetches the script over HTTPS
 itself, with a program's user agent (cursor.com answers a browser's with its web page), runs it as the person with the
 contractor environment (no keys, none of the other vendor's variables; Codex with
 `CODEX_NON_INTERACTIVE=1` so it asks nothing), keeps only its last output for `studio.log` and
@@ -131,7 +139,9 @@ installer that exits cleanly without a working CLI counts as failed. There is on
 second press joins it and every button follows it (`cli.install`). The page names only which CLI;
 `studio:cli-install.start` is native, so fixture profiles refuse it. Like the person's own terminal,
 the installer runs outside `ProcessSandbox` ([cli-installer.ts](../src/substrate/cli-installer.ts)).
-A failure says why; Settings then adds the vendor's install guide.
+A failure says why; Settings then adds the vendor's install guide. Sign in with no CLI installed
+(`requireCodingCli` throws `CodingCliUnavailable` in state `missing`) fails as `missing_cli`, and
+`studio:subscription.signin` answers `missingCli`, so the card offers this Install, not a retry.
 
 ## OpenRouter and OpenCode
 
@@ -157,7 +167,8 @@ pick seeds the first game's chat (`rememberWelcomeModel`). A locked store saves 
 the key; only tool-calling models are listed, with their context, reply cap, vision, reasoning
 efforts and price. OpenRouter picks no default model. Context is estimated from characters before
 each request (compaction runs early rather than late); 401/403 is a sign-in failure, 402 a usage
-limit, 429 a rate limit. Errors are redacted before they are logged.
+limit (when it says the balance can only afford a shorter reply of at least 1,024 tokens, the
+request is sent once more asking for 90% of that), 429 a rate limit. Errors are redacted before they are logged.
 
 **OpenCode** ([opencode.ts](../src/substrate/engines/opencode.ts)) is a delegated engine that runs
 `opencode run --format json` with the brief on stdin, resumed by `--session`. Two command lines are
@@ -353,6 +364,113 @@ else ends the build with the CLI's words, its session kept. A turn that prints n
 stopped and kept; either way its process group goes with it. Compact now is refused: Cursor compacts
 its own sessions. Tests: `engine-cursor.test.ts` on `tests/fixtures/transcripts/cursor-*`.
 
+## Antigravity
+
+**Antigravity** ([antigravity.ts](../src/substrate/engines/antigravity.ts)) is a delegated engine
+that runs Google's Antigravity CLI on the person's Google AI plan (Beta, on a Mac only for now:
+`StudioCore` registers it there alone). The only mode Genex starts is `agy acp`, the CLI's Agent
+Client Protocol server on stdio ([acp.ts](../src/substrate/engines/acp.ts)): Google's own words are
+that wrapping its print mode (`agy -p`) is not for consumer plans, while any ACP client may launch
+`agy acp`. One turn is one process: `initialize`, `session/new` (or `session/load` to continue a
+session, whose replayed history is not mirrored), `session/set_model`, `session/prompt`, and every
+`session/update` ([antigravity-events.ts](../src/substrate/engines/antigravity-events.ts)) until
+the prompt is answered with the turn's ending and tokens. Its tokens are the plan's quota, never a
+bill, but the provider is `metered` in the table so the app never picks a Beta on its own.
+
+Settings › Model Providers has its row (`CliSignInRow`): Install, Sign in (`agy acp --login` in a
+terminal inside the row, as the person and outside any sandbox: it prints Google's page for Open
+sign-in page and takes the code that page gives; `studio:antigravity.signin`, native), and once
+connected Check connection, Sign in again and Update. The CLI has no command that says whether it
+is signed in, so the engine asks by opening a session in an empty folder, at most once a minute:
+the answer lists the models the account can run and its plan, or refuses with ACP's sign-in code
+(`-32000`). The row's status names the CLI's version and the plan.
+
+Antigravity keeps its Google sign-in in the operating system's own store (the Keychain on a Mac)
+and has no file to keep it in instead, and Genex never reads it. Its own controls are no box (its
+terminal sandbox leaves its file tools out, and its permission rules do not reach an ACP session),
+so each turn runs in `ProcessSandbox` with `antigravitySandbox` (a build for a chat the person set to
+Bypass runs as them outside it, `runsAsPerson`, as Codex's and Grok Build's do): the workspace (a read-only
+session, Plan or a reviewer runs from a scratch folder) is all it writes, the network is Google's
+hosts (`ANTIGRAVITY_HOSTS`), a game's `.agents` folder is not the session's to write, and inside
+the box every tool call the agent asks about is allowed, except a command the never-touch screen
+stops (`antigravityPermission`, `neverTouchVerdict`): macOS's keychain tool, a command the screen
+cannot read and a command with no command line are refused, as a worker's hook refuses them. Its sandbox alone is given `~/.gemini`
+(its settings and conversations) and, on a Mac, `~/Library/Keychains` to read and never to write
+(`antigravityHomes`, `ownHome`, `antigravityKeychain`) and the system's certificate checker (`SandboxMachService.Trust`,
+`com.apple.trustd.agent`, which a Go program verifies every HTTPS certificate through and
+sandbox-runtime leaves closed by default), because without either a signed-in CLI answers "sign
+in"; every other sandbox still denies the folders and opens no extra service. Studio tools reach it through the bridge command, as Codex's do.
+
+A failed turn is named by ACP's code (`-32000` a sign-in failure) or by Google's status name in
+the error (`RESOURCE_EXHAUSTED` a usage limit; `UNAVAILABLE`, `INTERNAL`, `DEADLINE_EXCEEDED`
+unavailable); anything else ends the build with the CLI's words. Stop sends `session/cancel` and
+gives the CLI five seconds to answer before it is stopped; a turn that says nothing for 10 minutes
+(30 while a tool call is open) is stopped with its process group. Compact now is refused.
+A live run on a signed-in Mac (CLI 1.5.7, free plan) reads the sign-in, builds in the game and
+cannot write beside it, continues a session from another folder, and shows the sign-in needs both
+openings: with the Keychain's files or the certificate service closed, the CLI answers "sign in",
+and with the files read-only it works. Not yet shown: a plan that has run out, and
+Windows and Linux (where the sandbox runs as another user or has no Secret Service). Tests: `engine-antigravity.test.ts` and `event-antigravity.test.ts` on
+`tests/fixtures/transcripts/antigravity-*`, recorded from Antigravity CLI 1.5.7.
+`STUDIO_ANTIGRAVITY_CLI_TESTS=1` runs the real, signed-in CLI in the real sandbox
+(`antigravity-cli-live.test.ts`).
+
+## Build with Genex credits
+
+**Genex** (`genex` in the provider table, `billing: "metered"`, `runsClaudeCode`) lets someone with
+no Claude or ChatGPT plan build on their Genex credits. It is `ClaudeCodeEngine` with a `gateway`:
+the same Claude Code runs, in the studio's home, without any of the computer's own Claude variables,
+and every call goes through the app's relay ([genex-relay.ts](../src/substrate/engines/genex-relay.ts))
+to genex.games, which runs it and bills the person's credits. The relay listens on 127.0.0.1 and
+gives each session a lease, a key that works for that session only (`ANTHROPIC_BASE_URL` and the key
+are the session's whole account); it takes the key off, puts the person's Genex token on, names the
+model and the chat (`x-genex-model`, `x-genex-chat`) and passes only the two Messages routes
+(`GenexBuildRoute`). The token never enters an agent's environment, and nothing a session holds can
+spend once it ends. genex.games owns the price, the plan and the models; the app shows the ones it
+ships with (`GENEX_MODELS`, Gemini 4 Hydrogen first) until genex.games lists its own. That list is
+the engine's whole answer (no CLI catalog), so a chat whose saved model it leaves out opens on a model
+that runs: one the person runs without credits if there is one, else Genex's own default
+(`resolveComposerModel`). Claude Code's own helpers run on the first model listed; the Loop's workers and reviewers run on Sonnet.
+
+The lane ([genex.ts](../src/substrate/engines/genex.ts)) reads `GET /api/desktop/llm/status` (reused
+for 5 seconds, joined while in flight) and maps its access word to the engine's status: ready, or a
+sign-in, Pro or a credit pack, a verified email, more credits, or paused. A 404 means genex.games does
+not offer building with credits on that stand: the engine reads `not_offered` and the app hides Genex
+everywhere (picker, first launch, Settings, the usage panel). A call genex.games refuses moves the
+status at once, so the chat follows the refusal rather than the next read.
+
+What a Genex model still needs is the chat's blue notice
+([genex-build.ts](../src/renderer/genex-build.ts), [GenexNotice](../src/renderer/ui/GenexNotice.tsx)):
+Genex's G, one line, one step, and another way that moves the chat off Genex: what the person can
+already build with is a tinted button beside the step, whatever Genex needs (**Continue on Claude
+plan** or ChatGPT when that plan is connected, else **Continue on OpenCode**, Ollama or another ready
+model, chosen as the picker's own fallback, never a paid one unless every ready model is free);
+with nothing ready, the plans are quiet links (Connect Claude Code, Connect Codex). Signed out, without Pro or credits, or with an
+unverified email, **Continue in browser** opens genex.games's build page through
+`studio:genex-account.build` (native): it signs the person in with the app's device code, offers Pro
+or a credit pack, and shows the waiting idea back; the app asks Genex again every 3 seconds for 15
+minutes, and a game's first message held above the notice sends itself once Genex is ready. A game
+started from home is still made then: naming hears Genex's refusal as what the account needs, never
+as a usage cap that sends the words back home (`core/game-naming.ts`). Out of
+credits, the step is **Get credits**. Claude Code missing or too old is **Set up**, which installs it in the app.
+`genex_notice_shown` says what the notice needed and offered, `genex_notice_action` which way was
+taken, and `message_send_blocked`'s `genex_need` tells a missing plan from a real sign-in.
+
+First launch offers **Use Genex** beside the two plans where genex.games offers it. It opens Genex's
+screen ([GenexScreen](../src/renderer/onboarding/GenexScreen.tsx)): the promo card's film and three
+rows, then **Sign in in browser**, the app's Genex account's own sign-in
+(`studio:genex-account.sign-in`), which waits as **Finish in your browser** with a cancel and
+**Open sign-in again**. Signed in, it reads Genex ready (setting up Claude Code first when it is
+missing), new games start on Genex's Sonnet, and the promo card after the welcome never shows; the
+first message asks for Pro or credits when the account has neither. Skipping, or going back
+without signing in, connects nothing. Settings →
+Model Providers shows Genex's row after the plans ([GenexBuildRow](../src/renderer/panels/GenexBuildRow.tsx)):
+the notice's line and step while something is missing; once ready, Connected, an Account menu
+(Check connection, Get credits) and its models. A Genex Pro member's monthly credits show in the
+usage panel ([Plan limits](#plan-limits)). Tests: `genex-relay.test.ts`, `genex-engine.test.ts`,
+`genex-notice.test.ts`, `genex-settings-row.test.ts`, `onboarding.test.ts`,
+`onboarding-genex-screen.test.ts`.
+
 ## Your own model server
 
 **Local server** ([local-server.ts](../src/substrate/engines/local-server.ts)) connects a model
@@ -394,12 +512,26 @@ nothing is `unavailable`, so another engine may take over. Tests: `engine-local-
 against `helpers/fake-local-server.ts`, which speaks each server's dialect.
 
 Residual risk: the CLI must read its sign-ins and its shell tool shares its sandbox, so an OpenCode
-session can read OpenCode's own `auth.json` (and a Cursor session Cursor's), and its commands can reach the provider host the session
+session can read OpenCode's own `auth.json` (and a Cursor session Cursor's, and on a Mac an Antigravity session the Keychain's files: macOS guards each item by its own access list, but an item another command-line tool saved through `/usr/bin/security` trusts that program, which the sandbox cannot keep from starting (a program it may not read starts all the same), so the never-touch screen refuses every command that calls it, as it does for a Claude Code session; what is left within a misled session's reach is what that screen cannot see, a program the session writes that calls the tool, and the encrypted Keychain file itself, and its commands can reach the provider host the session
 calls. OpenCode's permission rules keep its own tools inside the workspace, but that is not an OS
 boundary. Every other sandbox still denies the folder. Every sandbox allows localhost, where
 OpenCode 2.x's background server listens outside any sandbox; its password
 (`~/.config/opencode/service.json`) is in every sandbox's deny-read list (`baseDenyRead`), but a
 server the person runs without a password stays reachable.
+
+## TypeSafe (fast decisions for pilots)
+
+Optional, and not a model engine: TypeSafe's Jev answers typed questions in a fraction of a second,
+and an engine play's pilot (see [computer use](computer-use.md)) may ask it which of its moves to make.
+Settings → Model Providers ends with its row ([FastDecisionsRow.tsx](../src/renderer/panels/FastDecisionsRow.tsx)).
+A pasted key goes over `studio:typesafe.key.save` (native); main
+([fast-decisions.ts](../src/main/core/fast-decisions.ts)) checks it with TypeSafe's `GET /v1/models`,
+keeps it only when taken (`typesafe-api-key` in the SecretStore under `userData/secrets/providers`) and
+answers its state, never the key; `studio:typesafe.key.status` (fixture-safe) reads whether one is
+saved. A play's decider ([typesafe.ts](../src/substrate/typesafe.ts)) sends each ask as one
+`POST /v1/systemone` on the pinned `jev-1.14.0` (`FAST_DECISION_MODEL`): a `choice` named `genex_move` over
+the moves beside the pilot's own questions, dropped after 1.5 s. Without a key nothing reaches
+TypeSafe and pilots choose by their own order.
 
 ## MCP setup
 
@@ -454,9 +586,8 @@ Genex's ledger/admission/recovery remains authoritative. Its optional hosted Ble
 requires a configured remote URL and account; it does not replace the independent Local Blender
 plugin. That local plugin uses the public API 3 managed-runtime/job services and needs no account.
 
-Bundled plugin changes carry a new package version. The user sees an explicit Update action;
-active sessions retain their pinned code until release. The persistent removed preference still
-wins over a bundled seed. No remove/reinstall workaround is required for a normal seed upgrade.
+Bundled plugin changes carry a new package version, and bundled plugins update with Studio at
+launch ([plugins](plugins.md#removal-and-reinstall-by-recorded-origin)).
 
 ## Model setup and activity
 
@@ -491,6 +622,16 @@ missing `--ignore-user-config`. A handshake refusal falls back to exec and the b
 turn and the engine's lifetime; resumed sessions, older CLIs and the default keep exec. The
 session's `system/init` event records `tool_delivery` (`dynamic_tools` or `file_bridge`).
 
+Genex's context for a Codex session (`DelegateRequest.system`) is an app server thread's developer
+instructions (`developerInstructions` on `thread/start` and `thread/resume`). `codex exec` could take
+it only in argv, which a context with its plugins' guidance overflows on Windows, so a new exec
+session reads it on stdin as its first notice, under Genex's mark, and a resumed one, which keeps
+its first instructions anyway, has it in its history. The message's parts follow in order
+(`#delegateTexts`): Genex's notices under its
+mark (`genex-mark-prompts.ts`), the prompt as its sender wrote it, then Codex's own per-turn notes
+(the bridge's tools, plan or read-only, the off-limits paths), each its own text item on the app
+server and apart by blank lines on exec's stdin.
+
 A read-only follow-up that leaves the game's content unchanged does not reload the preview or
 warn about an untouched empty scaffold. The bounded content stamp includes Git-ignored runtime
 assets/build output as well as tracked files. Tool bookkeeping is excluded. An unknown stamp or
@@ -509,7 +650,7 @@ provider reports running.
 Studio's app-wide conversation has no tool, role or context menu. It uses the resolved single
 model's completion API, recorded user/assistant messages, current images and a host snapshot of
 recent activity/settings/proposals. The conversation is windowed automatically for each request;
-the full history remains saved. It does not resume a native game coordinator or expose project tools.
+the full history remains saved. It does not resume a game chat's native session or expose project tools.
 The session checkpoint controls below describe game conversations and delegated build sessions.
 
 Auto-compaction policy is host-owned, by model or by chat-and-model; the composer states only that
@@ -534,7 +675,19 @@ Resetting policy also refreshes the displayed threshold to its effective inherit
   complete tool-round boundaries before exceeding the selected policy. Completed operations
   are not replayed to recover from overflow. An irreducible task that cannot fit fails honestly.
 - **Completion-only Ollama:** the local harness performs its own context checkpoint. Explicit
-  policy does not run alongside a second silent history-window truncation.
+  policy does not run alongside a second silent history-window truncation. Before the model is
+  asked, the tool loop checks that the instructions and tools fit 70% of the window
+  (`promptThatFits`, `loop/tool-loop.ts`). It checks only a window the engine measured: a model
+  Ollama has not loaded reports none (`contextEstimated` on the engine's model), so the turn goes
+  to Ollama, which answers with its real context. A measured window too small for the instructions
+  and tools alone (Ollama's 4,096-token default) fails at once with a `context_too_small`
+  failure. It compacts nothing, and its message names a context length that fits and where Ollama
+  sets it. Under it the chat offers Raise context to 16K (`chat/RaiseContextLine.tsx`): Ollama
+  copies the model with `num_ctx` 16384 (`/api/create`, weights shared, `shared/ollama-context.ts`)
+  and the chat switches to the copy, whose Modelfile context counts as measured before it loads.
+  The engines' list is read again first (`chat/raise-context.ts`), so the pick is never taken for a
+  dropped model; `context_raise_finished` counts the presses and `chat_turn_ended`'s
+  `raised_context` marks turns on a copy, so a 16K copy that is still too small shows up.
 
 ### Compact now
 
@@ -580,14 +733,14 @@ model switched back to after another one answered starts a fresh session, since 
 those turns, and Compact now works on that latest session only. A session the engine cannot
 resume — it throws, or answers that it has no such conversation (another account's, one never
 saved) — is replaced by a fresh one in the same turn (`loop/chat-steer.ts`), so the chat never
-stays stuck on it. A fresh session mid-conversation
-is briefed with the original request, the latest instruction, the last messages verbatim
-(`loop/brief-window.ts`: 20 messages, at most 18,000 characters) and the latest written summary
-(`compactedSummary`, which reads past a Codex compaction's sealed one). When that brief cannot
-carry everything since the last written summary, the log is first summarised on the new model
-(`briefSummary`, `loop/compact.ts`), which ends the earlier sessions as any written summary does;
-a short chat costs nothing extra. The new model gets the conversation, not the previous model's
-own context (files it read, commands it ran): it reads the game's folder as it needs.
+stays stuck on it. The person's words always go alone, as they wrote them; a fresh session
+mid-conversation is also told the chat so far as one Genex notice (`historyNotice`): the latest
+written summary (`compactedSummary`, which reads past a Codex compaction's sealed one), then the
+last messages verbatim (`loop/brief-window.ts`: 20 messages, at most 18,000 characters). No extra
+model call summarises the chat first. The new model gets the conversation, not the previous
+model's own context (files it read, commands it ran): it reads the game's folder as it needs. A
+switch of model or effort mid-turn is the next leg's option alone; another engine starts a new
+session told the chat so far.
 
 A Bonsai response stopped by its output limit cannot dispatch partial tool arguments. The session
 retains usage and existing work, asks for a smaller edit at most twice, then reports a recoverable
@@ -644,9 +797,13 @@ throws when they could not be read; each engine reuses a reading under a minute 
 in-flight read; a Recheck clears it. The composer asks when its ring panel opens or the ring is
 hovered, and every minute while open; until the first answer it draws each plan this setup uses
 at full size with shimmering bars, and a plan being read with no numbers yet does the same. A
-failed read shows one orange line with Try again, a signed-out plan Sign in again. The panel leaves the
-`model_scoped` windows out (`shownLimits`; `SHOW_MODEL_LIMITS` in `usage-words.ts` brings them back). Its
-last row opens Settings → Model Providers. Fixture engines report fixed limits.
+failed read shows one orange line with Try again, a signed-out plan Sign in again. The panel draws
+every window a plan reports, a `model_scoped` one (Weekly · Fable) after the plan's own. Its
+last row opens Settings → Model Providers. Genex is read after the plans: a Pro member's monthly
+credits, one window under the plan's name from `GET /api/plans/me` (its allowance and renewal) and
+the balance from `GET /api/credits/me`; without Pro there is no month to show and the panel leaves
+Genex out (`shownPlans`), as it does a signed-out Genex, whose sign-in is the chat notice's. A reset
+more than a week off is said by its date. Fixture engines report fixed limits.
 `promptbar-redesign.test.ts` covers both normalizers; account access is proven only against a
 real login.
 
@@ -748,19 +905,21 @@ build game after consent, opening the npm registry for that one install. A Studi
 gets player identity by mapping Studio's copy in its import map instead, and Studio then calls
 `initEmbed()` for it; multiplayer cannot be added there yet. Studio connects every web game it
 publishes that brings no SDK of its own, so genex.games can sign its players in. Multiplayer is tested only on the published draft: build,
-add the package, publish a draft with `genex__publish`, then play the draft link. Studio's
-preview stays single-player. Fixture profiles refuse the CLI and package tools.
+add the package, publish a draft with `genex__publish`, then play the tested draft's own address
+(`draftPlayUrl` in `genex__publish-status`, `preview--<slug>`), which a guest can open; `draftUrl`
+is the owner's draft page on genex.games, behind sign-in. Studio's preview stays single-player. Fixture profiles refuse the CLI and package tools.
 
 ### The game's Genex cover
 
 The game's Genex cover is the 16:9 picture genex.games shows on its gallery card, its page and
 every shared link, unrelated to Studio's own sidebar cover; a clip of play can run over it on the
-cards. Once a run lands its build in a web game while Genex is on, Studio asks the chat's agent for
+cards. Once a run lands its build in a game while Genex is on, Studio asks the chat's agent for
 it as a step of its own, in a hidden message sent with the person's engine and model but not their
-Loop (`core/cover-step.ts`). The plugin's `cover` skill states the requirement and the API: the
-agent makes a picture of the real game by any means, saves it in the game folder and hands its path
-to `genex__cover {"image": …, "clip"?: …}` (a PNG or JPEG of at least 1280×720 within 8 MB; a WebM
-or MP4 of at least 5.3 s, since Genex keeps five seconds after trimming up to 300 ms). The plugin
+Loop (`core/cover-step.ts`). The ask names only the goal: make the game's Genex cover, change nothing
+else, say so in one line. How is the plugin's own, in `genex__cover`'s description and its `cover`
+skill: the agent makes a picture of the real game by any means, saves it in the game folder and
+hands its path to `genex__cover {"image": …, "clip"?: …}` (a PNG or JPEG of at least 1280×720 within
+8 MB; a WebM or MP4 of at least 5.3 s, since Genex keeps five seconds after trimming up to 300 ms). The plugin
 reads each by its bytes, through no link out of the folder, measures the picture's light as Genex's
 gate does, copies both into its own storage and answers what it kept, the last send and the cover
 Genex holds with who chose it; a refused file keeps nothing. A publish, and a draft until the game is
@@ -774,7 +933,8 @@ Studio keeps a plain frame of the game as it loads (`cover-auto`, once the turns
 settle and as the Publish dialog opens), never over the agent's picture, the person's pick or the
 owner's cover. The dialog's banner flips between the last four pictures (`cover-pick` pins one) and
 its Another cover sends a request to the game's chat ([plugins](plugins.md#first-party-privileges)).
-How to compose a cover is optional advice in the `genex-recommendations` plugin, off by default.
+How to compose a cover is optional advice in the `genex-recommendations` plugin, which works under
+the hood of Genex: on while Genex is, and listed nowhere.
 
 ## Credentials
 
@@ -861,8 +1021,8 @@ that need a value, malformed input warning rather than throwing, and no node imp
 
 `mcp-plumbing.test.ts` is the end-to-end proof on the rig: a saved fixture connector's tools arrive
 in the `claude-code` and `codex` delegations with their `inputSchema` intact and route back through
-`onLiveTool`; a read-only and a candidate session get none, a Loop chat gets them (and a build's
-lead, whose `readOnly` only marks its seat: `lead-sessions-host.test.ts`); the local harness's
+`onLiveTool`; a read-only and a candidate session get none, the chat's session gets them (and a
+build's lead, whose `readOnly` only marks its seat: `lead-sessions-host.test.ts`); the local harness's
 `createToolRegistry()` carries the full schema and executes through `mcp.invoke`; a disabled
 connector's tool is rejected; a `connector_tool` event lands in the thread log; and `core.api()`
 exposes no connector mutation method. `engine-delegated.test.ts` keeps its pinned literals and adds
@@ -942,7 +1102,7 @@ build is not packaged acceptance. Preserve the normal profile and harness edits.
 
 Smoke windows allow dimensions larger than the active macOS display so the requested 900px
 viewport is actually exercised; normal windows keep their platform behavior. The exact viewport
-assertions remain required. Coordinator milestone waits race the run's terminal result so a
+assertions remain required. Milestone waits race the run's terminal result so a
 pre-worker failure (including `spawn git EAGAIN`) fails with its recorded reason instead of
 hanging indefinitely. A later isolated pass does not erase the original infrastructure failure.
 
@@ -975,8 +1135,10 @@ Implementation evidence: real Blender 4.5.4 imported a retained 5.9 MB generated
 the public native transform recipe, exported a derivative and two renders, preserving the
 original SHA-256. This proves staged import/export, not in-game use or hosted readiness. Retain the actual observation in local evidence and summarize its limits in the PR.
 
-Reliability acceptance also guards preview-pool exhaustion and candidate load failure without
-Live navigation (`preview-candidate.test.ts`), renamed native derivative provenance, and
+Reliability acceptance also guards the person's candidate window while agents hold the whole
+preview pool, a second Play refused without Live navigation when that window and the pool are
+both taken, and candidate load failure without Live navigation (`preview-candidate.test.ts`),
+renamed native derivative provenance, and
 macOS canonical workspace aliases at the asset-checkpoint boundary. Build smoke currently
 covers the default expanded history and compact header/details layout. Real retained-asset
 acceptance reports live under `.studio-dev/evidence/<task>/`, with selected evidence shared in the PR.

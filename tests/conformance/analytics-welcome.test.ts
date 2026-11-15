@@ -169,6 +169,7 @@ function choice(model: string, patch: Partial<LocalModelChoice> = {}): LocalMode
     fits: true,
     needGb: 5,
     needsRamGb: null,
+    split: false,
     reason: "",
     ...patch,
   };
@@ -176,7 +177,7 @@ function choice(model: string, patch: Partial<LocalModelChoice> = {}): LocalMode
 
 function hardware(patch: Partial<HardwareReport["recommendation"]> = {}, ramGb = 18): HardwareReport {
   return {
-    hardware: { cpu: "Apple M3", ramGb, usableModelGb: 12 },
+    hardware: { cpu: "Apple M3", ramGb, usableModelGb: 12, gpus: [], gpuModelGb: 0 },
     recommendation: {
       tier: { label: "", expectation: "" },
       defaultModel: "bonsai-8b",
@@ -364,6 +365,37 @@ describe("usage analytics: presses and the sign-ins they start", () => {
     assert.equal(ended.finished?.phase_at_end, "waiting");
   });
 
+  // Codex sign-ins that ran out their 10 minutes said only "timed out, waiting": not whether the
+  // CLI ever printed a link, nor whether its window was ever shown.
+  it("says what a Codex sign-in that timed out got to: a link, its window, the CLI's lines", () => {
+    const memory = createProviderMemory();
+    const pairing = createStreamPairing();
+    providerPressed(
+      memory,
+      { engine: EngineId.Codex, action: ProviderAction.Connect, surface: ProviderSurface.Onboarding },
+      T0,
+    );
+    const see = (state: CodexLoginState, at: number) =>
+      loginSeen(memory, pairing, { engine: EngineId.Codex, state }, at);
+    const quiet = { ...codex(1, "starting"), visible: false, lines: ["Starting Codex sign-in…"] };
+    see(quiet, T0 + 5);
+    see({ ...quiet, revision: 2, phase: "waiting" }, T0 + 10);
+    see({ ...quiet, revision: 3, phase: "waiting", hasBrowserUrl: true, lines: [...quiet.lines, "a", "b"] }, T0 + 20);
+    const ended = see({ ...quiet, revision: 4, phase: "failed", visible: true, problem: "timed_out" }, T0 + 600_000);
+    assert.deepEqual(
+      [ended.finished?.link_seen, ended.finished?.card_shown, ended.finished?.output_lines],
+      [true, true, 2],
+      "a link was printed within the same step, and the failure opened the window",
+    );
+
+    see({ ...quiet, revision: 5 }, T0 + 700_000);
+    const silent = see({ ...quiet, revision: 6, phase: "cancelled" }, T0 + 710_000);
+    assert.deepEqual(
+      [silent.finished?.link_seen, silent.finished?.card_shown, silent.finished?.output_lines],
+      [false, false, 0],
+    );
+  });
+
   it("does not follow a sign-in that never started", () => {
     const memory = createProviderMemory();
     const refused = signInStarted(memory, { engine: EngineId.ClaudeCode, started: false, missingCli: true }, T0);
@@ -464,8 +496,28 @@ describe("usage analytics: CLI installs and engines", () => {
       phase: CliInstallPhase.Failed,
       problem: CliInstallProblem.TimedOut,
       duration_ms: 600_000,
+      http_status: null,
+      net_error: null,
     });
     assert.deepEqual(cliInstallSeen(memory, pairing, failed, T0), {});
+    // A failed download says what answered it, and only as a status or Chromium's error name.
+    const downloads: [Partial<CliInstallJob>, number | null, string | null][] = [
+      [{ httpStatus: 403 }, 403, null],
+      [{ netError: "ERR_NAME_NOT_RESOLVED" }, null, "ERR_NAME_NOT_RESOLVED"],
+      [{ httpStatus: 99_999, netError: "C:\\Users\\alice\\codex.ps1" }, null, null],
+    ];
+    for (const [index, [patch, status, netError]] of downloads.entries()) {
+      const download = job({
+        provider: EngineId.Codex,
+        startedAt: `2026-10-27T11:0${index}:00.000Z`,
+        phase: CliInstallPhase.Failed,
+        problem: CliInstallProblem.Download,
+        ...patch,
+      });
+      const finished = cliInstallSeen(memory, pairing, download, T0).finished;
+      assert.equal(finished?.http_status, status);
+      assert.equal(finished?.net_error, netError);
+    }
     const unstamped = job({ startedAt: "garbled", phase: CliInstallPhase.Installed, provider: EngineId.Codex });
     const late = cliInstallSeen(memory, pairing, unstamped, T0 + 10 * CLICK_CREDIT_MS).finished;
     assert.equal(late?.duration_ms, null);
@@ -683,7 +735,15 @@ describe("usage analytics: local models and servers", () => {
       fits: null,
       size_bucket: null,
     });
-    const found = { ok: true as const, id: "qwen3.5:9b", sizeGb: 6.1, fits: true, needGb: 7, needsRamGb: null };
+    const found = {
+      ok: true as const,
+      id: "qwen3.5:9b",
+      sizeGb: 6.1,
+      fits: true,
+      needGb: 7,
+      needsRamGb: null,
+      split: false,
+    };
     assert.deepEqual(ollamaLookedUp(found), { ok: true, reason: null, fits: true, size_bucket: SizeBucket.Large });
     assert.deepEqual(ollamaLookedUp(null), { ok: false, reason: null, fits: null, size_bucket: null });
     const servers = [
@@ -872,7 +932,25 @@ describe("usage analytics: nothing a person wrote or owns leaves", () => {
       () =>
         hardwareChecked(
           ProviderSurface.Settings,
-          { ...hardware(), hardware: { cpu: HOSTILE[9], ramGb: 16, usableModelGb: 9 } },
+          { ...hardware(), hardware: { cpu: HOSTILE[9], ramGb: 16, usableModelGb: 9, gpus: [], gpuModelGb: 0 } },
+          1,
+        ),
+    ],
+    [
+      "a PC's graphics card by its name",
+      () =>
+        hardwareChecked(
+          ProviderSurface.Settings,
+          {
+            ...hardware(),
+            hardware: {
+              cpu: "AMD Ryzen 9",
+              ramGb: 32,
+              usableModelGb: 44.3,
+              gpus: [{ name: HOSTILE[9], memoryGb: 24 }],
+              gpuModelGb: 23,
+            },
+          },
           1,
         ),
     ],

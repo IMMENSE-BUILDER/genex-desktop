@@ -47,6 +47,8 @@ test("the built Unreal plugin carries the editor helper, which Unreal loads with
     "Content/Python/genex_build/mesh_math.py",
     "Content/Python/genex_build/models.py",
     "Content/Python/genex_build/motion.py",
+    "Content/Python/genex_build/motion_check.py",
+    "Content/Python/genex_build/motion_check_math.py",
     "Content/Python/genex_build/outs.py",
     "Content/Python/genex_build/place.py",
     "Content/Python/genex_build/pose_math.py",
@@ -70,7 +72,9 @@ test("the built Unreal plugin carries the editor helper, which Unreal loads with
     "Content/Python/genex_loop/cpp.py",
     "Content/Python/genex_loop/editor.py",
     "Content/Python/genex_loop/editor_log.py",
+    "Content/Python/genex_loop/epic_blueprints.py",
     "Content/Python/genex_loop/errors.py",
+    "Content/Python/genex_loop/graph_write.py",
     "Content/Python/genex_loop/part_api.py",
     "Content/Python/genex_loop/part_files.py",
     "Content/Python/genex_loop/parts.py",
@@ -78,23 +82,39 @@ test("the built Unreal plugin carries the editor helper, which Unreal loads with
     "Content/Python/genex_loop/probes.py",
     "Content/Python/genex_loop/project.py",
     "Content/Python/genex_loop/reference.py",
+    "Content/Python/genex_loop/reload.py",
     "Content/Python/genex_loop/session.py",
     "Content/Python/genex_loop/tools.py",
     "Content/Python/genex_play/__init__.py",
+    "Content/Python/genex_play/detect.py",
+    "Content/Python/genex_play/light.py",
+    "Content/Python/genex_play/looks.py",
+    "Content/Python/genex_play/looks_math.py",
     "Content/Python/genex_play/motion.py",
+    "Content/Python/genex_play/near.py",
+    "Content/Python/genex_play/pilot.py",
+    "Content/Python/genex_play/pilot_game.py",
+    "Content/Python/genex_play/pilot_kit.py",
     "Content/Python/genex_play/play.py",
     "Content/Python/genex_play/route.py",
     "Content/Python/genex_play/route_math.py",
+    "Content/Python/genex_play/screen.py",
+    "Content/Python/genex_play/screen_math.py",
+    "Content/Python/genex_play/threat.py",
     "Content/Python/genex_play/tools.py",
+    "Content/Python/genex_play/ui.py",
+    "Content/Python/genex_play/walk.py",
+    "Content/Python/genex_play/walk_math.py",
     "Content/Python/init_unreal.py",
     "GenexEditorHelper.uplugin",
+    "Templates/pilots/explore.py",
   ]);
   const descriptor = JSON.parse(await readFile(path.join(helper, "GenexEditorHelper.uplugin"), "utf8"));
   assert.equal(descriptor.Modules, undefined, "a C++ module would need a compiler");
   assert.equal(descriptor.EnabledByDefault, true, "the game's .uproject stays untouched");
   assert.equal(descriptor.CanContainContent, true, "Unreal runs Content/Python only for content plugins");
   assert.equal(descriptor.EditorOnly, true, "a packaged game never carries it");
-  assert.deepEqual([descriptor.Version, descriptor.VersionName], [10, "0.8.0"]);
+  assert.deepEqual([descriptor.Version, descriptor.VersionName], [38, "0.34.0"]);
   const geometry = descriptor.Plugins.filter((plugin: { Name: string }) => plugin.Name === "GeometryScripting");
   assert.deepEqual(geometry, [{ Name: "GeometryScripting", Enabled: true }], "the terrain tool needs Geometry Script");
 });

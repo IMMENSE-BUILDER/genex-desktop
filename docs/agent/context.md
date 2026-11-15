@@ -1,19 +1,19 @@
 # Genex: product overview
 
-Genex (formerly AI Game Studio) is a macOS Electron application for making games with AI:
+Genex (formerly AI Game Studio) is a macOS/Linux/Windows Electron application for making games with AI:
 local browser games, and Unreal, Roblox Studio or other engines' projects. A person describes a
 game or a change, answers questions, and reviews the running game and build results. Each game is
 a real local project to open, edit and export.
 
 ## What the app contains
 
-The sidebar's **Play** runs published games; **Create** opens games, Plugins, Items, Studio and
+The sidebar's **Play** runs published games; **Create** opens games, Plugins and
 Settings. Each game has one conversation on the left and a stage on the right. The stage
 switches between **Live** (the playable
-game), **Builds** (work and results) and **Assets** (files and generated media).
+game), **Builds** (work and results), **Design** ([pages](../design-board.md)) and **Assets** (media).
 
-The prompt bar chooses the model, permissions, Auto or Loop mode, planning, references and
-tools. Chat shows replies, questions, compact status and results; details expand on demand.
+The prompt bar chooses the model, permissions, planning, references and tools; the chat's agent
+decides whether a request needs a Loop. Chat shows replies, questions, compact status and results; details expand on demand.
 
 Studio pairs an assistant with Activity to review runs and instruction improvements. Settings owns
 the games folder, appearance, provider/model setup and saved permissions. Accounts, local projects and installed harness edits
@@ -25,7 +25,7 @@ must survive application changes.
 | --- | --- |
 | [Workspace and games](../product/workspace.md) | Navigation, Play, library, new/open games, settings and export |
 | [Chat and questions](../product/chat.md) | Messages, streaming, statuses, plans, questions and long history |
-| [Builds and Live](../product/builds-live.md) | Auto/Loop, workers, progress, playback, checks and outcomes |
+| [Builds and Live](../product/builds-live.md) | Loops, workers, progress, playback, checks and outcomes |
 | [Models and context](../product/models-context.md) | Models, permissions, saved preferences, accounts and context |
 | [Assets and plugins](../product/assets-plugins.md) | Media, previews, tools, plugin setup and permissions |
 | [Projects and engines](../product/projects-engines.md) | Project kinds, engines, plugins on or off, ports |

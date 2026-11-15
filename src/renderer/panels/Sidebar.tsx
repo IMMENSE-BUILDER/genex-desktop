@@ -38,7 +38,8 @@ import { usePeopleSync } from "../play/use-people-sync.ts";
 import { PlayRecent } from "../play/PlayRecent.tsx";
 import { PlaySwitch } from "../play/PlaySwitch.tsx";
 import { SidebarFriends } from "../play/SidebarFriends.tsx";
-import { useAgentsStart, usePeople, usePlay, useShallow } from "../state/hooks.ts";
+import { useAgentsStart, useGenexReviewLines, usePeople, usePlay, useShallow } from "../state/hooks.ts";
+import { type ReviewLineView, reviewLineView } from "./plugins/genex/review-line-view.ts";
 import { PlayPage } from "../state/play.ts";
 import { besideRemix, remixCovers, remixShare } from "../play/remix-model.ts";
 import { remixTitle } from "../../shared/play.ts";
@@ -47,7 +48,7 @@ import { PLAY_WORDS } from "../words.ts";
 import { t } from "../../shared/i18n.ts";
 import { SidebarToggle } from "../shell/use-shell-chrome.ts";
 import { HarnessOpenedVia, noteHarnessOpening } from "../analytics/plugins-harness.ts";
-import { NavItem, PlayModeVia } from "../analytics/workspace-vocabulary.ts";
+import { NavItem, type NoticeVia, PlayModeVia } from "../analytics/workspace-vocabulary.ts";
 
 interface Props {
   threads: ConversationRecord[];
@@ -64,7 +65,8 @@ interface Props {
   threadStatus: Record<string, { status: string; since: number }>;
   onSearch: () => void;
   notices: Notice[];
-  onOpenNotice: (notice: Notice) => void;
+  /** Open a row; `via` says how (its Fix press goes to the game's chat alone). */
+  onOpenNotice: (notice: Notice, via?: NoticeVia) => void;
   onReadNotices: () => void;
   onClearNotices: () => void;
   onToggle: () => void;
@@ -375,12 +377,16 @@ function SidebarGame({
   const launched = launching.project === game.name;
   const busy = launched || building.has(game.name) || chats.some((chat) => busyThreads.has(chat.id));
   const active = launched || activeProject === game.name;
+  // Where the game stands with Genex, under its name: Public, In review, Taken down, Fixing…
+  const entry = useGenexReviewLines((s) => s.lines[game.name]);
+  const review = useMemo(() => reviewLineView(entry), [entry]);
   return (
     <GameRow
       game={game}
       threadId={thread?.id}
       active={active && !harnessOpen}
       busy={busy}
+      review={review}
       onSelect={() => onSelectGame(game.name)}
       onRename={() => onRenameGame(game)}
       onPin={() => onPinGame(game)}
@@ -459,6 +465,16 @@ function SidebarTitlebar({
 }
 
 /**
+ * Rows hidden from the sidebar for now: Create's Items and Harness here, and Play's Assets shelf
+ * in `HIDDEN_SHELVES`. How they work gets reworked later (backlog:
+ * https://github.com/genex-games/genex-desktop/issues/654). A hidden row stays in the page with
+ * `hidden`, so its room, its code and ⌘2 keep working; take it out of its set to show it again.
+ */
+const HIDDEN_ROWS: ReadonlySet<NavItem> = new Set([NavItem.Items, NavItem.Harness]);
+/** Play's shelves hidden for now, with the rows above (#654). */
+const HIDDEN_SHELVES: ReadonlySet<PlayShelf> = new Set([PlayShelf.Assets]);
+
+/**
  * The fixed top: the toggle with search, notifications and Send feedback; the brand with the Play /
  * Create switch; the rooms in Create or the shelves in Play; the games or Recent heading.
  */
@@ -525,6 +541,7 @@ function SidebarTop(props: Props & { studio: ConversationRecord | undefined; har
             icon="layers"
             aria-label={t("Items")}
             data-sidebar-room="items"
+            hidden={HIDDEN_ROWS.has(NavItem.Items)}
             current={itemsOpen}
             onClick={press(NavItem.Items, onItems)}
           >
@@ -535,6 +552,7 @@ function SidebarTop(props: Props & { studio: ConversationRecord | undefined; har
               <NavRow
                 icon="harness"
                 data-thread="studio"
+                hidden={HIDDEN_ROWS.has(NavItem.Harness)}
                 current={harnessOpen}
                 busy={studioBusy}
                 onClick={press(NavItem.Harness, () => {
@@ -609,6 +627,7 @@ function PlayShelfRows({ onPick }: { onPick: () => void }): JSX.Element {
             icon={SHELF_ICONS[shelf]}
             current={onShelf && shelf === shown}
             data-play-shelf={shelf}
+            hidden={HIDDEN_SHELVES.has(shelf)}
             onClick={() => {
               onPick();
               studioApp().play.chooseShelf(shelf);
@@ -663,11 +682,41 @@ function GameRowEnd({ busy, pinned }: { busy: boolean; pinned: boolean | undefin
   );
 }
 
+/** A game's second line: where it stands with Genex, the working dot while its fix is with the agent. */
+function ReviewLine({ review }: { review: ReviewLineView }): JSX.Element {
+  return (
+    <span className="sidebar-game-line" data-review-line={review.line} data-review-tone={review.tone}>
+      {review.busy && <Dot tone="busy" />}
+      <span className="min-w-0 truncate">{review.text}</span>
+    </span>
+  );
+}
+
+/** A game's name, beside the kind of project it is when it isn't a game, and under it its Genex line. */
+function GameNames({ game, kind, review }: { game: GameProject; kind: string | null; review: ReviewLineView | null }) {
+  // The kind label keeps its words: the name shortens first, down to its first letters, and only a
+  // row narrower than that shortens the label too.
+  const name = (
+    <>
+      <span className="min-w-8 flex-1 truncate">{game.title}</span>
+      {kind && <span className="ms-1.5 min-w-0 truncate text-ink-3">{kind}</span>}
+    </>
+  );
+  if (!review) return name;
+  return (
+    <span className="sidebar-game-names">
+      <span className="flex min-w-0">{name}</span>
+      <ReviewLine review={review} />
+    </span>
+  );
+}
+
 function GameRow({
   game,
   threadId,
   active,
   busy,
+  review,
   onSelect,
   onRename,
   onPin,
@@ -678,6 +727,7 @@ function GameRow({
   threadId?: string;
   active: boolean;
   busy: boolean;
+  review: ReviewLineView | null;
   onSelect: () => void;
   onRename: () => void;
   onPin: () => void;
@@ -708,10 +758,7 @@ function GameRow({
         onClick={onSelect}
       >
         <GameAvatar cover={game.cover} active={active} gameKey={game.name} />
-        {/* The kind label keeps its words: the name shortens first, down to its first letters, and only a
-            row narrower than that shortens the label too. */}
-        <span className="min-w-8 flex-1 truncate">{game.title}</span>
-        {kind && <span className="ms-1.5 min-w-0 truncate text-ink-3">{kind}</span>}
+        <GameNames game={game} kind={kind} review={review} />
         {busy && <span className="sr-only">{t("Working")}</span>}
       </button>
       <GameRowEnd busy={busy} pinned={game.pinned} />

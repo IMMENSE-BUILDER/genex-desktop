@@ -34,12 +34,12 @@ import { chatObservers, type SendEvent } from "../../src/renderer/analytics/chat
 import {
   chatHistoryFacts,
   engineRef,
-  hoursBucket,
   messagesBack,
   modelPickedProperties,
   modelRef,
   namesOwnModel,
   noteMessageSent,
+  noteSendWent,
   permissionAnsweredProperties,
   planAnsweredProperties,
   questionAnsweredProperties,
@@ -50,11 +50,11 @@ import {
   sendBlockedProperties,
   stopRequestedProperties,
 } from "../../src/renderer/analytics/chat-properties.ts";
+import { GenexNeed } from "../../src/renderer/genex-build.ts";
 import {
   CardSettledBy,
   ComposerRoom,
   ContextBucket,
-  HoursBucket,
   LeftTo,
   PlanAction,
   QuestionVia,
@@ -165,7 +165,6 @@ function facts(overrides: Partial<SendFacts> = {}): SendFacts {
     key: `${EngineId.ClaudeCode}::claude-opus-4-1`,
     engineKind: EngineKind.Delegated,
     effort: "high",
-    loop: { on: true, hours: 3 },
     planReview: false,
     pictures: 1,
     files: 2,
@@ -195,8 +194,6 @@ describe("message_sent", () => {
       engine_kind: EngineKind.Delegated,
       model: "claude-opus-4-1",
       effort: "high",
-      loop_on: true,
-      loop_hours_bucket: HoursBucket.Few,
       plan_review: false,
       pictures: 1,
       files: 2,
@@ -247,18 +244,7 @@ describe("message_sent", () => {
     assert.equal(namesOwnModel(`${EngineId.ClaudeCode}::claude-opus-4-1`), false);
   });
 
-  it("buckets a Loop's hours and keeps only an effort from the app's own scale", () => {
-    assert.deepEqual(
-      [
-        hoursBucket({ on: false, hours: 3 }),
-        hoursBucket({ on: true, hours: null }),
-        hoursBucket({ on: true, hours: 0.5 }),
-        hoursBucket({ on: true, hours: 4 }),
-        hoursBucket({ on: true, hours: 8 }),
-        hoursBucket({ on: true, hours: 12 }),
-      ],
-      [HoursBucket.None, HoursBucket.None, HoursBucket.One, HoursBucket.Few, HoursBucket.Several, HoursBucket.Long],
-    );
+  it("keeps only an effort from the app's own scale", () => {
     const sent = noteMessageSent(createChatMemory(), facts({ effort: "Alice Smith's Kart" }), T0);
     assert.equal("effort" in sent, false);
   });
@@ -289,10 +275,36 @@ describe("a dead Send", () => {
       reason: SendBlock.NoModel,
       room: ComposerRoom.Home,
       engine: EngineId.Ollama,
+      genex_need: null,
       attempts_in_row: 2,
     });
-    noteMessageSent(memory, facts(), T0);
+    noteSendWent(memory);
     assert.equal(sendBlockedProperties(memory, blocked).attempts_in_row, 1);
+  });
+
+  it("keeps counting a press whose send was refused for its model, until one goes", () => {
+    const memory = createChatMemory();
+    const blocked = { reason: SendBlock.ModelUnavailable, room: ComposerRoom.Game, key: `${EngineId.OpenCode}::gone` };
+    // The send is noted before it is known whether it goes; a model refusal then counts it dead.
+    for (const press of [1, 2, 3]) {
+      noteMessageSent(memory, facts(), T0 + press);
+      assert.equal(sendBlockedProperties(memory, blocked).attempts_in_row, press);
+    }
+    noteMessageSent(memory, facts(), T0 + 4);
+    noteSendWent(memory);
+    assert.equal(sendBlockedProperties(memory, blocked).attempts_in_row, 1);
+  });
+
+  it("says what a Genex model still needs, apart from a real sign-in", () => {
+    const memory = createChatMemory();
+    const blocked = sendBlockedProperties(memory, {
+      reason: SendBlock.SignInNeeded,
+      room: ComposerRoom.Game,
+      key: `${EngineId.Genex}::sonnet`,
+      genexNeed: GenexNeed.Plan,
+    });
+    assert.equal(blocked.engine, EngineId.Genex);
+    assert.equal(blocked.genex_need, GenexNeed.Plan);
   });
 });
 
@@ -380,6 +392,22 @@ describe("chat_turn_ended", () => {
       },
     ]);
     assert.equal(memory.lastFailureAt, T0 + 42_000);
+  });
+
+  it("says a turn ran on an Ollama copy raised to 16K, never naming the model", () => {
+    const { sent, log } = hearing();
+    const failed = { type: EventKind.TurnEnded, status: "error", metadata: { outcome: TurnOutcome.None } } as const;
+    log(record({ type: EventKind.TurnStarted, metadata: { engine: EngineId.Ollama, model: "qwen3:8b-16k" } }, T0));
+    log(record(failed, T0 + 50));
+    log(record({ type: EventKind.TurnStarted, metadata: { engine: EngineId.Ollama, model: "qwen3:8b" } }, T0 + 60));
+    log(record(failed, T0 + 110));
+    log(record({ type: EventKind.TurnStarted, metadata: { engine: EngineId.Codex, model: "gpt-16k" } }, T0 + 120));
+    log(record(failed, T0 + 170));
+    assert.deepEqual(
+      sent.map((item) => item.properties.raised_context),
+      [true, undefined, undefined],
+    );
+    assertClean(sent);
   });
 
   it("leaves a build's turns out, counts a restart's interrupted close, and never sends an unknown outcome", () => {

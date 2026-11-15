@@ -32,6 +32,7 @@ import { MINUTE_MS } from "../shared/duration.ts";
 import { errorMessage } from "../shared/errors.ts";
 import { type SandboxProblem, StudioPlatform } from "../shared/boot.ts";
 import { ownBubblewrap } from "./linux-bubblewrap.ts";
+import { type LoopbackBridge, type LoopbackProtocol, openLoopbackBridge } from "./linux-loopback-bridge.ts";
 import { prepareSandbox } from "./sandbox-prepare.ts";
 import {
   SandboxLaunchCode,
@@ -39,6 +40,7 @@ import {
   SandboxUnavailableError,
   gitMissingProblem,
   missingLinuxTools,
+  SRT_PROXY_PORT_RANGE,
   sandboxProblem,
   windowsLaunchError,
   windowsProxyPortsError,
@@ -85,15 +87,37 @@ import { type LiveInput, openLiveInput } from "./windows-live-input.ts";
  * agent) cannot read Electron's archive, and the runtime's own lookup answers the archive's virtual
  * path even for an unpacked file, since Electron's fs answers for it.
  */
-export function packagedVendorFile(packageDir: string, sep: string, ...parts: string[]): string | undefined {
+export function packagedVendorFile(
+  packageDir: string | undefined,
+  sep: string,
+  ...parts: string[]
+): string | undefined {
   const archive = `app.asar${sep}`;
-  if (!packageDir.includes(archive)) return undefined;
+  if (!packageDir?.includes(archive)) return undefined;
   return [packageDir.replace(archive, `app.asar.unpacked${sep}`), "vendor", ...parts].join(sep);
 }
 
-const sandboxPackage = path.dirname(
-  createRequire(import.meta.url).resolve("@anthropic-ai/sandbox-runtime/package.json"),
-);
+/**
+ * sandbox-runtime's package folder, or undefined where Node can't find it. A bundled plugin's
+ * backend carries this module and runs from its copy in the profile, with no `node_modules` beside
+ * or above it: resolving there threw on import, so that plugin never started (Godot). Without the
+ * folder the runtime looks up its vendor files itself, as it does outside a package.
+ */
+function sandboxPackageDir(): string | undefined {
+  try {
+    return path.dirname(createRequire(import.meta.url).resolve("@anthropic-ai/sandbox-runtime/package.json"));
+  } catch (error) {
+    // Only a package Node can't find: one that stops exposing its package.json still fails loudly.
+    if (!isModuleNotFound(error)) throw error;
+    return undefined;
+  }
+}
+
+/** Node's answer for a module it can't find from where it looked. */
+const isModuleNotFound = (error: unknown): boolean =>
+  error instanceof Error && "code" in error && error.code === "MODULE_NOT_FOUND";
+
+const sandboxPackage = sandboxPackageDir();
 const packagedSeccomp =
   process.platform === "linux"
     ? packagedVendorFile(sandboxPackage, path.sep, "seccomp", process.arch, "apply-seccomp")
@@ -110,6 +134,8 @@ export interface SandboxPolicy {
   allowRead: string[];
   denyRead: string[];
   denyWrite: string[];
+  /** macOS: the system services, beyond sandbox-runtime's own list, a process here may look up. */
+  machServices?: string[];
 }
 
 export interface RunRequest {
@@ -193,6 +219,11 @@ export interface SandboxOptions {
    * `writableRoots`.
    */
   readableHome?: readonly string[];
+  /**
+   * macOS: system services the one CLI that runs inside this sandbox needs beyond sandbox-runtime's
+   * own list. Only a name in `SandboxMachService` is opened; any other is dropped.
+   */
+  machServices?: readonly string[];
   /** Set false only in unit tests that assert the fallback path. */
   enabled?: boolean;
   /**
@@ -223,6 +254,12 @@ export interface SandboxOptions {
   startInBackground?: boolean;
   /** Where the sandbox says how long each step of its start took (Windows). */
   log?: (line: string) => void;
+  /**
+   * Windows: told of each write root the sandbox left out because Windows refused its grant (the
+   * person may not change the folder's permissions); commands there fail with
+   * `SandboxLaunchCode.WriteRefused` and the rest run.
+   */
+  onWriteRefused?: (dir: string) => void;
   /**
    * Linux: the bubblewrap to run (default: the app's own copy beside its executable when there is
    * one, else the system's on PATH; substrate/linux-bubblewrap.ts says why).
@@ -286,6 +323,16 @@ const SANDBOX_SHELL = "/bin/bash";
 const NESTED_SHELL_ENV = { SHLVL: "1" } as const;
 /** The shell a command runs under when the sandbox is off (tests of the fallback path only). */
 const UNSANDBOXED_SHELL = "/bin/sh";
+/** The shell a bridged command runs under inside the Linux sandbox, started by the bridge's relay. */
+const BRIDGED_SHELL = "/bin/sh";
+
+/** Whether a child has the three stdio pipes it was spawned with. */
+function hasStreams(child: ChildProcess): child is ChildProcessWithoutNullStreams {
+  return child.stdin !== null && child.stdout !== null && child.stderr !== null;
+}
+
+/** Open a port of a loopback server's on this computer's loopback (`spawnLongLived`'s `loopbackServer`). */
+export type LoopbackExpose = (port: number, protocol: LoopbackProtocol) => Promise<void>;
 
 /** The enabled macOS and Linux sandboxes sharing one sandbox-runtime, and its reset in flight. */
 interface RuntimeHold {
@@ -311,6 +358,7 @@ function runtimeHold(runtime: SandboxRuntime): RuntimeHold {
 
 const MESSAGE = {
   NotInitialized: "sandbox-runtime is not initialized",
+  NoStreams: "the process started without its stdio pipes",
   EmptyArgv: "sandbox-runtime returned an empty command",
 } as const;
 
@@ -554,6 +602,26 @@ export function claudeFoldersIn(folders: readonly string[]): string[] {
 }
 
 /**
+ * The macOS system services a sandbox may be given on top of sandbox-runtime's own list. A value is
+ * the service's own name: never rename one.
+ */
+export const SandboxMachService = {
+  /**
+   * The certificate checker. A Go program (Antigravity's CLI) verifies every HTTPS certificate
+   * through it, so without it none of its connections opens. sandbox-runtime leaves it out by
+   * default because a process can pass data out through the lookups it asks trustd to make.
+   */
+  Trust: "com.apple.trustd.agent",
+} as const;
+export type SandboxMachService = (typeof SandboxMachService)[keyof typeof SandboxMachService];
+
+/** The named services a sandbox may open: the listed ones alone. */
+function ownMachServices(named: readonly string[] = []): string[] {
+  const known: readonly string[] = Object.values(SandboxMachService);
+  return [...new Set(named.filter((name) => known.includes(name)))];
+}
+
+/**
  * The named homes a sandbox may exempt: exactly the sign-in home of a CLI that runs inside the
  * studio's sandbox, never a secret path, another CLI's home, a parent folder or a relative path.
  */
@@ -585,6 +653,7 @@ function sandboxPolicy(options: SandboxOptions, scratchDir: string, platform: No
       ...options.secretPaths,
       ...(options.denyWrite ?? []),
     ],
+    machServices: ownMachServices(options.machServices),
   };
 }
 
@@ -601,6 +670,7 @@ export class ProcessSandbox {
   #starting: Promise<void> | null = null;
   #initError: Error | null = null;
   #log: ((line: string) => void) | null = null;
+  #onWriteRefused: ((dir: string) => void) | undefined;
   /** Linux: the bubblewrap sandbox-runtime runs, when not the system's on PATH. */
   #bubblewrap: string | null = null;
   #toolPath: (() => Promise<string>) | null = null;
@@ -629,6 +699,7 @@ export class ProcessSandbox {
     sandbox.#seams = options.windows ?? {};
     sandbox.#dataRoot = longDataRoot(options.dataRoot, platform);
     sandbox.#log = options.log ?? null;
+    sandbox.#onWriteRefused = options.onWriteRefused;
     sandbox.#bubblewrap = platform === StudioPlatform.Linux ? (options.bubblewrap ?? ownBubblewrap()) : null;
     if (!sandbox.enabled) return sandbox;
     if (options.startInBackground && platform === StudioPlatform.Windows) await sandbox.#startInBackground();
@@ -648,6 +719,26 @@ export class ProcessSandbox {
 
   get initError(): Error | null {
     return this.#initError;
+  }
+
+  /**
+   * The only loopback ports a sandboxed process may connect to, where the sandbox fences loopback:
+   * on Windows srt-win's egress filter lets the sandbox user reach its proxies' range and nothing
+   * else, machine-wide (`allowLocalBinding` cannot open it for one process), so a server that a
+   * sandboxed process's own clients must reach listens there. Null where loopback is the
+   * process's to use: macOS (`allowLocalBinding`) and Linux (its own network namespace).
+   */
+  loopbackPorts(): readonly [number, number] | null {
+    return this.#platform === StudioPlatform.Windows ? SRT_PROXY_PORT_RANGE : null;
+  }
+
+  /**
+   * Whether a sandboxed process's loopback is its own rather than this computer's: on Linux
+   * sandbox-runtime runs it in a network namespace of its own (bubblewrap `--unshare-net`), so a
+   * server it starts is reached from here only through `spawnLongLived`'s `loopbackServer` bridge.
+   */
+  ownLoopback(): boolean {
+    return this.enabled && this.#platform === StudioPlatform.Linux;
   }
 
   /** Wait for sandbox initialization before booting or recovering code that must run inside it. */
@@ -805,6 +896,7 @@ export class ProcessSandbox {
         installDir,
         ...(this.#dataRoot ? { dataRoot: this.#dataRoot } : {}),
         ...(this.#log ? { log: this.#log } : {}),
+        ...(this.#onWriteRefused ? { refused: this.#onWriteRefused } : {}),
       });
     const backend = { session, bash, read, profile, curlHome: await writeCurlHome(this.scratchDir) };
     await session
@@ -861,6 +953,9 @@ export class ProcessSandbox {
         // Windows: loopback is the install's, machine-wide, and Genex installs it closed (commands
         // reach the sandbox's proxies only); srt-win refuses a session or command that asks otherwise.
         allowLocalBinding: this.#platform !== StudioPlatform.Windows && policy.allowLocalBinding,
+        ...(this.#platform === StudioPlatform.Mac && policy.machServices?.length
+          ? { allowMachLookup: policy.machServices }
+          : {}),
       },
       filesystem: {
         allowWrite: policy.allowWrite,
@@ -892,21 +987,31 @@ export class ProcessSandbox {
      * write it to the answer's `input`, never to `child.stdin`, which srt-win does not pass on.
      */
     liveInput?: boolean;
-  }): Promise<{ child: ChildProcess; sandboxed: boolean; input: Writable }> {
+    /**
+     * The process serves on its loopback, and this computer must reach it. Where the sandbox gives
+     * it a loopback of its own (Linux, `ownLoopback`), it starts under the loopback bridge and the
+     * answer's `expose` opens one of its ports on this computer's loopback; elsewhere its loopback
+     * is this computer's and there is no `expose`.
+     */
+    loopbackServer?: boolean;
+  }): Promise<{ child: ChildProcess; sandboxed: boolean; input: Writable; expose?: LoopbackExpose }> {
     // Held open until the process is gone, as `run` holds it for the length of a run.
     const close = await this.#openDomains(request.policy);
     let live: LiveInput | null = null;
+    let bridge: LoopbackBridge | null = null;
     try {
       live = request.liveInput ? await this.#liveInput(request.command) : null;
-      const launch = live ? { ...request, ...this.#relayed(live, request.env) } : request;
-      const plan = await this.#launchPlan({ ...launch, longLived: true });
+      bridge = request.loopbackServer ? await this.#loopbackBridge(request.command) : null;
+      const plan = await this.#launchPlan({ ...this.#wrapped(request, live, bridge), longLived: true });
       const relay = live;
+      const bridged = bridge;
       const done = () => {
         plan.release?.();
         close();
         void relay?.close();
+        void bridged?.close();
       };
-      const child = this.#start(plan);
+      const child = this.#start(plan, bridged !== null);
       child.once("close", done);
       child.once("error", done);
       if (request.stdin !== undefined) {
@@ -915,12 +1020,34 @@ export class ProcessSandbox {
         child.stdin.end(plan.stdinInFile ? undefined : request.stdin);
       }
       if (relay) void relay.connect(() => child.exitCode === null && child.signalCode === null);
-      return { child, sandboxed: plan.sandboxed, input: relay?.input ?? child.stdin };
+      bridged?.attach(child);
+      const input = relay?.input ?? child.stdin;
+      if (!bridged) return { child, sandboxed: plan.sandboxed, input };
+      return { child, sandboxed: plan.sandboxed, input, expose: (port, protocol) => bridged.expose(port, protocol) };
     } catch (err) {
       close();
       await live?.close();
+      await bridge?.close();
       throw err;
     }
+  }
+
+  /** Linux, sandboxed: the bridge a loopback server is started under. Null elsewhere: its loopback is this computer's. */
+  async #loopbackBridge(command: string): Promise<LoopbackBridge | null> {
+    await this.ensureReady();
+    if (!this.ownLoopback()) return null;
+    return openLoopbackBridge({ command, shell: BRIDGED_SHELL, scratchDir: this.scratchDir });
+  }
+
+  /** The request as launched: under the live-input relay, under the loopback bridge's relay, or as it is. */
+  #wrapped<T extends { command: string; env?: Record<string, string> }>(
+    request: T,
+    live: LiveInput | null,
+    bridge: LoopbackBridge | null,
+  ): T {
+    if (live) return { ...request, ...this.#relayed(live.file, { ...request.env, ...live.env }) };
+    if (bridge) return { ...request, ...this.#relayed(bridge.file, { ...request.env, ...bridge.env }) };
+    return request;
   }
 
   /** Windows, sandboxed: the relay a process's live input goes through. Null elsewhere: stdin carries it. */
@@ -931,11 +1058,10 @@ export class ProcessSandbox {
     return openLiveInput({ command, shell: backend.bash, scratchDir: this.scratchDir });
   }
 
-  /** The relay in place of the caller's command, by the studio's own Node, its variables beside the caller's. */
-  #relayed(live: LiveInput, env: Record<string, string> | undefined): { command: string; env: Record<string, string> } {
+  /** A relay (`file`) in place of the caller's command, by the studio's own Node, with `env`. */
+  #relayed(file: string, env: Record<string, string>): { command: string; env: Record<string, string> } {
     const node = shellQuote(mixedPath(longPath(process.execPath, this.#platform)));
-    const file = shellQuote(mixedPath(live.file));
-    return { command: `export ELECTRON_RUN_AS_NODE=1; exec ${node} ${file}`, env: { ...env, ...live.env } };
+    return { command: `export ELECTRON_RUN_AS_NODE=1; exec ${node} ${shellQuote(mixedPath(file))}`, env };
   }
 
   /**
@@ -944,23 +1070,28 @@ export class ProcessSandbox {
    * does not throttle). On Windows srt-win's job object holds the tree, and a detached child
    * would open a console window.
    */
-  #spawn(plan: LaunchPlan): ChildProcessWithoutNullStreams {
-    return spawn(plan.file, plan.args, {
+  #spawn(plan: LaunchPlan, ipc: boolean): ChildProcessWithoutNullStreams {
+    const options = {
       cwd: plan.cwd,
       env: plan.env,
-      stdio: ["pipe", "pipe", "pipe"],
       detached: this.#platform !== StudioPlatform.Windows,
       windowsHide: true,
-    });
+    };
+    if (!ipc) return spawn(plan.file, plan.args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+    // The loopback bridge's channel: a socket pair made here, inherited through the sandbox.
+    const child = spawn(plan.file, plan.args, { ...options, stdio: ["pipe", "pipe", "pipe", "ipc"] });
+    if (!hasStreams(child)) throw new Error(MESSAGE.NoStreams);
+    return child;
   }
 
   /**
-   * Spawn `plan`; when `spawn` itself throws (no child ever existed, so no close or error event
-   * will), hand the plan's hold on the grant session and its files back first.
+   * Spawn `plan` (with an IPC channel when `ipc`); when `spawn` itself throws (no child ever
+   * existed, so no close or error event will), hand the plan's hold on the grant session and its
+   * files back first.
    */
-  #start(plan: LaunchPlan): ChildProcessWithoutNullStreams {
+  #start(plan: LaunchPlan, ipc = false): ChildProcessWithoutNullStreams {
     try {
-      return this.#spawn(plan);
+      return this.#spawn(plan, ipc);
     } catch (error) {
       plan.release?.();
       throw error;
@@ -1028,6 +1159,9 @@ export class ProcessSandbox {
     const files: string[] = [];
     const removeFiles = () => Promise.all(files.map((file) => rm(file, { force: true })));
     try {
+      // A folder Windows refused the write grant on: a command there would fail on its first write.
+      const refused = backend.session.refusedAt([...needed.write, longPath(request.cwd, this.#platform)]);
+      if (refused !== null) throw new SandboxLaunchError(SandboxLaunchCode.WriteRefused, refused);
       if (!backend.session.covers(needed))
         throw new SandboxLaunchError(SandboxLaunchCode.NotGranted, [...needed.write, ...needed.read].join(", "));
       if (request.longLived) await backend.session.refreshAncestors();

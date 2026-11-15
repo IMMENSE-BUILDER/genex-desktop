@@ -1,6 +1,5 @@
 /** The props every inspector panel shares, and the lightbox's picture. */
 import type { KeepBuildingTap } from "../../keep-building.ts";
-import type { AgentScreenFrame } from "../../../shared/agent-screen.ts";
 import type { RunSummary } from "../../../shared/run-summary.ts";
 import type {
   AssetInfo,
@@ -14,7 +13,6 @@ import type { NoteTarget } from "../../reply-about.ts";
 import type { PartRow, Step } from "../../run-steps.ts";
 import type { BuildTimeline } from "../../run-graph-builds.ts";
 import type { Notify } from "../../state/toasts.ts";
-import type { ReferenceFrame } from "../run-stills.ts";
 
 export type { NoteTarget } from "../../reply-about.ts";
 
@@ -46,24 +44,15 @@ export interface InspectorProps {
   blender: BlenderNode | null;
   assets: AssetsNode | null;
   project: string | null;
-  references: ReferenceFrame[];
   baseSrc: string | null;
   resultSrc: string | null;
   resultPath: string | null;
   /** the result's picture is a part's, lent while the new build is being tried */
   resultBorrowed: boolean;
-  /** the result's picture was taken as the starting one was (the final capture): only then are they compared */
-  resultPairsWithBase: boolean;
-  /** a Loop's build history, when the graph draws one */
+  /** a Loop's build history, when the run has one */
   timeline: BuildTimeline | null;
-  /** the lead's newest view of the game, while it has the run */
-  leadFrame: AgentScreenFrame | null;
   onClose: () => void;
   onSelect: (id: string) => void;
-  onPrev: () => void;
-  onNext: () => void;
-  /** The try whose judges' notes its card opens on, already showing — a gate on the graph asked for them. */
-  notesFor: string | null;
   onLight: (items: LightItem[], index: number) => void;
   onOpenJob: (job: AssetInfo) => void;
   /** Put a chip naming this node in the chat's composer; null when there is no chat to reply in. */

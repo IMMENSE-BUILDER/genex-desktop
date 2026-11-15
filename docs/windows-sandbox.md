@@ -27,11 +27,19 @@ the setup screen opens on `git-missing`. What differs from macOS:
   `initialize()` is tried a second time when srt-win's egress check (`wfp`) times out, and again
   after 5 s and 10 s when Windows refuses that check's start of srt-win as the sandbox user
   (below); a timed-out ACL step fails at once, since a retry would repeat its walk under each
-  folder srt-win grants and each denied path's parent.
+  folder srt-win grants and each denied path's parent. A write root whose persistent grant Windows
+  refuses with ERROR_ACCESS_DENIED (a game folder on another drive whose permissions the person
+  may not change: a field PC's agents never started) is left out, with the write denies inside it,
+  and `initialize()` runs again with the rest (`refusedWriteRoot`). It stays out for the launch; a
+  command that works in it or writes to it is refused (`write-refused`, which says to move the game
+  or own the folder and restart), the log says `left … out of the sandbox`, and analytics hears
+  `sandbox_folder_left_out`. Any other grant failure still stops the start.
 - Core startup awaits `ProcessSandbox.ensureReady()` before migrating or booting the harness.
   A failed background sandbox start reports its original error without rewinding or reseeding
   valid harness edits. A later Try again can retry initialization; broken harness code still
-  uses its existing recovery once the sandbox is ready.
+  uses its existing recovery once the sandbox is ready. A message sent while that start runs
+  waits for it (the chat shows it sending), up to five minutes, and goes once the harness is up;
+  it is refused only when the start failed or ran past that.
 - SRT 0.0.81 starts a session off the event loop (one `acl grant --persistent`, ten minutes for a
   root's first walk, then the egress check). The version-guarded
   [SRT patch](../scripts/patch-sandbox-runtime.mjs) runs the failed-initialization rollback and the
@@ -59,7 +67,9 @@ the setup screen opens on `git-missing`. What differs from macOS:
   every start ("Access is denied"). The setup check (`windowsSetupGaps`) reads its start type with
   `sc qc seclogon`, which needs no administrator (the number decides; the word after it is
   localized), beside srt-win's two status probes, and a disabled service is a setup gap
-  (`WindowsSetupNeed.LogonService`) the setup card names in one line. Set up sets it to Manual
+  (`WindowsSetupNeed.LogonService`) the setup card names in one line. The gap also counts when
+  `sc` could not say but srt-win's `user status` reports `seclogon: "disabled"`, the field
+  `initialize` refuses on with an uncoded "Sandbox dependencies not available" error. Set up sets it to Manual
   (`sc config seclogon start= demand`, [`windows-logon-service.ts`](../src/substrate/windows-logon-service.ts))
   through Windows PowerShell's `Start-Process -Verb RunAs` before srt-win's install. srt-win's own
   typed `seclogon_disabled` maps to the same need. srt-win
@@ -91,8 +101,10 @@ the setup screen opens on `git-missing`. What differs from macOS:
   time fails the start as `SandboxLaunchCode.SrtWinTimeout`, whose words name the antivirus. Genex installs with `skipProfileGrant` (`--skip-profile-grant`):
   Genex grants its own folders, and the sandbox account is one per PC, so srt-win's read grant on
   the whole profile would let every sandboxed session of every user read this person's
-  configuration. It passes `--force` only over a newer release's install, never over another
-  configuration in place (another program's, such as a loopback mode Genex does not use).
+  configuration. It passes `--force` only over another release's install (an older Genex's,
+  setup version 2, opened loopback, which Update would otherwise refuse as
+  `install_config_conflict`), never over another configuration of the same release, which may be
+  another program's.
 - The sandbox user reads nothing in the profile unless granted, so each folder between
   `USERPROFILE` and a root gets `(S,RA)` (read attributes and synchronize, no listing) after every
   apply, since srt-win's deny stamps replace the entry. Synchronize matters before Windows 11
@@ -200,7 +212,11 @@ the setup screen opens on `git-missing`. What differs from macOS:
   sandbox user can open nothing at the path or under it, the start goes on without that deny, and
   the log says so (`left … as it is`). The deny stays recorded, so every start asks for it and
   checks again. A deny refused on a path the sandbox user could open, or refused for any other
-  reason, still stops the start. A per-command
+  reason, still stops the start. A read grant refused so (Genex run from `C:\Program Files\Genex`,
+  whose entries a standard user may not change: a field PC's agents never started) goes on the
+  same way where the path's own entries already let Everyone, Authenticated Users, BUILTIN\Users or
+  the group read and run it and pass that down to its files and folders, and hold no deny but
+  SYSTEM's, the Administrators' or the person's (`OpenAt`). A per-command
   deny Genex already sets is not sent again. Without the group, where PowerShell cannot run the
   batch or the running user holds the SID, srt-win sets every grant and deny as before, and the
   log says so (`own entries off`). srt-win keeps a missing deny path (it makes its placeholder), a

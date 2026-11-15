@@ -7,7 +7,7 @@ How agents play and look at what they build: one tool, one referee, swappable ta
 | Layer | What | Code |
 | --- | --- | --- |
 | 0 · delivery | How a provider's CLI receives the tool: Claude Code as an in-process MCP tool (deferred behind its tool search, like every live and connector tool, while the studio's `checkpoint`, `capture`, `run_command` and a chat's interview tools load with the prompt), OpenCode as a local MCP server relayed over the file bridge (`studio-mcp-shim.ts`, pictures inline), Codex through the file bridge (`studio-bridge.ts`, the fallback) or app-server dynamic tools where enabled, Bonsai and OpenRouter in `LocalSessions`; Ollama's plain chat holds no game `computer` tool | `src/substrate/engines/*` |
-| 1 · tool | One `computer` tool: Anthropic's `computer_toolset_20260801` actions, the studio verbs (`camera`, `state`, `reload`, `console`), `batch` and `observe`. Its description and action list are built from the target's capabilities, so a verb the target lacks is never offered and calling it gets a sentence, not a silent no-op | `src/substrate/computer-tool.ts`, `computer-tool-prompts.ts`, `computer-vocabulary.ts` |
+| 1 · tool | One `computer` tool: Anthropic's `computer_toolset_20260801` actions, the studio verbs (`camera`, `state`, `reload`, `console`, `recap`), `batch` and `observe`. Its description and action list are built from the target's capabilities, so a verb the target lacks is never offered and calling it gets a sentence, not a silent no-op | `src/substrate/computer-tool.ts`, `computer-tool-prompts.ts`, `computer-vocabulary.ts` |
 | 2 · session | The referee: parse, refuse what the target cannot do, keep the action budget, answer, write the trace | `src/main/core/computer-session.ts`, `src/substrate/computer-trace.ts` |
 | 3 · targets | A `ComputerTarget` with graded capabilities: the browser preview, a game speaking the Genex Play Protocol, and the person's desktop or a VM (cua-driver) | `src/substrate/computer-target.ts`, `src/shared/computer-target.ts`, `src/main/core/browser-preview-target.ts` |
 
@@ -47,11 +47,32 @@ than evidence from inside it.
   what the loaded one says. A move the target took only in part says `PARTLY` with the count; a
   batch stops where the game refused everything. An action that throws is answered as an error and
   still written to the trace.
+- **Inputs that change nothing.** On a target whose state is the game's own (a Play Protocol game,
+  an engine editor's play), each move that pressed something the game took (a key, a click, typing,
+  a look, a named action; not a hover or a scroll) is compared with the last state seen
+  (`src/substrate/computer-response.ts`). The game's `checksum` decides when it keeps one; otherwise
+  what moves with time alone is set aside (`volatile`, the input echo, `gameSeconds`, `frame`, `fps`,
+  `held`). From the third such move in a row that changed nothing, the answer adds a note: something
+  may hold the controls, or, when the game's clock stood too, the game is paused or stopped. A
+  session's first input has no state before it and is not judged. The note decides nothing.
+- **What the game's detectors noticed.** A state that carries `findings` (Unreal's `play-state`, see
+  [plugins](plugins.md)) has them taken out of the state the answer shows and said on a line of
+  their own (`note: the game's detectors noticed: …`), kept on the action's trace row, and set aside
+  when moves are judged. Unity's play reports none yet.
+- **Recap.** Every session offers `recap`, which costs no move. It answers what the session's moves
+  amounted to, from its trace rows kept in memory (the last 2,000): inputs, waits and looks; the
+  inputs that changed nothing and their longest run (and in how many the clock stood); the moves
+  the target refused or took only in part; the actions that failed, with why; what the session
+  refused; the game's detectors' findings by kind (how often told, where first seen); and the
+  console's errors since load grouped by message. With none of those it says so
+  (`src/substrate/computer-recap.ts`). The tool asks the model to read it before reporting what play
+  showed.
 - **Trace.** `trace.jsonl` beside the session's frames (a second session in the same folder writes
   `trace-2.jsonl`, and frames are numbered on past what the folder already holds, even after a
 restart, so none overwrites another's): one row per action with
-  its arguments, route, frame, cursor, simulated milliseconds, input taken of planned, and
-  `refused`/`failed` marks.
+  its arguments, route, frame, cursor, simulated milliseconds, input taken of planned,
+  `refused`/`failed` marks, and `still` (`unchanged` or `frozen`) on a judged move that changed
+  nothing; the summary counts those as `stillInputs`.
 - **Interaction evidence is the host's only.** Nothing in the studio verifies an interaction, so a
   `run_interaction_evidence` record, like a `chat_judge_result`, is written by the host alone
   (`harness-events.ts` `HOST_CUSTOM_EVENTS`): `events.append` refuses a harness batch holding one.
@@ -59,9 +80,9 @@ restart, so none overwrites another's): one row per action with
 
 ## Who holds it
 
-Workers (a capture grant, unless `computer: false`) and the director hold `computer` on a pooled
-window of their own, never Live; the chat's own session holds it on a game played in its engine's
-editor. A judge is a second opinion the lead asks for with `judge`: it reads the pictures it is
+Workers (a capture grant, unless `computer: false`) and the chat's own session hold `computer` on a
+pooled window of their own, never Live, the session in its turns as a Loop's lead too (one window,
+role `builder`); the chat's own session holds it on a game played in its engine's editor. A judge is a second opinion the lead asks for with `judge`: it reads the pictures it is
 given and holds no computer.
 
 A chat's earlier `chat_judge_result` rows (from before Genex dropped the chat's `judge_play`) still
@@ -94,13 +115,26 @@ session, and once the plugin answers `not-playing` (the play ended, or the perso
 lets that play go, so the next action opens a fresh one. The target calls its engine
 plugin's play tools ([`shared/engine-play.ts`](../src/shared/engine-play.ts): `play-open`,
 `play-input`, `play-shot`, `play-state`, `play-pause`, `play-close`, harness-only, each needing the
-plugin's editor lock for its call, the person first). Unreal provides them
+plugin's editor lock for its call, the person first). An engine whose manifest declares
+`play.walk` also provides `play-walk` and `play-look` (`EnginePlayOptionalTool`): its target then
+offers `walk_to` and `look_at`, each one move that runs with the game's clock until the engine
+answers how it ended (arrived, stuck and why, what it tried; walked to an actor, how far off the
+player faces it). An engine whose manifest declares `play.pilot` also provides `play-pilot` and
+`play-pilot-step`: its target offers `pilot text=<file> [duration]`, one move that runs a pilot (a file
+of the game's project with moves that play by themselves every frame) until it is over
+([`editor-pilot.ts`](../src/main/core/editor-pilot.ts)). The studio starts it, then steps it every
+60 ms; with a TypeSafe key in Settings each ask the pilot puts out goes to Jev and the answer rides on
+the next step, else the pilot is started to choose by its own order. The answer says how it ended
+(done, failed, stalled, timed out, stopped, broken), with the pilot's evidence, its stages, a tally
+per move, who decided (asks answered, median latency, input tokens), its errors and last moments.
+Unreal provides them
 ([`plugins/unreal/computer-play.ts`](../src/plugins/unreal/computer-play.ts)): Play In Editor through
 the Genex editor helper the editor queue already uses, keys held on the game's own clock (web key
 codes, named as Unreal names them: `KeyW` is `W`; the mouse buttons as `MouseLeft`… are
 `LeftMouseButton`…), one frame of the player's mouse for `look` and the wheel (Unreal's `Mouse2D` and
 `MouseWheelAxis`, held still a frame before they are let go, since letting go of a forced analog key
-injects its opposite), the player's view by `capture_play`, and `player_state` as the state goals
+injects its opposite), the player's view by `capture_play` with its on-screen UI (the HUD, menus
+and an inventory, cut from a shot of the editor's window), and `player_state` as the state goals
 are checked against. A session joins a play that already runs and ends only one it started; a play
 it starts warms up 2 game seconds before the first look and is marked as the agent's
 (`agent-play.ts`), so the lock's person-first probe does not read it as the person playing, and a
@@ -127,7 +161,9 @@ of more than one (the target's `players` option, never more than declared) has t
 then on (`selectPlayer`), and the target sends `player` to `play-input`, `play-shot` and
 `play-state` only above 1, so a one-player engine sees the wire it always did. `play-shot` answers
 base64 `data` with its `mime` (`image/jpeg` or `image/png`; anything else is read as PNG, and `png`
-is still read), refused in plain words over `MAX_PLAY_SHOT_BYTES` (1 MB). An engine refuses what it
+is still read). One over `MAX_PLAY_SHOT_BYTES` (1 MB) is re-encoded as a JPEG at the view's width
+(Electron's codec, `editor-play-session.ts`), and refused in plain words only when even that doesn't
+fit (Unreal's 1280×720 PNG of a lit level is often just over 1 MB). An engine refuses what it
 cannot do at all with `unsupported`: a pause is then asked once and the clock is known to run on;
 Unreal answers it for more than one player. The toy engine fixture (`tests/fixtures/toy-engine-plugin`)
 plays three players this way (`editor-play-target.test.ts`).
@@ -236,9 +272,15 @@ Chromium's accessibility wakes on first asking), and which
 app a click at a point reaches (Windows' own hit test, `WindowFromPoint` up to the top-level window,
 which asks nothing of that app, so a busy one such as Roblox Studio with a menu open cannot stall it
 as UI Automation's `FromPoint` did), with its window's handle so the tree fallback skips cua's slow
-window list. It also brings an app forward by its
+window list. A window whose UI Automation never answers (Unreal Editor's `UnrealWindow`: cua's walk
+times out before its first element) is asked for the tree the agent is shown once in 30 s, and its
+answer then stands in, so acting by pixel in it waits on nothing; the password check before typing
+still asks afresh, and the state after an action names the app in front without that check. It also brings an app forward by its
 executable (`raise`, the PC's `bring_to_front`: the newest responding window, restored if minimized,
-with an Alt tap when Windows refuses a background process the foreground). It says its view of the primary screen
+with an Alt tap when Windows refuses a background process the foreground), lists an app's shown
+windows front first with the titles Windows keeps for them (`windows <exe>`: z-order, cloaked ones
+left out, titles read without asking the app) and raises one of them by its handle
+(`raise <exe> <window>`, only a window of that executable). It says its view of the primary screen
 when ready, and click points are scaled to it, whatever DPI awareness PowerShell has. An app is its
 executable in lower case (`windowsAppId`: `notepad.exe`), shown by its file description (Notepad); a
 window no process can be read for is no app, which is refused. A probe that cannot start (PowerShell
@@ -267,9 +309,10 @@ environment, outside the ProcessSandbox, which would deny it the screen.
   app and its grants are Electron's, not those of the terminal or agent that ran the script.
   Moving to a newer driver: change both pins and the notices, then verify the web and desktop
   scenarios live on both systems.
-- **The setting.** Settings → Permissions → **Let agents use your computer** ("They ask before each app."; `computerControl`
-  in the studio's `settings.json`) is off for every install, new or existing; only an explicit on
-  turns it on, and only macOS and Windows offer it (`computerControlOffered`,
+- **The setting.** Settings → Permissions → **Let agents use your computer** ("They ask before each app, except in Auto and Bypass."; `computerControl`
+  in the studio's `settings.json`) is on by default. A `settings.json` saved before that default
+  (no `computerControlDefaultOn`) turns it on once, since it cannot tell an off someone chose from
+  one never touched; from then on the person's choice is kept. Only macOS and Windows offer it (`computerControlOffered`,
   [`shared/computer-control.ts`](../src/shared/computer-control.ts)). Off, no session is handed the `desktop` tool, no consent card
   shows, the driver is never looked for or started, and `desktop.computer` answers that computer
   control is off in Settings (an answer, never an error). Turning it off stops every running driver
@@ -277,17 +320,26 @@ environment, outside the ProcessSandbox, which would deny it the screen.
   call; turned on, the next call or session works as below.
 - **Who holds it.** With the setting on, the chat's own session on every engine is handed a `desktop`
   tool (the computer vocabulary under its own name, so it sits beside a game's `computer`), where a
-  driver is found (`desktop-session.ts`). The harness's own loop (Ollama) gets the same tool through
-  `desktop.computer` and the seed's `tools/desktop-tools.ts`. Unattended sessions never hold it.
+  driver is found (`desktop-session.ts`), and so is its Loop's lead seated in the game folder
+  answering that chat, so the Loop keeps the person's computer (and an editor game's play) while it
+  runs; the lead's card waits through the chat's own turns, as its plugin calls' do. The harness's own loop (Ollama) gets the same tool through
+  `desktop.computer` and the seed's `tools/desktop-tools.ts`. Workers, reviewers and other
+  unattended sessions never hold it. The tool's description and the chat's own rules tell the agent
+  to do steps on the computer itself (launchers, stores, installers, an engine's editor), leaving the
+  person only passwords, the system's permission prompts, payments and choices about their work.
 - **Consent.** Nothing moves before the person answers a consent card in the chat (the studio's own,
   `studio-desktop`): once for the chat, then once for each app the agent reaches. The yes lasts the
   chat's later turns (and a harness restart) until the person presses Stop, uses the stop shortcut
-  or turns computer control off (`stopsAll`); then the next turn asks again. A chat in Bypass asks
-  neither. On a PC a named app is checked against what runs (`running <exe>` in the window probe):
+  or turns computer control off (`stopsAll`); then the next turn asks again. A chat in Auto or
+  Bypass asks neither (`DESKTOP_UNASKED_MODES`): the setting being on is the person's yes there, call
+  by call and never kept as the chat's yes, so a switch to Manual asks again; a card waiting when the
+  person switches to Auto or Bypass is approved. On a PC a named app is checked against what runs (`running <exe>` in the window probe):
   a name no process has (a guessed `robloxstudio.exe`) is refused before any card. Inside a VM the
   session's yes covers every app. The turn answering an assist the person pressed (or approved on its
   card) asks neither: that press was their yes, and the grant keeps the turn to the plugin's apps. A yes stands while the driver fails to connect (missing grants, no
   driver): the next call retries without a new card. A stop ends it, and the next call asks again.
+  A card nobody answers before it expires is no answer (`DesktopAnswer.Unanswered`): the model reads
+  that nobody answered and nothing moved, never that the person said no, and the next call asks again.
 - **Never driven.** The studio itself (so an agent cannot answer its own card), password managers,
   System Settings, Keychain Access and the system's password prompts; on Windows the same by
   executable (`NEVER_DRIVEN_WINDOWS_APPS`), every packaged app's frame (`ApplicationFrameHost.exe`,
@@ -307,7 +359,9 @@ environment, outside the ProcessSandbox, which would deny it the screen.
   (`list_apps`, bundle id in any case or app name), so every check sees the app's own id. A Mac runs
   some apps as one process per document (Roblox Studio per place), so `window=<part of a title>`
   raises the process owning the window whose title holds it (`list_windows`), and a title no window
-  has is answered with the titles there are; Windows takes no `window`. When no
+  has is answered with the titles there are. On Windows one process may show several (Unreal
+  Editor's Fab beside its main window): the probe's `windows` lists them, the one picked is raised by
+  its handle, and only that window in front counts as raised. When no
   browser runs, `open_page text=<https address>` opens a page in the person's default browser
   (`shell.openExternal`), only in the turn holding an assist's grant and only on a host the grant's
   engine declares (`engine.pages`, exactly); credentials, ports and other schemes are refused.
@@ -316,17 +370,24 @@ environment, outside the ProcessSandbox, which would deny it the screen.
   a grant's turn ends, Genex brings its own window back to the front, so the person sees the
   publish is done. `app_look`, which only looks and so needs no setting ([tool permissions](tool-permissions.md#looking-at-apps)),
   never looks at these apps or Genex's own windows either.
-- **Never building or play-testing.** The apps an enabled engine plugin declares for this system
-  (`engine.apps.mac` or `engine.apps.windows`, its editor) are refused in plain words ("use the engine's own tools", and a
-  setup click or a publish goes through its plugin's tool) before
-  the person is asked about them, unless the chat holds that plugin's setup assist; the tool's own
-  description says so too. While an assist holds the chat, every app outside its grant is refused,
-  except that an assist whose engine declares pages (`engine.pages`, Roblox's Creator Hub) asks for
-  any app that is no engine's editor (the person's browser) on its card, as the press covered only
+- **An engine's apps.** Outside a setup assist, an engine's editor and launcher are apps like any
+  other: the agent does steps there itself (Epic's launcher, Fab, a dialog) and the tool's
+  description tells it to prefer the engine's own tools to build and play-test. While an assist
+  holds the chat, every app outside its grant (`engine.apps.mac` or `engine.apps.windows`) is
+  refused, except that an assist whose engine declares pages (`engine.pages`, Roblox's Creator Hub)
+  asks for any app no engine declares (the person's browser) on its card, as the press covered only
   the grant's apps; Unreal's install assist, which declares none, reaches only Epic's launcher.
   The apps the studio never drives stay refused whatever a grant names (`engineAppRefusal`), and so
   do the apps an enabled engine's games are played in (`engine.playerApps`, such as Roblox's
   player): no agent plays in a live server, not even in a setup assist.
+- **Turn computer control on for a chat** (`computerControlAssist`, the plugin service
+  `game.computer.control`). An agent that must click in an app its own tools can't reach (Unreal's
+  `click-interface`: a game's C++ Slate menus during a playtest) calls its plugin's tool; with the
+  setting off the studio's card `studio-computer-setting` asks the person, macOS's grants follow,
+  and the chat's next turn starts with the task (this turn has no desktop tool). With it on, it
+  answers `already-on` and posts nothing; a no on the card is held for the chat for 30 minutes (asked
+  again meanwhile, it answers `declined` with no card). It grants no app: the engine-app guard and each app's
+  own card still apply (Unreal Editor is not one of Unreal's declared apps, so its card asks once).
 - **Do it for me** ([`desktop-assist.ts`](../src/main/core/desktop-assist.ts), the plugin service
   `game.engine.assist`). Setup clicks and publishing the person approved, only: a switch or dialog
   only the engine's window offers. The person starts one, by a plugin action they pressed or a tool
@@ -348,7 +409,7 @@ window probe's `raise` on a PC), and again before an action that finds Genex in 
 app reopened behind Genex), since
   nothing else it may click (the Dock, Stage Manager) could. A computer with no driver (Linux, a development build without one) answers `unavailable`,
   and `game.engine.canAssist` tells a plugin so beforehand, so it shows its click path instead of the button. Unreal's
-  install card hands the install of Unreal 5.8 in Epic's launcher this way: its `engine.apps` names
+  install card hands the install of Unreal in Epic's launcher this way: its `engine.apps` names
   Epic's launcher, never Unreal's editor ([plugins](plugins.md)). Roblox Studio's
   publishing is the one assist that is not a setup click ([plugins](plugins.md)): the person
   presses Publish to Roblox or Publish an update (no card: the press is the go-ahead), or approves the agent's `first-publish` card

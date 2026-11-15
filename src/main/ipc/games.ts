@@ -4,15 +4,13 @@ import { CodedError } from "../../shared/errors.ts";
 import { validateGameCover, WorkspaceRefusal } from "../../shared/game-library.ts";
 import { t } from "../../shared/i18n.ts";
 import { UiEvent } from "../../shared/ui-events.ts";
+import { inventoryFailure } from "../game-assets.ts";
 import type { RunSummaryReader } from "../run-summary-reader.ts";
 import type { StudioCore } from "../studio-core.ts";
 import type { IpcHandle } from "./registrar.ts";
 
 /** The longest side a cover image may have, in pixels. */
 const COVER_MAX_PX = 512;
-/** The reference stills the Builds tab's prompt card shows: how many, and their long side in pixels. */
-const PROMPT_CARD_STILLS = 6;
-const PROMPT_CARD_STILL_PX = 640;
 
 /**
  * Why a game library request from the renderer is refused: the cover's words reach the person,
@@ -38,6 +36,12 @@ export function registerGamesIpc(handle: IpcHandle, { core, runSummaryReader, pu
     if (trash) await shell.trashItem(dir).catch(() => {});
     pushUiEvent({ type: UiEvent.GameChanged, payload: { project: payload.project } });
     return true;
+  });
+
+  // A game being made plays its own folder's app: the core finds it by the game's name, never a path.
+  handle("studio:game.play-build", async (payload) => {
+    if (typeof payload?.project !== "string" || !payload.project) throw new Error(MESSAGE.projectRequired);
+    return core.playGameBuild(payload.project);
   });
 
   // A chosen folder is the renderer's word for a path: the core checks it by its real path before
@@ -69,18 +73,37 @@ export function registerGamesIpc(handle: IpcHandle, { core, runSummaryReader, pu
   handle("studio:game.engine.undo", async (payload) => core.undoEngineLink(payload));
   handle("studio:games", async () => core.games.list());
   handle("studio:snapshots", async () => core.snapshotIndex.all());
-  // The reference stills the user gave a game (`<project>/references/`), small, for the Builds tab's prompt card.
-  handle("studio:game.references", async (payload) =>
-    core.referenceStills(payload.project, { max: PROMPT_CARD_STILLS, maxPx: PROMPT_CARD_STILL_PX }),
-  );
   // The Assets stage: what the game holds, joined with the project's own delivery ledger.
   handle("studio:game.asset.preview", async (payload) => core.previewProjectAsset(payload));
   handle("studio:game.asset.present", async (payload) => core.presentProjectAssets(payload));
   handle("studio:game.asset.rigs", async (payload) => core.projectModelRigs(payload));
+  handle("studio:game.asset.thumbnail", async (payload) => core.readAssetThumbnail(payload));
+  handle("studio:game.asset.thumbnail.keep", async (payload) => core.keepAssetThumbnail(payload));
   handle("studio:game.assets", async (payload) => {
     if (!payload || typeof payload.project !== "string") throw new Error(MESSAGE.projectRequired);
-    const events = await runSummaryReader.forProject(payload.project, core.mainThread);
+    const events = await runSummaryReader.forProject(payload.project, core.mainThread).catch((error: unknown) => {
+      throw inventoryFailure(error);
+    });
     return core.projectAssets(payload.project, events);
   });
   handle("studio:game.asset.still", async (payload) => core.readProjectAsset(payload));
+  // The Design stage: the pages of the game's board, read from its folder.
+  handle("studio:design.board", async (payload) => {
+    if (!payload || typeof payload.project !== "string") throw new Error(MESSAGE.projectRequired);
+    return core.design.board(payload.project);
+  });
+  // A picture the person dropped on the Design canvas: kept in the game's board, or refused.
+  handle("studio:design.drop", async (payload) => {
+    if (!payload || typeof payload.project !== "string") throw new Error(MESSAGE.projectRequired);
+    return core.design.drop(payload.project, payload.name, payload.data);
+  });
+  // What the person did on the Design canvas (places, notes, picks): read from, and kept in, the game's board.
+  handle("studio:design.marks", async (payload) => {
+    if (!payload || typeof payload.project !== "string") throw new Error(MESSAGE.projectRequired);
+    return core.design.marks(payload.project);
+  });
+  handle("studio:design.marks.save", async (payload) => {
+    if (!payload || typeof payload.project !== "string") throw new Error(MESSAGE.projectRequired);
+    return core.design.saveMarks(payload.project, payload.marks);
+  });
 }

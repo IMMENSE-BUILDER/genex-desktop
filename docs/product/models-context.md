@@ -7,27 +7,26 @@ setup. Blocked plans keep the request, offering settings or retry.
 
 Claude Code and Codex discover models without generating. The list names each family's newest
 model of the newest generation; older ones switch on in Settings; one in use stays listed.
-An unset pick runs the CLI's named default, else a default row. Aliases follow the CLI;
+Unset picks or effort run the CLI's named default, else a default row. Aliases follow the CLI;
 versions stay pinned.
 
-Settings shows CLI versions; Account rechecks or updates them; failed refreshes offer Try again.
+Settings shows CLI versions; Account rechecks or updates; failed refreshes offer Try again.
 Tabs switch [accounts](../connections-and-context.md#several-accounts-per-subscription).
 Unavailable picks block sends; without models, Connect AI model replaces the pill. A
 listing proves no access.
 
-Each chat keeps its model, effort and Loop; fresh games inherit the last picks (Loop starts
-off). One effort, on the
+Chats keep their model and effort; fresh games inherit the last picks. One effort, on the
 main agent's levels, serves every role (Workers and Reviewers at most high).
-Workers and Reviewers run only in Loop,
-surviving a main-agent change. Each Ollama job takes its own model; Reviewers must see images and
+The Workers pick runs the chat's workers too; Reviewers
+run only in a Loop. Both survive a main-agent change; models unlisted twice fall back. Each Ollama job picks its model; Reviewers must see images and
 check a Loop's finish.
 
 Local Models (Bonsai/Ollama) downloads and deletes. Metered
 [OpenRouter, OpenCode](../connections-and-context.md#openrouter-and-opencode), Pi,
-[Grok Build](../connections-and-context.md#grok-build) and [Cursor](../connections-and-context.md#cursor)
-are never auto-chosen unless Free and alone; OpenCode, Pi and Cursor show three. Local server
-connects LM Studio, llama.cpp or TabbyAPI
-([details](../connections-and-context.md#your-own-model-server)).
+[Grok Build](../connections-and-context.md#grok-build), [Cursor](../connections-and-context.md#cursor),
+[Antigravity](../connections-and-context.md#antigravity) (Mac) and
+[Genex](../connections-and-context.md#build-with-genex-credits) are never auto-chosen unless Free and alone; OpenRouter, OpenCode, Pi and Cursor show three. Local server connects LM
+Studio, llama.cpp or TabbyAPI ([details](../connections-and-context.md#your-own-model-server)).
 
 ## What the model knows
 
@@ -37,8 +36,9 @@ offers Compact now (or `/compact`; Claude Code, Codex and Grok use
 included, compacts automatically. Then plan limits
 ([details](../connections-and-context.md#plan-limits)).
 
-Ollama's context is a loaded model's report, else an unknown estimate. Tools and images
-need reported capability; unsupported requests fail before inference.
+Ollama's context is a loaded model's report, else an estimate that refuses nothing; refusals
+offer a 16K copy. Tools and images need reported capability; unsupported requests fail
+before inference.
 
 Game files, instructions, reference images and enabled tools contribute through channels
 ([tool setup](assets-plugins.md)). Credentials stay in protected storage, never in messages
@@ -46,21 +46,21 @@ or logs.
 
 ## Permissions
 
-Every chat's pill after Mode picks **Auto** (Recommended; stops dangerous actions),
+Every chat's permissions pill picks **Auto** (Recommended; stops dangerous actions),
 **Manual**, **Accept edits**, **Plan** or **Bypass permissions** (confirmed; Rewind
 restores only the game); modes an engine cannot honour are greyed
 ([by engine](../tool-permissions.md#other-engines)). Chats keep their mode; new ones inherit the
 last Auto, Manual or Accept edits. Chats and leads work anywhere on your Mac with your access,
 workers with the lead's tools in your mode but never in sign-ins, Genex's data or other games; a
-question lapses unanswered after five minutes ([details](../tool-permissions.md)).
+question waits for your answer ([details](../tool-permissions.md)).
 
 Read denials cover sensitive system/account locations; Codex's are advisory, not whole-disk
 isolation.
 
 ## Where to work
 
-Start at [ModelsSection](../../src/renderer/panels/ModelsSection.tsx) and
-[PromptBar](../../src/renderer/ui/PromptBar.tsx); see [Local models](../local-models.md),
-[continuation](../conversation-coordinator.md),
-[composer design](../agent/design.md#prompt-composer) and
+[ModelsSection](../../src/renderer/panels/ModelsSection.tsx),
+[PromptBar](../../src/renderer/ui/PromptBar.tsx), [Local models](../local-models.md),
+[continuation](../conversation-lifecycle.md),
+[composer design](../agent/design.md#prompt-composer),
 [judge evaluation](../judge-evaluation.md).

@@ -7,7 +7,8 @@ import { type CoreLite, coreLite } from "../helpers/core-lite.ts";
 import { copyProject, Project, TOY_PLUGIN, TOY_PLUGIN_ID } from "../helpers/project-fixtures.ts";
 import { PluginSourceKind } from "../../src/shared/plugins.ts";
 import { joinProjectAssets, readContainedImage, readGenexJobs, walkGameAssets } from "../../src/main/game-assets.ts";
-import { assetKind, isAudioFile, ProjectAssetScope } from "../../src/shared/game-assets.ts";
+import { AssetInventoryFailure, assetKind, isAudioFile, ProjectAssetScope } from "../../src/shared/game-assets.ts";
+import { errorCode } from "../../src/shared/errors.ts";
 import { DEFAULT_ASSET_FOLDERS, isAssetPath } from "../../src/shared/project-workspace.ts";
 import { isImageFile } from "../../src/substrate/game-workspace.ts";
 import type { EventEnvelope } from "../../src/substrate/types.ts";
@@ -338,11 +339,20 @@ it("the contained reader refuses everything that is not an image inside the game
   const resized = await readContainedImage(root, `assets/genex/${JOB_A}/a.png`, {
     resize: async (data) => {
       asked.push(data.length);
-      return Buffer.from("jpeg-bytes");
+      return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]);
     },
   });
   assert.deepEqual(asked, [PNG.length]);
   assert.equal(resized?.mimeType, "image/jpeg");
+  // The resized bytes name their own type: a see-through picture comes back a PNG, never called a JPEG.
+  const kept = await readContainedImage(root, `assets/genex/${JOB_A}/a.png`, { resize: async () => PNG });
+  assert.equal(kept?.mimeType, "image/png");
+  // A resize that answers no picture at all is a failed one: the original bytes stand.
+  const garbled = await readContainedImage(root, `assets/genex/${JOB_A}/a.png`, {
+    resize: async () => Buffer.from("not a picture"),
+  });
+  assert.equal(garbled?.mimeType, "image/png");
+  assert.equal(Buffer.from(garbled?.data ?? "", "base64").length, PNG.length);
   const fell = await readContainedImage(root, `assets/genex/${JOB_A}/a.png`, {
     resize: async () => {
       throw new Error("no preview");
@@ -605,6 +615,46 @@ async function readsItemPictures(): Promise<void> {
     assert.equal(await picture(file), null, file);
 }
 
+/** What an inventory read that throws `thrown` crosses IPC with. */
+const INVENTORY_FAILURES: ReadonlyArray<{ thrown: unknown; code: AssetInventoryFailure }> = [
+  {
+    thrown: Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" }),
+    code: AssetInventoryFailure.FileBusy,
+  },
+  { thrown: Object.assign(new Error("EPERM"), { code: "EPERM" }), code: AssetInventoryFailure.AccessDenied },
+  { thrown: Object.assign(new Error("EACCES"), { code: "EACCES" }), code: AssetInventoryFailure.AccessDenied },
+  { thrown: Object.assign(new Error("ENOENT"), { code: "ENOENT" }), code: AssetInventoryFailure.Missing },
+  { thrown: Object.assign(new Error("ENOTDIR"), { code: "ENOTDIR" }), code: AssetInventoryFailure.Missing },
+  { thrown: Object.assign(new Error("EMFILE"), { code: "EMFILE" }), code: AssetInventoryFailure.TooManyOpen },
+  { thrown: new TypeError("undefined is not a function"), code: AssetInventoryFailure.Failed },
+  { thrown: "a string", code: AssetInventoryFailure.Failed },
+];
+
+async function namesInventoryFailures(): Promise<void> {
+  const game = await adopted(Project.WebFolder, { "assets/a.png": PNG });
+  const checkpoints = lite.core.assetCheckpoints;
+  const records = checkpoints.records.bind(checkpoints);
+  try {
+    for (const { thrown, code } of INVENTORY_FAILURES) {
+      checkpoints.records = async () => {
+        throw thrown;
+      };
+      const failure = await lite.core.projectAssets(game.name).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      assert.equal(errorCode(failure), code, String(thrown));
+      assert.ok(String(failure).includes(String(thrown instanceof Error ? thrown.message : thrown)), "the words stay");
+    }
+  } finally {
+    checkpoints.records = records;
+  }
+  assert.deepEqual(
+    (await lite.core.projectAssets(game.name)).assets.map((asset) => asset.file),
+    ["assets/a.png"],
+  );
+}
+
 async function readsShareOneFactsWalk(): Promise<void> {
   const unity = await adopted(Project.WebFolder, {
     "ProjectSettings/ProjectVersion.txt": "m_EditorVersion: 6000.0.0f1\n",
@@ -650,6 +700,7 @@ describe("a project's assets, by its facts and plugins", () => {
   it("previews a file inside a project's asset folders and refuses one outside", previewsInsideAssetFolders);
   it("thumbnails and previews reuse the folders the listing found", readsShareOneFactsWalk);
   it("reads a store item's picture from its local draft's own folder only", readsItemPictures);
+  it("names why an inventory could not be read by the file system's code", namesInventoryFailures);
 });
 
 describe("a game's asset folders as its facts change", () => {

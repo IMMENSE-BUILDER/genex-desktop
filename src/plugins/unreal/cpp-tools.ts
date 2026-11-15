@@ -2,12 +2,12 @@
  * C++ parts on the editor's side. `landPartCpp` brings a part's code from a builder's copy into the
  * game, the editor queue's step before its hot reload. The Loop runner's two tools manage the
  * game's C++ module. `cpp-status` says whether this computer compiles Unreal C++ (a Mac whose
- * Xcode is ready), the game's module and how adding it goes. `add-cpp-module` adds the module in
- * the background, one job per project at a time: it saves the editor's work and quits Unreal (the
- * normal quit), writes the module (`cpp-module.ts`), builds it with UnrealBuildTool (`ubt.ts`) and
- * opens Unreal again, one restart of about two minutes. A project that can't take the module
- * is refused before Unreal is touched, a build that fails takes the module back out, and an editor
- * the job closed is opened again after any failure.
+ * Xcode is ready, or Windows whose Microsoft C++ tools are), the game's module and how adding it
+ * goes. `add-cpp-module` adds the module in the background, one job per project at a time: it
+ * saves the editor's work and quits Unreal (the normal quit), writes the module (`cpp-module.ts`),
+ * builds it with UnrealBuildTool (`ubt.ts`) and opens Unreal again, one restart of about two
+ * minutes. A project that can't take the module is refused before Unreal is touched, a build that
+ * fails takes the module back out, and an editor the job closed is opened again after any failure.
  *
  * Agents write the game folder and the builder's copy, so the copy follows the gate's own rules
  * (`part-files.ts`): plain `.h` and `.cpp` files at most one plain folder deep, read without
@@ -43,7 +43,15 @@ import {
 import { GAME_PROJECT_FOLDER } from "./game-folder.ts";
 import { CPP_FILE, CPP_SUBFOLDER, PART_CPP_LIMITS, PART_NAME } from "./part-files.ts";
 import { FINDER_FILE } from "./source-tree.ts";
-import { type CompileOptions, type CompileResult, canCompileCpp, compileEditor } from "./ubt.ts";
+import {
+  type CompileOptions,
+  type CompileResult,
+  type CppTools,
+  canCompileCpp,
+  compileEditor,
+  cppToolsState,
+} from "./ubt.ts";
+import { VisualStudioState, type VisualStudioStatus } from "./visual-studio.ts";
 import type { XcodeState, XcodeStatus } from "./xcode.ts";
 
 /** Where adding the game's C++ module stands: wire values the Loop's runner reads (its `CppAddState`). */
@@ -56,13 +64,19 @@ export type CppEditorTool = (typeof CppEditorTool)[keyof typeof CppEditorTool];
 
 /** How adding the module goes: its state, why it failed, and how long it took once done. */
 export type CppAdding = JobRecord<CppAddState>;
-/** `cpp-status`'s answer: whether C++ compiles here, Xcode's state, the platform, the game's module and the add job. */
+/**
+ * `cpp-status`'s answer: whether C++ compiles here, Xcode's state, Microsoft's C++ tools' state on
+ * Windows, the platform, the game's module, the add job, and whether that job runs now
+ * (`jobRunning`, read by Genex to wake the chat when it ends).
+ */
 export type CppStatus = {
   canCompile: boolean;
   xcode: XcodeState;
+  visualStudio: VisualStudioState;
   platform: string;
   module: string | null;
   adding: CppAdding;
+  jobRunning: boolean;
 };
 /** `add-cpp-module`'s answer: started in the background, or the module the game already has. */
 export type AddCppAnswer = { started: true } | { module: string; already: true };
@@ -70,9 +84,12 @@ export type AddCppAnswer = { started: true } | { module: string; already: true }
 /** What the C++ tools need from the computer, the editor and the clock. */
 export type CppToolsDeps = RestartDeps & {
   platform: NodeJS.Platform;
-  engine(): Promise<Engine | undefined>;
+  /** The installed engine `game`'s tools run with: its project's own, else the newest supported one. */
+  engine(storage: string, game: string): Promise<Engine | undefined>;
   project(storage: string, game: string): Promise<string | undefined>;
   xcode(engineDir: string | undefined): Promise<Pick<XcodeStatus, "state"> & Partial<Pick<XcodeStatus, "app">>>;
+  /** Where Microsoft's C++ tools stand on Windows; none off Windows. */
+  visualStudio?(engineDir: string | undefined): Promise<Pick<VisualStudioStatus, "state">>;
   editorCall(storage: string, game: string, tool: CppEditorTool, args: Record<string, unknown>): Promise<unknown>;
   restart: EditorRestart;
   /** Writes the module; `addCppModule` unless a test stands in. */
@@ -94,8 +111,10 @@ const NOTHING_THERE: PartEntries = { files: [], folders: [] };
 const MESSAGE = {
   NoProject: "This game isn't linked to an Unreal project, so there is no project to add a C++ module to.",
   NoEngine: "No supported Unreal is installed, so Genex can't build a C++ module.",
-  CannotCompile: (xcode: string) =>
-    `This computer can't build Unreal C++ (Xcode: ${xcode}); C++ is built on a Mac whose Xcode is ready.`,
+  CannotCompile: (tools: string) =>
+    `This computer can't build Unreal C++ (${tools}); C++ is built on a Mac whose Xcode is ready, or on Windows with Microsoft's C++ tools.`,
+  WindowsCannotCompile: (tools: string) =>
+    `This computer can't build Unreal C++ yet (${tools}): Windows builds it with Microsoft's Visual Studio Build Tools. Call unreal__install-unreal, which installs them (Windows asks the user for permission), end your reply, and add the module once the chat says they are installed.`,
   OtherEditor:
     "Unreal is open, but this game's project isn't answering, so Genex can't save its work and didn't quit it to add C++. When it is this game's Unreal, call unreal__open-editor with restart: true (work not saved in it is lost), then try again; when it is another project's, ask the user to quit it.",
   NotSaved: (why: string) =>
@@ -248,7 +267,7 @@ export async function landPartCpp(part: string, code: PartCode): Promise<string[
   return files.map((file) => file.inner).sort();
 }
 
-/** The supported engine: its version and folder. */
+/** The engine a game's tools run with: its version and folder. */
 type Engine = { version: string; directory: string };
 /** One add job: the game, its project, the engine and the Xcode app UBT may read. */
 type AddTarget = { storage: string; game: string; project: string; engine: Engine; xcodeApp: string | null };
@@ -335,6 +354,22 @@ async function addNow(deps: CppToolsDeps, target: AddTarget): Promise<void> {
 /** Where adding stands for each project, by its .uproject. */
 type Jobs = Map<string, CppAdding>;
 
+/** Why C++ can't be compiled here, as the agent reads it: Xcode's state on a Mac, Microsoft's tools' on Windows. */
+const cannotCompile = (platform: NodeJS.Platform, tools: CppTools) =>
+  platform === "win32"
+    ? MESSAGE.WindowsCannotCompile(cppToolsState(tools, platform))
+    : MESSAGE.CannotCompile(cppToolsState(tools, platform));
+
+/** The C++ tools this computer has for the engine: Xcode, and Microsoft's on Windows (absent when they can't be told). */
+async function toolsFor(deps: CppToolsDeps, engineDir: string | undefined): Promise<CppToolsFound> {
+  const xcode = await deps.xcode(engineDir);
+  const visualStudio = await deps.visualStudio?.(engineDir).catch(() => undefined);
+  return { xcode, visualStudio };
+}
+
+/** Xcode as the build needs it (its app), and Microsoft's tools. */
+type CppToolsFound = CppTools & { xcode: Partial<Pick<XcodeStatus, "app">> };
+
 /** The game's linked project, or why there is none. */
 async function linked(deps: CppToolsDeps, storage: string, game: string): Promise<string> {
   const project = await deps.project(storage, game);
@@ -352,31 +387,33 @@ async function startAdding(deps: CppToolsDeps, jobs: Jobs, storage: string, game
   if (jobs.get(project)?.state === CppAddState.Adding) return { started: true };
   const module = await projectModule(project);
   if (module) return { module, already: true };
-  const engine = await deps.engine();
+  const engine = await deps.engine(storage, game);
   if (!engine) throw new Error(MESSAGE.NoEngine);
-  const xcode = await deps.xcode(engine.directory);
-  if (!canCompileCpp(xcode, deps.platform)) throw new Error(MESSAGE.CannotCompile(xcode.state));
+  const tools = await toolsFor(deps, engine.directory);
+  if (!canCompileCpp(tools, deps.platform)) throw new Error(cannotCompile(deps.platform, tools));
   await checkCppModule(project, moduleOptions(engine));
   // Another call may have started the job while this one checked.
   if (jobs.get(project)?.state === CppAddState.Adding) return { started: true };
-  const target: AddTarget = { storage, game, project, engine, xcodeApp: xcode.app ?? null };
+  const target: AddTarget = { storage, game, project, engine, xcodeApp: tools.xcode.app ?? null };
   runJob(jobs, project, ADD_STATES, deps.now, () => addNow(deps, target));
   return { started: true };
 }
 
-/** `cpp-status` for a game: whether C++ compiles here, Xcode's state, the platform, its module and its add job. */
+/** `cpp-status` for a game: whether C++ compiles here, Xcode's and Microsoft's tools' states, the platform, its module and its add job. */
 async function cppStatus(deps: CppToolsDeps, jobs: Jobs, storage: string, game: string): Promise<CppStatus> {
-  const engine = await deps.engine();
-  const xcode = await deps.xcode(engine?.directory);
+  const engine = await deps.engine(storage, game);
+  const tools = await toolsFor(deps, engine?.directory);
   const project = await deps.project(storage, game).catch(() => undefined);
   const module = project ? ((await projectModule(project)) ?? null) : null;
   const adding = (project ? jobs.get(project) : undefined) ?? IDLE;
   return {
-    canCompile: canCompileCpp(xcode, deps.platform),
-    xcode: xcode.state,
+    canCompile: canCompileCpp(tools, deps.platform),
+    xcode: tools.xcode.state,
+    visualStudio: tools.visualStudio?.state ?? VisualStudioState.NotApplicable,
     platform: deps.platform,
     module,
     adding: { ...adding },
+    jobRunning: adding.state === CppAddState.Adding,
   };
 }
 

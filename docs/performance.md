@@ -69,13 +69,17 @@ counters carry the regression gates.
   invoke/push histogram per IPC channel, renderer journey pairs and event-loop delay.
 - Dev-control `diagnostics` operations: `window.resize` (stepped resize of the studio window;
   returns how far Live's view trails its slot right after each change and just before the next,
-  and how long it takes to settle), `graph.drag`, `cpu.start`/`cpu.stop` (a renderer),
+  and how long it takes to settle), `cpu.start`/`cpu.stop` (a renderer),
   `main.cpu.start`/`main.cpu.stop` (the main process), `heap`, `trace.start`/`trace.stop`
   ([field guide](STUDIO-DEVELOPER-FIELD-GUIDE.md#owned-development-sessions)). Each operation checks
   the build is current from cached file fingerprints, so it does not stall the main process it measures.
 - `npm run test:ui -- chat-scroll-ui [--build owned]`: flings a long chat with real input, alone
   and beside a stand-in game that keeps the GPU busy, and counts painted frames with a blank
-  block; it also keeps a CPU profile and a trace of one fling.
+  block; it also keeps a CPU profile and a trace of one fling. First it pastes a long message
+  into the composer and deletes it: in every frame a following chat keeps its newest line above
+  the composer, and a chat the reader pressed in holds still; an empty composer is as tall as a
+  wrapping placeholder needs. `STUDIO_CHAT_SCROLL_PASS=composer`
+  runs only that, `game` only the flings beside the game.
 - Fixture messages for journeys: `fixture:stream` (a short streamed reply) and `fixture:stream-long`
   (about ten thousand characters of Markdown and code, streamed at a fast model's pace, in a game chat).
 - `dist/renderer/bundle-report.json`: eager renderer bytes against the budget in
@@ -129,6 +133,23 @@ counters carry the regression gates.
 - Sidebar ordering and keyboard navigation index conversation activity in one history pass;
   sort comparisons do not scan the history. Bounded event pages materialize only their selected
   references, including the placeholder rows for damaged bodies.
+- A long Loop's log is mostly its builders' mirrored traces and tool traffic, each its own
+  batch. The stage folds only the records it draws (`stageLogOf` in `build-progress.ts`), so a
+  batch of traces leaves the arrays it reads as they were and recomputes nothing; a run summary
+  whose drawn records and facts did not change keeps its revision, and the feed hands it to no
+  view (`shared/run-summary-feed.ts`); the chat settles running tool rows from the ones still
+  open, never every row it made (`openCalls` in `chat-entries.ts`).
+- An open chat re-reads all it holds with every batch (its transcript, queue, run and work rows),
+  and it held every record since it opened, so through a Loop of hours each builder trace cost
+  the whole session. A chat whose reader follows its newest line keeps its newest few pages
+  (`withLiveBatch` in `use-chat-history.ts`, `FOLLOWING_HOLDS`); the current-state facts keep
+  what the dropped records say about now, and scrolling up pages them back as on open. It never
+  keeps fewer records than it last paged in to fill its height (`followingWindow`): a Loop's
+  newest pages draw a few short tool rows, and a chat that dropped them read them back after
+  every batch.
+- The Builds stage reads its chat's whole log once (`watchThread` in `state/event-log.ts`). When
+  it leaves a game, that log stays whole while the released logs fit `RELEASED_RECORDS_MAX`
+  records, so switching between two games with long Loops does not read either from disk again.
 - Concurrent run-summary readers share a matching evidence-version scan; a subsequent read
   still validates the files. Toolbar status batches run one at a time, with at most one queued
   refresh after a burst; teardown cancels timers and ignores late answers.
@@ -171,7 +192,8 @@ differs from an owned development build:
 - **First launch:** Gatekeeper verifies the signed bundle once, which lengthens the first start.
   A copy started from the mounted DMG or from Downloads runs from a read-only or translocated
   path instead of `/Applications`. Before the window opens, a new profile copies each bundled
-  plugin into its plugin store (`core:plugins`); the Genex payload leaves out type declarations
+  plugin into its plugin store, and the first start of a newer build copies each bundled plugin it
+  ships in a newer version (`core:plugins`); the Genex payload leaves out type declarations
   and source maps, two thirds of its files, which more than halves that copy
   (`plugin-payload-paths.test.ts`).
 - **Data:** a packaged app opens the person's real profile, whose histories are larger than any

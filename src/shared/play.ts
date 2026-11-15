@@ -169,6 +169,15 @@ const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/;
 /** Whether a value is a slug the app will build an address from. */
 export const isPlaySlug = (value: unknown): value is string => typeof value === "string" && SLUG.test(value);
 
+/**
+ * What a `genex://` link opens in the studio page: the game's page in Play (`slug`), or, for a
+ * `genex://create/<slug>` link to a game of this library, that game (`project`) with Publish open.
+ */
+export interface GameLinkOpen {
+  slug: string;
+  project?: string;
+}
+
 /** The game itself, served on its own subdomain of `games` (genex.games' own unless a development profile says). */
 export function playGameUrl(slug: string, games: string = PLAY_ORIGIN.games): string {
   const served = new URL(games);
@@ -177,6 +186,20 @@ export function playGameUrl(slug: string, games: string = PLAY_ORIGIN.games): st
 
 /** The game's page on the website at `web` (genex.games' unless a development profile says): what Share hands out. */
 export const playPageUrl = (web: string, slug: string): string => `${web}/${slug}`;
+
+/**
+ * The game whose page on the website at `web` is `address` ({@link playPageUrl} read back): null for
+ * anything else, such as a game's page on another Genex (a development stand's), which the Play of
+ * this app cannot show.
+ */
+export function playPageSlug(web: string, address: unknown): string | null {
+  if (typeof address !== "string" || !URL.canParse(address) || !URL.canParse(web)) return null;
+  const page = new URL(address);
+  const extras = page.username || page.password || page.search || page.hash;
+  if (page.origin !== new URL(web).origin || extras) return null;
+  const slug = page.pathname.replace(/^\//, "").replace(/\/$/, "");
+  return isPlaySlug(slug) ? slug : null;
+}
 
 /** The website's page of what Genex gives a game and its maker: where Learn goes. */
 export const playToolsUrl = (web: string): string => `${web}/tools`;
@@ -334,6 +357,8 @@ export type RemixStep = (typeof RemixStep)[keyof typeof RemixStep];
 export const PlayRemixRefusal = {
   /** The game's source on Genex holds no game: its creator never shared its project. */
   NoProject: "no-project",
+  /** The disk has no room for the game's files and a reserve: nothing was downloaded. */
+  NoSpace: "no-space",
 } as const;
 export type PlayRemixRefusal = (typeof PlayRemixRefusal)[keyof typeof PlayRemixRefusal];
 

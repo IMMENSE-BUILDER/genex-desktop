@@ -20,8 +20,15 @@ const FILES_FRESH_MS = 60 * SECOND_MS;
 const CANCELLED = /Cancelled/;
 const words = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** What is being pressed right now: Publish (listing files, then starting the upload), or another action. */
-export const Pressing = { None: "none", Publish: "publish", Files: "files", Action: "action" } as const;
+/** The game's publish record as the plugin keeps it now. */
+export async function readPublishState(pluginId: string, project?: string): Promise<GenexPublishState> {
+  const args = { operation: GenexPublishStatusOperation.Status };
+  const state = await window.studio.pluginAction(pluginId, GenexAction.PublishStatus, args, project);
+  return state as GenexPublishState;
+}
+
+/** What is being pressed right now: Publish (listing files, then starting the upload), a rename, or another action. */
+export const Pressing = { None: "none", Publish: "publish", Files: "files", Action: "action", Name: "name" } as const;
 export type Pressing = (typeof Pressing)[keyof typeof Pressing];
 
 /** The game's publish record, the press under way and the files Publish uploads. */
@@ -37,15 +44,7 @@ export function usePublishRecord(plugin: PluginInfo, project: string | null) {
   const game = project ?? "";
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      const args = { operation: GenexPublishStatusOperation.Status };
-      setState(
-        (await window.studio.pluginAction(
-          id,
-          GenexAction.PublishStatus,
-          args,
-          project ?? undefined,
-        )) as GenexPublishState,
-      );
+      setState(await readPublishState(id, project ?? undefined));
       setReadError("");
     } catch (e) {
       setReadError(words(e));
@@ -93,14 +92,52 @@ export function usePublishRecord(plugin: PluginInfo, project: string | null) {
       run(Pressing.Action, () => runPluginAction({ plugin, name, args, project, review: setReview })),
     listFiles: (): Promise<void> => run(Pressing.Files, currentFiles),
     /**
-     * Publish under `title`: the press is the consent to exactly the listed files, and to the game's
-     * project when `remix` (Allow remixing) is ticked.
+     * Move the game to a new link: answers why Genex refused, for the line under the link's field,
+     * or null once it moved. The record is read again either way.
      */
-    publish: (title: string, remix?: boolean): Promise<void> =>
-      run(Pressing.Publish, async () => window.studio.genexPublish(game, await currentFiles(), title, remix)),
-    /** Publish a game that has only apps under `title`: the press is the consent to the apps its rows name. */
-    publishApps: (title: string, remix?: boolean): Promise<void> =>
-      run(Pressing.Publish, () => window.studio.genexPublishApps(game, title, remix)),
+    changeLink: async (link: string): Promise<string | null> => {
+      setPressing(Pressing.Name);
+      try {
+        await runPluginAction({ plugin, name: GenexAction.PublishLink, args: { link }, project, review: setReview });
+        return null;
+      } catch (e) {
+        return words(e);
+      } finally {
+        setPressing(Pressing.None);
+        await refresh();
+      }
+    },
+    /**
+     * Save the game's new name: on Genex at once when the game is there, else for its first publish.
+     * Answers whether it was saved; a refusal is the record's error line.
+     */
+    rename: async (title: string): Promise<boolean> => {
+      let saved = false;
+      await run(Pressing.Name, async () => {
+        await runPluginAction({ plugin, name: GenexAction.PublishName, args: { title }, project, review: setReview });
+        saved = true;
+      });
+      return saved;
+    },
+    /**
+     * Publish under `title`: the press is the consent to exactly the listed files, to the game's
+     * project when `remix` (Allow remixing) is ticked, and to the web build taking the place of a page
+     * that shows only the game's apps when `replaceNativePage` (the dialog said so above the press).
+     */
+    publish: (title: string, remix?: boolean, replaceNativePage?: boolean, platforms?: string[]): Promise<void> =>
+      run(Pressing.Publish, async () =>
+        window.studio.genexPublish(game, await currentFiles(), title, remix, replaceNativePage, platforms),
+      ),
+    /**
+     * Publish a game's apps on their own under `title`: the press is the consent to the apps its rows
+     * name, or only the `platforms` the Publish card's press names, and to the apps Genex Cloud
+     * built or builds for the platforms `release` names.
+     */
+    publishApps: (title: string, remix?: boolean, platforms?: string[], release?: string[]): Promise<void> =>
+      run(Pressing.Publish, () => window.studio.genexPublishApps(game, title, remix, platforms, release)),
+    /** Ask Genex Cloud to build the game's `platform` app and keep it for a publish; a refusal is the record's error line. */
+    buildOnCloud: (platform: string): Promise<void> =>
+      run(Pressing.Action, () => window.studio.genexCloudBuild(game, platform, true)),
     /**
      * Publish again while Studio cannot tell whether the last upload reached Genex: settle that
      * upload (`again` names it), then publish under `title` as Publish does.

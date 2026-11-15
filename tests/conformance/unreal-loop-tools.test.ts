@@ -1,8 +1,8 @@
 /**
  * The Unreal Loop's plugin tools over a game folder: builders' `check-part` names every problem;
  * `run-part` refuses a part that doesn't pass and queues one that does; `part-result` hands back the
- * editor's shots; `export-reference` keeps the engine's reference for the gate. The editor is a
- * stand-in.
+ * editor's shots; `export-reference` keeps the engine's reference for the gate. With two Unreals
+ * installed, a game's reference, guide and Python are its own Unreal's. The editor is a stand-in.
  */
 import { setAgentsSetting } from "../../src/substrate/engine-agents.ts";
 import assert from "node:assert/strict";
@@ -10,19 +10,26 @@ import { chmod, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:f
 import path from "node:path";
 import { describe, it } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import type { PluginContext } from "../../src/plugin-sdk/index.d.ts";
+import type { PluginContext, PluginHookContext } from "../../src/plugin-sdk/index.d.ts";
+import { EditorControlToolName } from "../../src/plugins/unreal/editor-control.ts";
 import { LoopTool, PartProbe, PartRunState } from "../../src/plugins/unreal/editor-queue.ts";
 import {
   type AnyLoopTool,
+  type AnyLoopToolName,
   createLoopTools,
   LeadLoopToolName,
+  LiveLoopToolName,
   LoopEditorTool,
   LoopToolName,
+  shotFileReady,
 } from "../../src/plugins/unreal/loop-tools.ts";
 import { unrealPython } from "../../src/plugins/unreal/python-check.ts";
 import { loadReference, storeReference } from "../../src/plugins/unreal/reference-store.ts";
+import { REFERENCE_RETRY_MS } from "../../src/plugins/unreal/reference-warm.ts";
+import { HookEvent } from "../../src/shared/plugin-hooks.ts";
 import { XcodeState } from "../../src/plugins/unreal/xcode.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { engineByGame, unrealBackendFixture } from "../helpers/unreal-fake-engine.ts";
 
 /** A guard against a wait that never ends: the queue's own waits run on the fake clock, never on this. */
 const TEST_TIMEOUT = { timeout: 60_000 };
@@ -111,7 +118,26 @@ async function untilRun(
   }
 }
 
-async function world(options: { applyHeld?: Promise<unknown> } = {}) {
+/** A wait that ends only when it is stopped: a lookup on it waits for the export itself. */
+const untilStopped = (_ms: number, signal?: AbortSignal) =>
+  new Promise<void>((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+
+/**
+ * The Loop's tools over a stand-in for the game's Unreal. `applyHeld` and `exportHeld` hold its
+ * apply and its reference export until they settle; with `patient`, waits end only when stopped;
+ * with `newerUnreal`, Unreal 5.9 is installed beside the game's own 5.8, which answers only when
+ * asked for this game.
+ */
+async function world(
+  options: {
+    applyHeld?: Promise<unknown>;
+    exportHeld?: Promise<unknown>;
+    patient?: boolean;
+    newerUnreal?: boolean;
+    /** The Unreal the game is made with; 5.8 unless a test names another. */
+    unreal?: string;
+  } = {},
+) {
   const root = await realpath(await tmpDir("studio-loop-tools-"));
   const game = path.join(root, "game");
   const storage = path.join(root, "storage");
@@ -125,10 +151,17 @@ async function world(options: { applyHeld?: Promise<unknown> } = {}) {
   await writeFile(path.join(part, "apply.py"), "genex.save()\n");
   const shot = path.join(projectDir, "Saved", "Genex", "captures", "lanterns.png");
   const calls: Array<[AnyLoopTool, Record<string, unknown>]> = [];
-  // `personPie`: the person pressed Play in Unreal, beside whatever the queue does.
-  const state = { pie: false, personPie: false };
+  // `personPie`: the person pressed Play in Unreal, beside whatever the queue does; `answers`: the game's Unreal is open;
+  // `exportTakesMs`: how long its reference export takes, so a call given less fails as a timeout does.
+  const state = { pie: false, personPie: false, answers: true, exportTakesMs: 0 };
   const refuse: { export?: string; project?: string } = {};
-  const editorCall = async (_storage: string, _game: string, tool: AnyLoopTool, args: Record<string, unknown>) => {
+  const editorCall = async (
+    _storage: string,
+    _game: string,
+    tool: AnyLoopTool,
+    args: Record<string, unknown>,
+    callMs?: number,
+  ) => {
     calls.push([tool, args]);
     if (tool === LoopTool.ApplyPart) {
       await options.applyHeld;
@@ -148,7 +181,10 @@ async function world(options: { applyHeld?: Promise<unknown> } = {}) {
     }
     if (tool === LoopEditorTool.ExportReference && !("pins" in args))
       throw new Error("export_reference is missing pins (Unreal's schema needs every parameter)");
+    if (tool === LoopEditorTool.ExportReference) await options.exportHeld;
     if (tool === LoopEditorTool.ExportReference && refuse.export) return { error: refuse.export };
+    if (tool === LoopEditorTool.ExportReference && callMs !== undefined && callMs < state.exportTakesMs)
+      throw new Error(`Unreal didn't answer export_reference within ${callMs} ms`);
     if (tool === LoopEditorTool.ExportReference) {
       await mkdir(path.dirname(String(args.file)), { recursive: true });
       await writeFile(
@@ -166,16 +202,19 @@ async function world(options: { applyHeld?: Promise<unknown> } = {}) {
     return { ok: true };
   };
   const clock = fakeClock();
+  const own = { version: options.unreal ?? "5.8", directory: path.join(root, "engine") };
+  const newer = { version: "5.9", directory: path.join(root, "engine-5.9") };
   const tools = createLoopTools({
     platform: "darwin",
-    engine: async () => ({ version: "5.8", directory: path.join(root, "engine") }),
+    engine: options.newerUnreal ? engineByGame("valley", own, newer) : async () => own,
     project: async () => path.join(projectDir, "Game.uproject"),
     xcode: async () => ({ state: XcodeState.Ready }),
     editorCall,
-    editorAnswers: async () => true,
+    editorAnswers: async () => state.answers,
     // These tests never add a C++ module, so Unreal is never quit or opened.
     restart: { editors: async () => 0, quit: async () => {}, open: async () => {} },
     ...clock,
+    ...(options.patient ? { sleep: untilStopped } : {}),
   });
   const context: PluginContext = {
     project: "valley",
@@ -184,8 +223,8 @@ async function world(options: { applyHeld?: Promise<unknown> } = {}) {
     callId: 1,
     host: (async () => storage) as never,
   };
-  const call = (name: (typeof LoopToolName)[keyof typeof LoopToolName], args: Record<string, unknown> = {}) =>
-    tools.call(name, args, context, storage);
+  const call = (name: AnyLoopToolName, args: Record<string, unknown> = {}, hook?: PluginHookContext) =>
+    tools.call(name, args, hook ? { ...context, hook } : context, storage);
   return {
     root,
     game,
@@ -197,8 +236,17 @@ async function world(options: { applyHeld?: Promise<unknown> } = {}) {
     tools,
     refuse,
     state,
+    clock,
     engineDir: path.join(root, "engine"),
   };
+}
+
+/** Waits, a turn at a time, until `kept` holds; the test's `signal` ends a wait that never does. */
+async function until(kept: () => Promise<boolean> | boolean, signal: AbortSignal, what: string) {
+  while (!(await kept())) {
+    if (signal.aborted) throw new Error(`${what} never happened`);
+    await nextTurn(undefined, { signal }).catch(() => undefined);
+  }
 }
 
 /** Writes <project>/Saved/Genex/project.json, or makes it a link to `text` when `link`. */
@@ -219,6 +267,19 @@ async function writeFakeUnrealPython(engineDir: string, problem: Record<string, 
   await writeFile(python, `#!/bin/sh\ncat > /dev/null\ncat "${answer}"\n`);
   await chmod(python, 0o755);
 }
+
+describe("a shot file the editor writes", () => {
+  it("is read only once it has bytes: Unreal makes the file before it fills it", async () => {
+    const dir = await realpath(await tmpDir("studio-shot-ready-"));
+    const shot = path.join(dir, "shot.png");
+    assert.equal(await shotFileReady(shot), false, "not there yet");
+    await writeFile(shot, "");
+    assert.equal(await shotFileReady(shot), false, "made, not filled");
+    await writeFile(shot, "png");
+    assert.equal(await shotFileReady(shot), true);
+    assert.equal(await shotFileReady(dir), false, "a folder is no shot");
+  });
+});
 
 describe("the Unreal Loop's tools", () => {
   it("check-part passes a good part and names each problem of a bad one", async () => {
@@ -450,6 +511,7 @@ describe("the Unreal Loop's tools", () => {
 
   it("find-nodes looks node types up in the engine's reference, with their pins when known", async () => {
     const w = await world();
+    w.state.answers = false;
     await assert.rejects(w.call(LoopToolName.FindNodes, { query: "light" }), /reference/);
     await storeReference(w.storage, "5.8", {
       version: 1,
@@ -483,5 +545,287 @@ describe("the Unreal Loop's tools", () => {
       ["Development|PrintString"],
     );
     await assert.rejects(w.call(LoopToolName.FindNodes, { query: "" }), /query/);
+  });
+
+  it("find-nodes exports the engine's reference from the game's open Unreal once, when none is kept yet", async () => {
+    const w = await world({ patient: true });
+    const exports = () => w.calls.filter(([tool]) => tool === LoopEditorTool.ExportReference).length;
+    w.state.answers = false;
+    await assert.rejects(w.call(LoopToolName.FindNodes, { query: "print" }), /open-editor/);
+    assert.equal(exports(), 0, "a closed Unreal is never asked");
+    w.state.answers = true;
+    type Found = { nodes: Array<{ typeId: string }> };
+    const [printing, car] = (await Promise.all([
+      w.call(LoopToolName.FindNodes, { query: "print" }),
+      w.call(LoopToolName.FindNodes, { query: "offroad reversing" }),
+    ])) as [Found, Found];
+    assert.deepEqual(
+      printing.nodes.map((n) => n.typeId),
+      ["Development|PrintString"],
+    );
+    assert.deepEqual(
+      car.nodes.map((n) => n.typeId),
+      ["Class|BPVehicleAdvOffroadCar|GetIsReversing", "Class|BPVehicleAdvOffroadCar|SetIsReversing"],
+      "the first lookup already reads the template Blueprints the export wrote",
+    );
+    assert.equal(exports(), 1, "lookups at once share one export");
+    await w.call(LoopToolName.FindNodes, { query: "print" });
+    assert.equal(exports(), 1, "the kept reference answers every later lookup");
+    assert.deepEqual((await loadReference(w.storage, "5.8"))?.common, ["Development|PrintString"]);
+  });
+
+  it("find-nodes names why the open Unreal couldn't export the reference", async () => {
+    const w = await world({ patient: true });
+    w.refuse.export = "export_reference is not a tool of this helper";
+    await assert.rejects(w.call(LoopToolName.FindNodes, { query: "print" }), /not a tool of this helper/);
+    assert.equal(await loadReference(w.storage, "5.8"), null);
+  });
+
+  it("find-nodes waits for an export slower than a moment's 15 s ask", async () => {
+    const w = await world({ patient: true });
+    // A Windows computer took longer than that, and every lookup through a day of building failed.
+    w.state.exportTakesMs = 40_000;
+    const found = (await w.call(LoopToolName.FindNodes, { query: "print" })) as { nodes: Array<{ typeId: string }> };
+    assert.deepEqual(
+      found.nodes.map((n) => n.typeId),
+      ["Development|PrintString"],
+    );
+  });
+
+  it(
+    "find-nodes answers once its wait ends that the export still runs, and the export is kept after",
+    TEST_TIMEOUT,
+    async (t) => {
+      let release = () => {};
+      const w = await world({ exportHeld: new Promise<void>((resolve) => (release = resolve)) });
+      const exports = () => w.calls.filter(([tool]) => tool === LoopEditorTool.ExportReference).length;
+      await assert.rejects(w.call(LoopToolName.FindNodes, { query: "print" }), /is exporting .* Call find-nodes again/);
+      await assert.rejects(w.call(LoopToolName.FindNodes, { query: "print" }), /is exporting/);
+      release();
+      await until(async () => (await loadReference(w.storage, "5.8")) !== null, t.signal, "the export kept");
+      const found = (await w.call(LoopToolName.FindNodes, { query: "print" })) as { nodes: unknown[] };
+      assert.equal(found.nodes.length, 1);
+      assert.equal(exports(), 1, "the lookups shared the one export");
+    },
+  );
+
+  it(
+    "the game's Unreal seen answering exports the reference in the background, and find-nodes reads it during play",
+    TEST_TIMEOUT,
+    async (t) => {
+      const w = await world();
+      const exports = () => w.calls.filter(([tool]) => tool === LoopEditorTool.ExportReference).length;
+      w.state.exportTakesMs = 40_000;
+      w.state.answers = false;
+      await w.call(EditorControlToolName.EditorStatus);
+      assert.equal(exports(), 0, "a closed Unreal is never asked");
+      w.state.answers = true;
+      assert.deepEqual(await w.call(EditorControlToolName.OpenEditor), { answering: true });
+      await until(async () => (await loadReference(w.storage, "5.8")) !== null, t.signal, "the background export");
+      // In play the editor refuses an export (it makes throwaway Blueprints): the kept copy answers.
+      w.refuse.export = "Stop play first: the export makes Blueprints.";
+      w.state.pie = true;
+      const found = (await w.call(LoopToolName.FindNodes, { query: "print" })) as { nodes: Array<{ typeId: string }> };
+      assert.deepEqual(
+        found.nodes.map((n) => n.typeId),
+        ["Development|PrintString"],
+      );
+      await w.call(EditorControlToolName.EditorStatus);
+      await w.call(LiveLoopToolName.LogErrors, {}, { on: HookEvent.RunPrepare, runId: "run-1" });
+      assert.equal(exports(), 1, "a kept reference is never exported again");
+    },
+  );
+
+  it(
+    "export-reference joins a background export that runs, so two never write the same files",
+    TEST_TIMEOUT,
+    async (t) => {
+      let release = () => {};
+      const w = await world({ exportHeld: new Promise<void>((resolve) => (release = resolve)) });
+      const exports = () => w.calls.filter(([tool]) => tool === LoopEditorTool.ExportReference).length;
+      await w.call(EditorControlToolName.OpenEditor);
+      await until(() => exports() === 1, t.signal, "the background export");
+      const asked = w.call(LoopToolName.ExportReference);
+      release();
+      const answer = (await asked) as { stored?: boolean };
+      assert.equal(answer.stored, true);
+      assert.equal(exports(), 1);
+    },
+  );
+
+  for (const [seen, see] of [
+    ["editor-status", (w: Awaited<ReturnType<typeof world>>) => w.call(EditorControlToolName.EditorStatus)],
+    [
+      "a run's start",
+      (w: Awaited<ReturnType<typeof world>>) =>
+        w.call(LiveLoopToolName.LogErrors, {}, { on: HookEvent.RunPrepare, runId: "run-1" }),
+    ],
+  ] as const) {
+    it(
+      `${seen} starts the background export too, and after one failed starts it again only a while later`,
+      TEST_TIMEOUT,
+      async (t) => {
+        const w = await world();
+        const exports = () => w.calls.filter(([tool]) => tool === LoopEditorTool.ExportReference).length;
+        w.refuse.export = "Stop play first: the export makes Blueprints.";
+        await see(w);
+        await until(() => exports() === 1, t.signal, "the first export");
+        delete w.refuse.export;
+        await w.clock.sleep(REFERENCE_RETRY_MS);
+        await see(w);
+        await until(async () => (await loadReference(w.storage, "5.8")) !== null, t.signal, "the export tried again");
+        assert.equal(exports(), 2);
+      },
+    );
+  }
+
+  /** The references kept as the game's own Unreal's and as the newer one's, in that order. */
+  const keptReferences = async (storage: string) =>
+    Promise.all(["5.8", "5.9"].map((version) => loadReference(storage, version)));
+
+  it("export-reference keeps the reference as the game's own Unreal's where a newer one is installed too, and find-nodes reads it", async () => {
+    const w = await world({ newerUnreal: true });
+    const answer = (await w.call(LoopToolName.ExportReference)) as { engine?: string };
+    assert.equal(answer.engine, "5.8");
+    const [own, newer] = await keptReferences(w.storage);
+    assert.deepEqual([own?.common, newer], [["Development|PrintString"], null]);
+    // Unreal closed: only a kept reference answers a lookup.
+    w.state.answers = false;
+    const found = (await w.call(LoopToolName.FindNodes, { query: "print" })) as { nodes: Array<{ typeId: string }> };
+    assert.deepEqual(
+      found.nodes.map((n) => n.typeId),
+      ["Development|PrintString"],
+    );
+  });
+
+  it("check-part checks a part's nodes against the reference of the game's own Unreal where a newer one is installed too", async () => {
+    const w = await world({ newerUnreal: true });
+    await storeReference(w.storage, "5.8", SMALL_REFERENCE);
+    await writeFile(path.join(w.part, "BP_Lantern.dsl"), '(event EventBeginPlay\n  (Development|PrintStrin "x"))');
+    const answer = String(await w.call(LoopToolName.CheckPart, { part: "Lantern" }));
+    assert.match(answer, /Did you mean Development\|PrintString/);
+  });
+
+  it(
+    "the game's Unreal seen answering exports the reference as its own Unreal's, not a newer one's",
+    TEST_TIMEOUT,
+    async (t) => {
+      const w = await world({ newerUnreal: true });
+      await w.call(EditorControlToolName.EditorStatus);
+      const kept = async () => (await keptReferences(w.storage)).map((reference) => reference !== null);
+      await until(async () => (await kept()).includes(true), t.signal, "the background export");
+      assert.deepEqual(await kept(), [true, false]);
+    },
+  );
+
+  it("blueprint-guide reads the guide of the game's own Unreal where a newer one is installed too", async () => {
+    const w = await world({ newerUnreal: true });
+    await epicGuide(w.engineDir);
+    const guide = String(await w.call(LoopToolName.BlueprintGuide));
+    assert.match(guide, /from Unreal 5\.8:/);
+    assert.match(guide, /GRAMMAR OVERVIEW/);
+  });
+
+  it("check-part runs apply.py through the Python of the game's own Unreal where a newer one is installed too", {
+    skip: posixOnly,
+  }, async () => {
+    const w = await world({ newerUnreal: true });
+    await writeFakeUnrealPython(w.engineDir, {
+      code: "unknown-name",
+      line: 1,
+      message: "apply.py: unreal.EditorLevelLibary doesn't exist in this engine",
+      suggestions: ["EditorLevelLibrary"],
+    });
+    assert.match(String(await w.call(LoopToolName.CheckPart, { part: "Lantern" })), /Did you mean EditorLevelLibrary/);
+  });
+});
+
+describe("a game on Unreal 5.9, where Blueprint text is written with Epic's Blueprint text toolset in the editor", () => {
+  /** Epic's Blueprint basics and its older Blueprint text syntax, as an installed engine holds them. */
+  async function epicFiles(engineDir: string) {
+    const python = path.join(
+      engineDir,
+      "Engine/Plugins/Experimental/Toolsets/EditorToolset/Content/Python/editor_toolset",
+    );
+    await mkdir(path.join(python, "skills"), { recursive: true });
+    await mkdir(path.join(python, "toolsets"), { recursive: true });
+    const basics = 'import unreal\n\n_INSTRUCTIONS = """\\\nWRITING GRAPHS\n- Never guess node type IDs.\n"""\n';
+    await writeFile(path.join(python, "skills", "blueprint_basics.py"), basics);
+    const older = 'USAGE = """\\\nGRAMMAR OVERVIEW\n    (event EventName stmt ...)\n"""\n';
+    await writeFile(path.join(python, "toolsets", "blueprint_dsl.py"), older);
+  }
+
+  it("blueprint-guide names the editor's toolset that writes Blueprint text there, with Epic's basics, never 5.8's syntax", async () => {
+    const w = await world({ unreal: "5.9" });
+    await epicFiles(w.engineDir);
+    const guide = String(await w.call(LoopToolName.BlueprintGuide));
+    assert.match(guide, /Unreal 5\.9/);
+    assert.match(guide, /BlueprintToolsets\.BlueprintDslToolset/);
+    assert.match(guide, /Docs/);
+    assert.match(guide, /Never guess node type IDs/);
+    assert.doesNotMatch(guide, /GRAMMAR OVERVIEW/, "the older syntax is for Widget and Anim Blueprints there");
+    assert.deepEqual(w.calls, [], "no editor needed");
+  });
+
+  it("blueprint-guide still answers without Epic's basics file", async () => {
+    const w = await world({ unreal: "5.9" });
+    assert.match(String(await w.call(LoopToolName.BlueprintGuide)), /BlueprintToolsets\.BlueprintDslToolset/);
+  });
+
+  it("find-nodes and export-reference say where nodes are looked up there, and ask the editor nothing", async () => {
+    const w = await world({ unreal: "5.9" });
+    await storeReference(w.storage, "5.9", SMALL_REFERENCE);
+    for (const [tool, args] of [
+      [LoopToolName.FindNodes, { query: "print" }],
+      [LoopToolName.ExportReference, {}],
+    ] as const)
+      await assert.rejects(w.call(tool, args), /Unreal 5\.9.*BlueprintToolsets\.BlueprintDslToolset/s, tool);
+    assert.deepEqual(w.calls, []);
+  });
+
+  it("the game's Unreal seen answering exports no node reference", async () => {
+    const w = await world({ unreal: "5.9" });
+    await w.call(EditorControlToolName.EditorStatus);
+    await w.call(EditorControlToolName.EditorStatus);
+    assert.ok(!w.calls.some(([tool]) => tool === LoopEditorTool.ExportReference));
+    assert.equal(await loadReference(w.storage, "5.9"), null);
+  });
+});
+
+describe("the Unreal Loop's tools through the plugin's backend, with Unreal 5.8 and 5.9 installed", () => {
+  /** A reference whose one node names the Unreal it was exported from. */
+  const referenceOf = (version: string) => ({ ...SMALL_REFERENCE, common: [`Release|Unreal${version}`], contexts: {} });
+  /** What a game's project names when its tools run with Unreal 5.9, whose nodes are looked up in the editor. */
+  const onNewer: Array<[string, string]> = [
+    ["the newer Unreal", "5.9"],
+    ["an Unreal that isn't installed", "5.10"],
+    ["a source build's id", "{2E6C4A1B-0D4F-4B63-9B5E-0F3C1A7D9E52}"],
+  ];
+  /** find-nodes asked by the open game, with both Unreals' references kept. */
+  async function find(f: Awaited<ReturnType<typeof unrealBackendFixture>>) {
+    for (const kept of ["5.8", "5.9"]) await storeReference(f.storage, kept, referenceOf(kept));
+    const answer = (await f.call(LoopToolName.FindNodes, { query: "release" })) as {
+      nodes: Array<{ typeId: string }>;
+    };
+    return answer.nodes.map((n) => n.typeId);
+  }
+
+  it("find-nodes reads Unreal 5.8's reference for a game whose project names the older Unreal", async () => {
+    const f = await unrealBackendFixture({ older: true });
+    await f.linkProject("5.8");
+    assert.deepEqual(await find(f), ["Release|Unreal5.8"]);
+  });
+
+  for (const [named, association] of onNewer)
+    it(`find-nodes answers as Unreal 5.9 does for a game whose project names ${named}`, async () => {
+      const f = await unrealBackendFixture({ older: true });
+      await f.linkProject(association);
+      await assert.rejects(find(f), /Unreal 5\.9.*BlueprintToolsets\.BlueprintDslToolset/s);
+    });
+
+  it("find-nodes answers as the newest Unreal does for a game whose project file is gone", async () => {
+    const f = await unrealBackendFixture({ older: true });
+    await rm(await f.linkProject("5.8"));
+    await assert.rejects(find(f), /Unreal 5\.9.*BlueprintToolsets\.BlueprintDslToolset/s);
   });
 });

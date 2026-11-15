@@ -13,7 +13,7 @@ import { runDelegatedTurn } from "../../src/harness-seed/loop/delegated-turn.ts"
 import { servedFactsOf } from "../../src/harness-seed/loop/folder-facts.ts";
 import { GameEngine } from "../../src/harness-seed/loop/game-engine.ts";
 import { HookEvent, READY_POLL_MS, READY_WAIT_MS, READY_WORDS } from "../../src/harness-seed/loop/hooks.ts";
-import { factsReadyPrompt } from "../../src/harness-seed/loop/project-prompts.ts";
+import { factsReadyNotice } from "../../src/harness-seed/loop/project-prompts.ts";
 import { EngineReadiness } from "../../src/plugins/unreal/editor-wait.ts";
 import { ctxRecorder } from "../helpers/ctx-recorder.ts";
 
@@ -184,7 +184,7 @@ function tickQuietly(timers: { tick: (ms: number) => void } | undefined, ms: num
 }
 
 /** The prompt the same session goes on with: the game's new kind. */
-const goOnPrompt = (descriptor: ReturnType<typeof game>) => factsReadyPrompt(servedFactsOf(descriptor as never));
+const goOnPrompt = (descriptor: ReturnType<typeof game>) => factsReadyNotice(servedFactsOf(descriptor as never));
 
 describe("the turn that makes a game's Unreal project", () => {
   it("after a turn made the game's Unreal project, the chat waits while health is pending, says why once, then the same session goes on", async (t) => {
@@ -235,12 +235,20 @@ describe("the turn that makes a game's Unreal project", () => {
     assert.equal(ready.healthCalls.length, 1);
   });
 
-  it("says plainly why when a step blocks, and doesn't go on", async (t) => {
+  // Flipped on purpose: a blocked step used to end the turn with the plugin's words asking the person
+  // to open the editor, though the agent opens, quits and restarts editors itself.
+  // Flipped again: the session was told to get the app ready itself; it is told why it isn't, and only that.
+  it("says plainly why when a step blocks, then the same session goes on, told why its app isn't ready", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     for (const healths of [[Health.Blocked], [Health.Pending, Health.Pending, Health.Blocked]]) {
       const blocked = await turnOn({ healths, timers: t.mock.timers });
-      assert.equal(blocked.delegated.length, 1, healths.join(","));
+      assert.equal(blocked.delegated.length, 2, healths.join(","));
       assert.ok(blocked.said.includes(NOT_OPENED), healths.join(","));
+      assert.deepEqual(
+        [blocked.delegated[1]?.resume, blocked.delegated[1]?.prompt],
+        ["s1", factsReadyNotice(servedFactsOf(game(true) as never), NOT_OPENED)],
+        healths.join(","),
+      );
     }
   });
 
@@ -251,7 +259,9 @@ describe("the turn that makes a game's Unreal project", () => {
       onHealth: () => t.mock.timers.tick(READY_WAIT_MS),
       timers: t.mock.timers,
     });
-    assert.equal(waited.delegated.length, 1, "nothing goes on while it's pending");
+    // Flipped on purpose: the session goes on, told the app is still opening, as with a block.
+    assert.equal(waited.delegated.length, 2, "the agent goes on, told it is still opening");
+    assert.equal(waited.delegated[1]?.prompt, factsReadyNotice(servedFactsOf(game(true) as never), OPENING));
     assert.ok(waited.said.includes(READY_WORDS.timedOut(OPENING)), waited.said.join(" | "));
     assert.ok(!waited.said.includes(NOT_OPENED));
   });
@@ -327,47 +337,39 @@ async function engineQuestion(kinds: unknown[]) {
     { ...TURN, text: "make a lantern-lit city game", newProject: true } as never,
   );
   const [delegated] = recorder.paramsOf("engine.delegate");
-  return { prompt: String(delegated?.prompt ?? ""), plugin: recorder.paramsOf("plugins.invoke") };
+  const bridged = (delegated?.interviewTools as Array<{ name: string }> | undefined)?.map((tool) => tool.name) ?? [];
+  return { prompt: String(delegated?.prompt ?? ""), bridged, plugin: recorder.paramsOf("plugins.invoke") };
 }
 
-describe("the engine question, told how each kind stands", () => {
-  it("the card offers each kind with its plugin's readiness note, and sends a kind that isn't ready to its plugin's button", async () => {
-    const readyNote = 'Offer "Unreal Engine: plays in the Unreal editor on this computer"; call unreal__new-game.';
-    const ready = await engineQuestion([LINK_KIND, { ...UNREAL_KIND, ready: true, note: readyNote }]);
-    assert.ok(ready.prompt.includes(readyNote), "a ready kind is offered in its plugin's words");
-    assert.doesNotMatch(ready.prompt, /finish its setup/);
-    assert.match(
-      ready.prompt,
-      /When it is the web, call [^ ]*start_web_game first/,
-      "the web answer starts the web starter",
-    );
-    assert.deepEqual(ready.plugin, [], "the harness asks no plugin itself");
-
+// Flipped: the brief asked web or Unreal in words, each kind in its plugin's readiness note. The
+// session reads the words alone with the card at hand, and a kind tool that can't make its kind yet
+// says why itself.
+describe("a new game's first turn while a plugin offers a kind", () => {
+  it("reads the words alone, with the question card bridged, and the harness asks no plugin itself", async () => {
     const notReadyNote = "Unreal Engine isn't installed on this computer yet.";
-    const missing = await engineQuestion([{ ...UNREAL_KIND, ready: false, note: notReadyNote }]);
-    assert.ok(missing.prompt.includes(notReadyNote));
-    assert.match(
-      missing.prompt,
-      /don't call mcp__studio__unreal__new-game: tell them to finish its setup from the Unreal Editor button/,
-    );
-
-    const unknown = await engineQuestion([UNREAL_KIND]);
-    assert.match(
-      unknown.prompt,
-      /When the answer \(or the request\) is Unreal Editor, call mcp__studio__unreal__new-game/,
-    );
+    for (const kinds of [
+      [LINK_KIND, { ...UNREAL_KIND, ready: true }],
+      [{ ...UNREAL_KIND, ready: false, note: notReadyNote }],
+    ]) {
+      const turn = await engineQuestion(kinds);
+      assert.equal(turn.prompt, "make a lantern-lit city game");
+      assert.deepEqual(turn.bridged, ["start_autopilot", "ask_user"]);
+      assert.deepEqual(turn.plugin, [], "the harness asks no plugin itself");
+    }
   });
 
-  it("a host that lists no kinds offers no Unreal kind", async () => {
+  // Flipped: no kinds on offer bridged no card. A folder with no kind yet now always has it.
+  it("a host that lists no kinds still bridges the card: a new game's questions need no plugin", async () => {
     const none = await engineQuestion([]);
-    assert.doesNotMatch(none.prompt, /THE ENGINE:|unreal__new-game/);
+    assert.equal(none.prompt, "make a lantern-lit city game");
+    assert.deepEqual(none.bridged, ["start_autopilot", "ask_user"]);
   });
 });
 
 describe("engine-status, in the words the card shows (the Unreal plugin)", () => {
   it("engine-status says whether a new Unreal game can be made here, in the words the card shows", async () => {
     const { readinessAnswer } = await import("../../src/plugins/unreal/hook-answers.ts");
-    const ready = readinessAnswer({ engine: EngineReadiness.Ready, version: "5.8" });
+    const ready = readinessAnswer({ engine: EngineReadiness.Ready, version: "5.9" });
     assert.equal(ready.ready, true);
     assert.match(ready.note, /plays in the Unreal editor on this computer/);
     assert.match(ready.note, /call unreal__new-game with a template and a name/);
@@ -376,24 +378,40 @@ describe("engine-status, in the words the card shows (the Unreal plugin)", () =>
     assert.equal(none.ready, false);
     assert.match(
       none.note,
-      /offer it as "Unreal Engine" with the description "Plays in Epic's free editor on this computer; needs a 45 GB install first"/,
+      /offer it as "Unreal Engine" with the description "Plays in Epic's free editor on this computer; needs a 47 GB install first"/,
     );
     assert.match(none.note, /don't call unreal__new-game/);
     assert.match(none.note, /call unreal__show-steps, which puts the Unreal setup card in the chat/);
+    assert.match(none.note, /it shows how to get Unreal 5\.9 free from Epic/);
     assert.match(none.note, /brings the Unreal button out above the game/);
     assert.match(none.note, /then unreal__install-unreal, which starts installing it for them/, "never asks them to");
 
-    const newer = readinessAnswer({ engine: EngineReadiness.NewerOnly, version: "5.9" });
+    const newer = readinessAnswer({ engine: EngineReadiness.NewerOnly, version: "6.0" });
     assert.equal(newer.ready, false);
+    assert.match(newer.note, /This computer has Unreal 6\.0, and Genex makes new Unreal projects with 5\.9 only/);
     assert.match(
       newer.note,
-      /"Unreal Engine 5\.8" with the description "Needs 5\.8 installed beside your 5\.9, about 45 GB"/,
+      /"Unreal Engine 5\.9" with the description "Needs 5\.9 installed beside your 6\.0, about 47 GB"/,
     );
-    assert.match(newer.note, /install 5\.8 beside 5\.9 in the Epic Games Launcher/);
-
-    const older = readinessAnswer({ engine: EngineReadiness.OlderOnly, version: "5.4" });
-    assert.equal(older.ready, false);
-    assert.match(older.note, /Unreal 5\.4, older than the 5\.8/);
-    assert.doesNotMatch(older.note, /isn't installed/);
+    assert.match(newer.note, /install 5\.9 beside 6\.0 in the Epic Games Launcher/);
   });
+
+  // An older Unreal is one Genex doesn't work with (5.4) or the one games made with it stay on (5.8):
+  // either way a new game needs 5.9 beside it.
+  for (const version of ["5.4", "5.8"])
+    it(`engine-status with only Unreal ${version} says a new game needs 5.9 installed beside it`, async () => {
+      const { readinessAnswer } = await import("../../src/plugins/unreal/hook-answers.ts");
+      const older = readinessAnswer({ engine: EngineReadiness.OlderOnly, version });
+      assert.equal(older.ready, false);
+      const has = version.replace(".", "\\.");
+      assert.match(
+        older.note,
+        new RegExp(
+          `^This computer has Unreal ${has}, older than the 5\\.9 Genex makes new Unreal games with, so offer it as "Unreal Engine 5\\.9" with the description "Needs 5\\.9 installed beside your ${has}, about \\d+ GB"\\.`,
+        ),
+      );
+      assert.match(older.note, /don't call unreal__new-game/);
+      assert.match(older.note, /it shows how to get 5\.9 free from Epic/);
+      assert.doesNotMatch(older.note, /isn't installed/);
+    });
 });

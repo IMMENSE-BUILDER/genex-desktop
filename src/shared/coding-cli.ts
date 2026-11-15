@@ -1,4 +1,4 @@
-export type CodingProvider = "codex" | "claude-code" | "opencode" | "grok" | "cursor" | "pi";
+export type CodingProvider = "codex" | "claude-code" | "opencode" | "grok" | "cursor" | "pi" | "antigravity";
 /** CLIs Studio can fetch and run an installer for. Pi has no vendor HTTPS installer. */
 export type InstallableCodingProvider = Exclude<CodingProvider, "pi">;
 export interface CodingCliStatus {
@@ -20,3 +20,20 @@ export const CodingCliState = {
   Incompatible: "incompatible",
 } as const satisfies Record<string, CodingCliStatus["state"]>;
 export type CodingCliState = (typeof CodingCliState)[keyof typeof CodingCliState];
+
+/**
+ * The coding CLI a caller needs is not ready, with where it stands beside the words: a sign-in
+ * tells a CLI to install (`Missing`) from one that is there but cannot run.
+ */
+export class CodingCliUnavailable extends Error {
+  readonly state: CodingCliState;
+  constructor(state: CodingCliState, message: string) {
+    super(message);
+    this.state = state;
+  }
+}
+
+/** Was this thrown because the coding CLI is not installed at all? */
+export function isCodingCliMissing(error: unknown): boolean {
+  return error instanceof CodingCliUnavailable && error.state === CodingCliState.Missing;
+}

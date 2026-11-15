@@ -1,24 +1,20 @@
 /**
  * Steps — what the Builds graph draws. Tries fold into steps, a step's state comes from the build
- * before the judges, the judges show as gates, and the layout keeps what landed on the line.
+ * before the judges, and the judges show as gates.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { EventEnvelope } from "../../src/substrate/types.ts";
 import { summarizeRun } from "../../src/shared/run-summary.ts";
-import { buildRunGraph, IterationStatus, rectsOverlap } from "../../src/renderer/run-graph.ts";
+import { buildRunGraph, IterationStatus } from "../../src/renderer/run-graph.ts";
 import { TRY_WORD } from "../../src/renderer/round-status.ts";
 import {
   askedRest,
-  budgetWords,
-  buildReview,
-  capWords,
   checkingBuild,
   foldTries,
   frontier,
   headline,
   judgesOn,
-  layoutSteps,
   leadStopped,
   leadWorking,
   partRows,
@@ -30,7 +26,6 @@ import {
   stepPill,
   stepSentence,
   stepWord,
-  STEPS,
   triesWord,
   workedShortWords,
   workerStopWords,
@@ -170,20 +165,6 @@ describe("tries fold into steps", () => {
       "Add a wreck-lifecycle system",
     );
     assert.equal(headline("[defect-x] make the hay less plastic"), "Make the hay less plastic");
-  });
-});
-
-describe("the start node", () => {
-  it("with pictures, keeps a strip for its words under them, and the assets move down past it", () => {
-    const plain = layoutSteps([], { assets: true });
-    const pictured = layoutSteps([], { assets: true, startWords: true });
-    const start = pictured.rects.start!;
-    const words = pictured.rects["start:words"]!;
-    assert.deepEqual(start, plain.rects.start, "the pictures keep the start's place on the middle line");
-    assert.equal(plain.rects["start:words"], undefined, "words alone fit the start's own place");
-    assert.deepEqual(words, { x: start.x, y: start.y + start.h, w: STEPS.startW, h: STEPS.startWordsH });
-    assert.equal(pictured.rects.assets!.y, words.y + words.h + STEPS.assetsGap);
-    assert.ok(pictured.height > plain.height, "the canvas makes room for it");
   });
 });
 
@@ -357,63 +338,6 @@ describe("the status line", () => {
   });
 });
 
-describe("the layout", () => {
-  it("puts what landed on the line, hangs the rest below its anchor, and overlaps nothing", () => {
-    const { rows } = rowsOf(loopRun());
-    const layout = layoutSteps(rows, { resultGate: "waiting" });
-    const boxes = Object.entries(layout.rects).filter(([id]) => !id.startsWith("row:"));
-    for (const [a, ra] of boxes)
-      for (const [b, rb] of boxes) if (a < b) assert.equal(rectsOverlap(ra, rb), false, `${a} overlaps ${b}`);
-    const land = rows.find((row) => row.facet.facetId === "land")!;
-    const [first, shore, mountain] = land.steps.map((step) => layout.rects[step.id]!);
-    assert.equal(shore!.x - first!.x, STEPS.pitch, "the kept steps run left to right");
-    assert.equal(shore!.y, first!.y, "on one line");
-    assert.equal(mountain!.x, shore!.x, "the undone step hangs under the step it followed");
-    assert.equal(mountain!.y, shore!.y + STEPS.nodeH + STEPS.hangGap);
-    assert.ok(layout.ghosts.has(land.steps[2]!.id));
-    assert.equal(layout.rects["row:sword"], undefined, "a part built in one session is its node: no label over it");
-    assert.ok(layout.rects["row:land"], "a part with steps keeps its label");
-    for (const [id, rect] of boxes)
-      if (id !== "assets") assert.deepEqual([rect.w, rect.h], [STEPS.nodeW, STEPS.nodeH], `${id} is the one node size`);
-    const start = layout.rects.start!,
-      final = layout.rects.final!;
-    assert.equal(start.y + start.h / 2, final.y + final.h / 2, "the start and the result share the middle");
-    assert.ok(
-      final.x >
-        Math.max(
-          ...boxes
-            .filter(([id]) => id.startsWith("step:") || id.startsWith("session:"))
-            .map(([, rect]) => rect.x + rect.w),
-        ),
-    );
-    // Gates: one on the way into each kept step, one on top of the hanging step, one before the result.
-    assert.deepEqual(layout.gates.map((gate) => gate.gate).sort(), ["kept", "kept", "undone", "waiting"]);
-    const hang = layout.gates.find((gate) => gate.gate === "undone")!;
-    assert.deepEqual([hang.x, hang.y], [mountain!.x + STEPS.nodeW / 2, mountain!.y]);
-  });
-
-  it("keeps a part with nothing in the build on its row, ghosted, and never joins it to the result", () => {
-    minute = 0;
-    const { rows } = rowsOf([
-      event("run_started", { goal: "g", mode: "director" }),
-      event("autopilot_started", { director: true, facets: [] }),
-      event("director_worker", { workerId: "sky", title: "Sky", state: "running", mode: "loop" }),
-      judged("sky", 1, "incumbent"),
-      event("run_finished", { landed: false }),
-    ]);
-    const layout = layoutSteps(rows);
-    const [step] = rows[0]!.steps;
-    assert.equal(layout.rects[step!.id]!.y, layout.rects["row:sky"]!.y + STEPS.labelH, "on the row, not below it");
-    assert.ok(layout.ghosts.has(step!.id));
-    assert.ok(
-      !layout.edges.some(
-        (edge) => edge.kind === "solid" && edge.d.includes(`M${layout.rects[step!.id]!.x + STEPS.nodeW} `),
-      ),
-      "no line to the result",
-    );
-  });
-});
-
 it("no word the Builds tab shows for a try or a step says 'never judged' — the tester read it as a switched-off setting", () => {
   const leadMerged = () => {
     minute = 0;
@@ -445,19 +369,7 @@ it("no word the Builds tab shows for a try or a step says 'never judged' — the
   );
 });
 
-describe("the time a run was given", () => {
-  it("says how far into it the run is, in minutes and then hours", () => {
-    assert.equal(budgetWords(9.5 * 60_000, 30 * 60_000), "9 of 30 min");
-    assert.equal(budgetWords(20_000, 30 * 60_000), "0 of 30 min");
-    assert.equal(budgetWords(65 * 60_000, 2 * 3_600_000), "1 h 5 min of 2 h");
-  });
-
-  it("is a cap on the chat's build card, never a target the build must reach", () => {
-    assert.equal(capWords(30 * 60_000), "up to 30m");
-    assert.equal(capWords(10 * 3_600_000), "up to 10h");
-    assert.equal(capWords(90 * 60_000), "up to 1h 30m");
-  });
-
+describe("the time a run worked", () => {
   it("says how long a finished build worked in the card's short units", () => {
     const took = (ms: number) => workedShortWords({ ms, since: null });
     assert.equal(took((5 * 60 + 17) * 60_000 + 20_000), "5h 17m");
@@ -467,7 +379,8 @@ describe("the time a run was given", () => {
     assert.equal(workedShortWords(undefined), null, "a build whose start is unknown");
   });
 
-  it("puts it in the status line instead of the bare elapsed time", () => {
+  // Flipped: the line said the time against the build's hours ("38 min of 1 h"); it says the time worked alone.
+  it("puts it in the status line instead of the bare elapsed time, whatever hours its start record kept", () => {
     const events = loopRun({ finished: false });
     (events[0]!.data as { payload: Record<string, unknown> }).payload.budgets = { wallClockMs: 3_600_000 };
     events.push(
@@ -481,7 +394,7 @@ describe("the time a run was given", () => {
       }),
     );
     const { graph, summary, rows } = rowsOf(events);
-    assert.equal(statusLine(graph, summary, rows, START + 39 * 60_000).strong, "Checking · 38 min of 1 h");
+    assert.equal(statusLine(graph, summary, rows, START + 39 * 60_000).strong, "Checking · 38 min");
   });
 });
 
@@ -510,17 +423,18 @@ describe("the clock counts the time a build worked", () => {
     return events;
   }
 
-  it("says how long a paused build has worked, against the time it was given", () => {
+  // Flipped: the line said the time against the time the build was given ("1 h of 8 h"); it says the time worked alone.
+  it("says how long a paused build has worked", () => {
     const { graph, summary, rows } = rowsOf(interrupted());
     const line = statusLine(graph, summary, rows, START + 12 * HOUR * 60_000);
-    assert.equal(line.strong, "Paused · 1 h of 8 h");
+    assert.equal(line.strong, "Paused · 1 h");
   });
 
   it("goes on from the time worked: neither the pause nor the closed app counts", () => {
     const events = resumed();
     const { graph, summary, rows } = rowsOf(events);
     const resumedAt = Date.parse(events.at(-2)?.created_at ?? "");
-    assert.equal(statusLine(graph, summary, rows, resumedAt + 5 * 60_000).strong, "Building · 1 h 5 min of 8 h");
+    assert.equal(statusLine(graph, summary, rows, resumedAt + 5 * 60_000).strong, "Building · 1 h 5 min");
   });
 
   it("names the time on every closed build", () => {
@@ -543,7 +457,7 @@ describe("a finished run reopened", () => {
     events.push(reopen, event("run_started", { goal: "A sword in ice", resumed: true }));
     const { graph, summary, rows } = rowsOf(events);
     const reopenedAt = Date.parse(reopen.created_at);
-    assert.match(statusLine(graph, summary, rows, reopenedAt + 5 * 60_000).strong, / · 5 of 30 min$/);
+    assert.match(statusLine(graph, summary, rows, reopenedAt + 5 * 60_000).strong, / · 5 min$/);
     assert.equal(resultStatus(graph, summary).word, "Ready to play", "its build stands, but nothing is live yet");
   });
 });
@@ -597,17 +511,6 @@ describe("between parts", () => {
     ]);
     assert.equal(leadWorking(graph, summary, rows), true);
     assert.equal(statusLine(graph, summary, rows).rest, "the lead is working on the next step");
-    const layout = layoutSteps(rows, { lead: true });
-    const final = layout.rects.final!;
-    const lead = layout.rects.lead!;
-    assert.equal(lead.x, final.x + final.w + STEPS.leadGap);
-    assert.equal(lead.y + lead.h / 2, final.y + final.h / 2, "on the result's line");
-    assert.ok(
-      layout.edges.some(
-        (edge) => edge.kind === "live" && edge.d === `M${final.x + final.w} ${final.y + final.h / 2} H${lead.x}`,
-      ),
-    );
-    assert.equal(layoutSteps(rows).rects.lead, undefined);
   });
 
   it("hands the graph back to the parts when one starts working", () => {
@@ -653,41 +556,6 @@ describe("the words a card wears", () => {
     assert.equal(undone.state, "undone");
     assert.equal(stepPill(undone, false), "Rejected by reviewers");
   });
-
-  /** A lead's run whose one build a pass of the lead's looked at and wrote a sentence about. */
-  const looked = (pass: string, rule: string, because: string) => {
-    minute = 0;
-    return rowsOf([
-      event("run_started", { goal: "A sword in ice", mode: "director" }),
-      event("autopilot_started", { director: true, facets: [] }),
-      event("integration_merge", { facetId: "sword", head: "h1", commit: "c1", conflict: false, stage: "director" }),
-      event("director_verdict", {
-        pass,
-        build: { head: "h1", worker: null, round: null },
-        seen: { pick: null },
-        decision: { kept: null, rule },
-        because,
-      }),
-    ]).graph;
-  };
-
-  it("quotes the last look at the build and names who took it", () => {
-    assert.deepEqual(buildReview(looked("judge", "preferred", "The judge preferred it.")), {
-      label: "Reviewers",
-      words: "The reviewer preferred it.",
-    });
-    assert.deepEqual(buildReview(looked("health", "starts", "It starts and draws its first frame.")), {
-      label: "Health check",
-      words: "It starts and draws its first frame.",
-    });
-  });
-
-  it("says nothing about a build there was nothing to compare with", () => {
-    const empty = "Nothing to compare it with: the run started from an empty game, so this build is judged on its own.";
-    assert.equal(buildReview(looked("judge", "first-build", empty)), null);
-    const unseen = "Nothing to compare it with: the game as it stood could not be photographed.";
-    assert.equal(buildReview(looked("judge", "no-start", unseen)), null);
-  });
 });
 
 describe("why a worker stopped short, on its card", () => {
@@ -706,6 +574,8 @@ describe("why a worker stopped short, on its card", () => {
     merged: false,
     startedSeq: null,
     settledSeq: null,
+    startedAt: null,
+    settledAt: null,
   });
   it("says the end record's code in the app's words, and nothing without one: the record's own reason is the lead's", () => {
     const cases: Array<[string, WorkerInfo, string | null]> = [

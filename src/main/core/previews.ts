@@ -47,7 +47,7 @@ import type { DelegateRequest } from "../../substrate/engines/types.ts";
 import type { ReferenceFrame } from "../../shared/protocol.ts";
 import { capActions } from "../../substrate/preview-input.ts";
 import type { PreviewPort } from "../../substrate/preview-port.ts";
-import { LIVE_HANDLE, PreviewPool, STAND_IN_HANDLE } from "../../substrate/preview-pool.ts";
+import { LIVE_HANDLE, PreviewActor, PreviewPool, STAND_IN_HANDLE } from "../../substrate/preview-pool.ts";
 import { awaitReady, bootBudget, unlockGesture, type ReadyResult } from "../../substrate/preview-ready.ts";
 import { COMPUTER_VIEW, type PreviewSetup } from "../../substrate/computer-tool.ts";
 import {
@@ -56,6 +56,7 @@ import {
   type AgentScreenFrame,
   type ScreenAct,
   ScreenDeed,
+  ScreenRole,
 } from "../../shared/agent-screen.ts";
 import type { CoreInternals, StudioCore } from "../studio-core.ts";
 import { DEFAULT_SHOT_QUALITY, DEFAULT_STILL_QUALITY, captureSurface, tookPage } from "./capture.ts";
@@ -210,18 +211,14 @@ async function benchEntry(root: string, page: string): Promise<{ entry: string }
 }
 
 /** Whose screen a capture's frames land on: the session's window, labelled for the worker. */
-function captureScreen(
-  sc: NonNullable<DelegateRequest["selfCapture"]>,
-  session: SessionPort,
-  role: AgentScreen["role"],
-): AgentScreen {
+function captureScreen(sc: NonNullable<DelegateRequest["selfCapture"]>, session: SessionPort): AgentScreen {
   return {
     handle: session.handle() ?? LIVE_HANDLE,
     label: sc.label ?? sc.facetId ?? sc.project,
     project: sc.project,
     runId: sc.runId ?? null,
     facetId: sc.facetId ?? null,
-    role,
+    role: ScreenRole.Builder,
   };
 }
 
@@ -284,6 +281,20 @@ function sourceEntry(game: GameProject | undefined, shape: ProjectShape): string
 }
 
 /** The page the health check loads: the served entry with the shot parameter (`SHOT_QUERY`) on its address. */
+/**
+ * The query the Genex SDK's local test mode reads on a loopback page (embed-sdk 0.35): test mode on,
+ * and the local room's address, which `getAuthorityUrls()` then answers.
+ */
+const LOCAL_TEST_PARAM = "genex_local_test";
+const AUTHORITY_URL_PARAM = "genex_authority_url";
+
+/** `entry` with the local room's address for the SDK, when the game has a room running. */
+function withLocalRoom(entry: string, url: string | undefined): string {
+  if (url === undefined) return entry;
+  const query = new URLSearchParams({ [LOCAL_TEST_PARAM]: "1", [AUTHORITY_URL_PARAM]: url });
+  return `${entry}${entry.includes("?") ? "&" : "?"}${query}`;
+}
+
 function shotEntry(entry: string): string {
   return `${entry}${entry.includes("?") ? "&" : "?"}${SHOT_QUERY}=1`;
 }
@@ -313,15 +324,23 @@ function replaysSomething(setup: PreviewSetup): boolean {
   return Array.isArray(setup.actions) && setup.actions.length > 0;
 }
 
-/** A still resized to `maxPx` on its long side as JPEG, or null when the preview cannot. */
+/**
+ * A still resized to `maxPx` on its long side (a JPEG, or a PNG when it is see-through), or null
+ * when the preview cannot or answers no picture.
+ */
 async function resizedStill(preview: PreviewPort | null, data: Buffer, maxPx: number): Promise<Buffer | null> {
   if (!preview?.resizeImage) return null;
   try {
-    return await preview.resizeImage(data, maxPx, DEFAULT_STILL_QUALITY);
+    const resized = await preview.resizeImage(data, maxPx, DEFAULT_STILL_QUALITY);
+    return sniffImage(resized) ? resized : null;
   } catch {
     return null;
   }
 }
+
+/** The type a resized still's bytes are, or null when there is none. */
+const mimeTypeOf = (resized: Buffer | null): string | null =>
+  resized ? (sniffImage(resized)?.mimeType ?? null) : null;
 
 /** Whether two paths name one folder once links are resolved; false when either cannot be read. */
 async function sameRealPath(a: string, b: string): Promise<boolean> {
@@ -378,10 +397,6 @@ export class PreviewService {
   #standInIdle: NodeJS.Timeout | null = null;
   readonly #frames = new Map<string, PendingFrame>();
   #stageVisible = true;
-  /** The person watches a game in Live, whatever briefly covers it (the renderer's `watchingLive`). */
-  #liveWatched = true;
-  /** The game open on the person's stage, which Live may not hold: opening a game starts nothing. */
-  #stageGame: string | null = null;
   /** Sessions looking through Live itself: only where this build opens no hidden windows. */
   #liveObservers = 0;
   /** What the Live game's sound depends on, bar the stage and the agents that `#applySound` reads. */
@@ -390,6 +405,8 @@ export class PreviewService {
   #liveWebBuild: WebBuildSeen | null = null;
   /** The person stopped Live's game (`stopLive`): nothing loads into it until Play or a load of theirs. */
   #liveStopped = false;
+  /** Each game's local room address (`genex__room`), which its loopback page is loaded with. */
+  readonly #localRooms = new Map<string, string>();
 
   constructor(core: StudioCore, x: CoreInternals) {
     this.#core = core;
@@ -402,29 +419,10 @@ export class PreviewService {
     });
   }
 
-  /** Apply stage visibility, and the game open on the stage, without suspending an agent's observation. */
-  async setStageVisible(visible: boolean, watching = visible, stageGame: string | null = null): Promise<void> {
+  /** Apply stage visibility without suspending an agent's observation. */
+  async setStageVisible(visible: boolean): Promise<void> {
     this.#stageVisible = visible;
-    this.#liveWatched = watching;
-    this.#stageGame = stageGame;
     this.#updateVisibility();
-  }
-
-  /**
-   * Whether a show or landing the person asked for may load Live itself: Live is out of their
-   * sight, and holds this game (or none yet), or another game while this one is open on their
-   * stage, where the ask is their Play. While they watch Live, a dialog or a popover over it
-   * included, only Reload changes it (`live-gate.ts`).
-   */
-  liveOutOfSight(project: string): boolean {
-    if (this.#liveWatched) return false;
-    return !this.liveHoldsAnother(project) || this.#stageGame === project;
-  }
-
-  /** Live holds a game other than this one: nothing of this one is shown or offered there. */
-  liveHoldsAnother(project: string): boolean {
-    const holds = this.#x.servedRoots.get(LIVE_HANDLE)?.project;
-    return holds !== undefined && holds !== project;
   }
 
   /** Re-evaluate observation after a run starts or settles. */
@@ -548,12 +546,27 @@ export class PreviewService {
     // Serving the source folder itself needs no override: the preview resolves the project on
     // its own, and a review worktree keeps the root its caller passed.
     const asSource = path.resolve(served.dir) === path.resolve(base);
+    const plain = entry ?? (asSource ? sourceEntry(descriptor, shape) : path.basename(shape.entry));
     return {
-      entry: entry ?? (asSource ? sourceEntry(descriptor, shape) : path.basename(shape.entry)),
+      // Only a loopback page's SDK takes a local room's address.
+      entry: loopback ? withLocalRoom(plain, this.#localRooms.get(project)) : plain,
       root: asSource ? (root ?? undefined) : served.dir,
       loopback,
       stale: served.stale ? note : null,
     };
+  }
+
+  /**
+   * A game's local room started (its address) or ended (null). Live, when it shows that game, is
+   * loaded again, into the room or out of it; true when Live now plays in the room.
+   */
+  async joinLocalRoom(project: string, url: string | null): Promise<boolean> {
+    if (url === null) this.#localRooms.delete(project);
+    else this.#localRooms.set(project, url);
+    const showing = this.#x.servedRoots.get(LIVE_HANDLE);
+    if (showing?.project !== project || this.#liveStopped) return false;
+    const loaded = await this.loadPreview({ project, ...(showing.root ? { root: showing.root } : {}) });
+    return url !== null && new URL(loaded).searchParams.get(AUTHORITY_URL_PARAM) === url;
   }
 
   /** `preview.load`: serve a game (or a checked worktree of it) into a preview, one load per handle at a time. */
@@ -685,16 +698,12 @@ export class PreviewService {
     root: string,
     outBase: string,
     session: SessionPort,
-    /** The director's capture follows its window: whatever build `look` last pointed it at. */
-    currentRoot: () => string = () => root,
-    /** Whose screen the frames land on (the card's role must not flip to "builder" on a capture). */
-    role: AgentScreen["role"] = "builder",
   ): NonNullable<DelegateRequest["onCapture"]> {
     let sequence = 0;
     let sequenceSeeded = false;
     return async ({ page } = {}) => {
       // A bench page is checked before anything is touched: a refused one loads nothing.
-      const bench = page === undefined ? null : await this.#benchFor(sc.project, currentRoot(), String(page));
+      const bench = page === undefined ? null : await this.#benchFor(sc.project, root, String(page));
       if (bench && "refusal" in bench) return bench.refusal;
       const outDir = iterationDir(outBase, sc.iteration);
       await ensureDir(outDir);
@@ -706,9 +715,9 @@ export class PreviewService {
       }
       const call = ++sequence;
       const port = await session.get();
-      const loaded = await this.#loadForCapture(port, sc, session, { target: currentRoot(), bench });
+      const loaded = await this.#loadForCapture(port, sc, session, { target: root, bench });
       if ("problem" in loaded) return MESSAGE.loadFailed(loaded.problem);
-      const screen = captureScreen(sc, session, role);
+      const screen = captureScreen(sc, session);
       this.openScreen(screen);
       const lines = [await this.#captureShot(port, screen, { outDir, call })];
       const errors = port.consoleEntries(0).filter((entry) => entry.level === "error");
@@ -1050,11 +1059,13 @@ export class PreviewService {
     await ensureDir(path.dirname(showDir));
     await this.#core.snapshots.worktreeAt(project, resolved, showDir, await this.nestedPolicy(projectDir));
     const previous = this.#x.servedRoots.get(LIVE_HANDLE);
-    // A preview candidate may never borrow the user's Live window.
+    // A preview candidate may never borrow the user's Live window. It is the person's own window
+    // past the agents' share: every caller plays a build the person asked for (their Play or Reload,
+    // or the lead's show_build answering their own message), so a run holding every window never refuses it.
     let candidateHandle: string | undefined;
     let liveAttempted = false;
     try {
-      const lease = await this.pool().acquire({ label: `preview-candidate:${project}` });
+      const lease = await this.pool().acquire({ label: `preview-candidate:${project}`, by: PreviewActor.Person });
       candidateHandle = lease.handle;
       const port = this.pool().port(lease.handle);
       const candidate = await this.loadServed(port, project, showDir);
@@ -1150,7 +1161,7 @@ export class PreviewService {
     const resized = await resizedStill(preview, data, maxPx);
     return {
       label: name.replace(/\.[^.]+$/, ""),
-      mimeType: resized ? "image/jpeg" : sniffed.mimeType,
+      mimeType: mimeTypeOf(resized) ?? sniffed.mimeType,
       data: (resized ?? data).toString("base64"),
     };
   }
@@ -1235,7 +1246,7 @@ export class PreviewService {
     return readContainedImage(path.join(dir, "output"), output.file, { prefixes: [], ...resize });
   }
 
-  /** A picture made at most `maxPx` on its longest side (a JPEG), or null when nothing here can resize it. */
+  /** A picture made at most `maxPx` on its longest side (a JPEG, or a PNG when see-through), or null when nothing here can resize it. */
   resizeStill(data: Buffer, maxPx: number): Promise<Buffer | null> {
     return resizedStill(this.#optionalPreview(), data, maxPx);
   }
@@ -1260,7 +1271,7 @@ export class PreviewService {
     const resized = maxPx ? await resizedStill(this.#optionalPreview(), data, maxPx) : null;
     const output = resized ?? data;
     if (output.length > REFERENCE_MAX_BYTES) return null;
-    return { mimeType: resized ? "image/jpeg" : sniffed.mimeType, data: output.toString("base64") };
+    return { mimeType: mimeTypeOf(resized) ?? sniffed.mimeType, data: output.toString("base64") };
   }
 
   /**
@@ -1291,25 +1302,15 @@ export class PreviewService {
    * Make a build live: merge it into the game folder (the branch the user plays from) and load
    * it. Refuses a dirty game folder and a merge that conflicts — the user's edits are never
    * overwritten from here, and since M2.7 nowhere else either: the run's own landing refuses
-   * the same way and leaves the build on its ref for this button to land. A landing nobody on the
-   * stage asked for (`offerLive`: a harness's `land_build` with no message of the person's waiting
-   * on it) lands the same, and only offers the landed folder to Live's Reload.
+   * the same way and leaves the build on its ref for this button to land.
    */
-  async landBuild(
-    project: string,
-    commit: string,
-    { asker, offerLive = false }: { asker?: AbortController; offerLive?: boolean } = {},
-  ): Promise<{ commit: string; how: "merged" | "already" }> {
+  async landBuild(project: string, commit: string): Promise<{ commit: string; how: "merged" | "already" }> {
     if (!COMMIT_HASH.test(String(commit ?? ""))) throw new Error(MESSAGE.notCommitHash(commit));
     const projectDir = this.#core.games.dirFor(project);
     await this.#core.assertProjectAllowed(projectDir);
     this.#core.snapshots.register({ name: project, dir: projectDir });
-    // The chat's own session asking to land (a run control) holds the folder while it waits for
-    // this answer: it is not a contractor building there. Anyone else in the folder is.
-    const building = delegationsIn(this.#x.activeDelegations, projectDir).some(
-      (delegation) => delegation.abort !== asker,
-    );
-    if (building) throw new Error(MESSAGE.contractorBuilding(project));
+    if (delegationsIn(this.#x.activeDelegations, projectDir).length > 0)
+      throw new Error(MESSAGE.contractorBuilding(project));
     const resolved = (await git(projectDir, ["rev-parse", "--verify", `${commit}^{commit}`]).catch(() => "")).trim();
     if (!resolved) throw new Error(MESSAGE.notInHistory(commit, project));
     // A build never brings Claude Code's project settings or hooks: the person's own session in
@@ -1354,8 +1355,7 @@ export class PreviewService {
         );
       }
     }
-    if (offerLive) await this.offerLive({ project, root: null });
-    else await this.loadPreview({ project });
+    await this.loadPreview({ project });
     await this.#core.games.touch(project).catch(() => {});
     return { commit: resolved, how: already ? "already" : "merged" };
   }
@@ -1516,21 +1516,6 @@ export class PreviewService {
     if (!game || !folder || !build) return { ...none, folder };
     const kinds = game.facts.map((fact) => fact.id);
     return { project, folder, print: build.print, finished: buildFinished(build, kinds, Date.now()) };
-  }
-
-  /**
-   * A build to show that nobody on the stage asked for (a harness's `show_build` with no message of
-   * the person's waiting on it): checked as `showBuild` checks it, then offered to Live's Reload,
-   * which plays it. Answers the commit it resolved to.
-   */
-  async offerBuild(project: string, commit: string): Promise<string> {
-    if (!COMMIT_HASH.test(String(commit ?? ""))) throw new Error(MESSAGE.notCommitHash(commit));
-    const projectDir = this.#core.games.dirFor(project);
-    await this.#core.assertProjectAllowed(projectDir);
-    const resolved = (await git(projectDir, ["rev-parse", "--verify", `${commit}^{commit}`]).catch(() => "")).trim();
-    if (!resolved) throw new Error(MESSAGE.notInHistory(commit, project));
-    await this.#live.offer({ project, root: null, commit: resolved });
-    return resolved;
   }
 
   /** What waits for Live's Reload for this game, and the build Live shows: what the stage reads on mount. */

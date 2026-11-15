@@ -2,10 +2,11 @@
  * A newcomer's first steps with the Unreal plugin, through the backend's interface over a fake
  * computer: what the harness asks before a new game's engine question (`engine-status`) and after a
  * turn that made the game's Unreal project (`wait-editor`), the Live stage's own status
- * (`stage-status`), and the toolbar's word with no Unreal installed. Nothing here runs Unreal.
+ * (`stage-status`), and the toolbar's word with no Unreal installed; and a computer that has only
+ * the older Unreal a game made with it stays on. Nothing here runs Unreal.
  */
 import assert from "node:assert/strict";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -13,6 +14,7 @@ import type { PluginEngineLink, PluginToolbarStatus } from "../../src/plugin-sdk
 import { createUnrealBackend, PanelStep } from "../../src/plugins/unreal/backend.ts";
 import type { Launch } from "../../src/plugins/unreal/editor-launch.ts";
 import type { EditorLog } from "../../src/plugins/unreal/editor-log.ts";
+import { NEW_GAMES_ENGINE, OLDEST_ENGINE } from "../../src/plugins/unreal/engine-line.ts";
 import { EditorStart } from "../../src/plugins/unreal/editor-status.ts";
 import {
   EditorWait,
@@ -22,26 +24,51 @@ import {
 } from "../../src/plugins/unreal/editor-wait.ts";
 import type { EpicInstallDeps } from "../../src/plugins/unreal/epic-install.ts";
 import type { SetupEnv } from "../../src/plugins/unreal/setup.ts";
+import { type VisualStudioStatus, VisualStudioState } from "../../src/plugins/unreal/visual-studio.ts";
 import { XcodeState } from "../../src/plugins/unreal/xcode.ts";
+import { Changes, until } from "../helpers/changes.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 
 const HELPER = path.resolve("src/plugins/unreal/GenexEditorHelper");
 const GIB = 1024 ** 3;
 const START = Date.UTC(2026, 9, 6, 9, 0, 0);
 const SECOND_MS = 1000;
+/** A case that waits to be told of something would hang on a regression: it fails within this instead. */
+const CASE_TIMEOUT_MS = 60 * SECOND_MS;
+
+/** Microsoft's C++ tools as a PC without them, and with them, reads. */
+const NO_BUILD_TOOLS: VisualStudioStatus = {
+  state: VisualStudioState.Missing,
+  toolset: null,
+  windowsSdk: false,
+  netFxSdk: false,
+  plan: "install",
+};
+const BUILD_TOOLS_READY: VisualStudioStatus = {
+  state: VisualStudioState.Ready,
+  toolset: "14.44.35211",
+  windowsSdk: true,
+  netFxSdk: true,
+};
 
 /** Engines by version and build, as Epic's launcher lists them. */
 type Installed = Array<[string, string]>;
-const ONLY_58: Installed = [["5.8", "5.8.3"]];
+/** The Unreal new games are made with, alone; the older one games made with it stay on, alone; and both. */
+const NEW_GAMES_UNREAL: Installed = [[NEW_GAMES_ENGINE, `${NEW_GAMES_ENGINE}.0`]];
+const OLDER_UNREAL: Installed = [[OLDEST_ENGINE, "5.8.3"]];
+const BOTH_UNREALS: Installed = [...NEW_GAMES_UNREAL, ...OLDER_UNREAL];
 
 /**
  * A fake Mac (or, with `platform`, a fake Windows PC) with the engines listed in Epic's launcher
- * list, a 5.8 project Lantern and a second one, Harbor; with `game` the calls come from that open
- * Genex game, whose link the host keeps.
+ * list (the one new games are made with, unless `engines` says), a project Lantern and a second
+ * one, Harbor, both made with that Unreal unless `madeWith` names another; with `game` the calls
+ * come from that open Genex game, whose link the host keeps.
  */
 async function computer(
   options: {
     engines?: Installed;
+    /** The Unreal Lantern and Harbor were made with, as their `.uproject` names it. */
+    madeWith?: string;
     game?: string | null;
     platform?: "darwin" | "win32";
     /** What Do it for me installs with; none: the launcher's step opens Epic's download page. */
@@ -49,7 +76,12 @@ async function computer(
     /** Whether Windows has the runtime Unreal's editor loads, asked each time. */
     runtime?: () => boolean;
     /** Whether the host can hand a setup task to the chat, and how it answers one. */
-    assist?: { can: boolean; answer: { started: boolean; reason?: string } };
+    assist?: { can: boolean; answer: { started: boolean; reason?: string } | Promise<never> };
+    /**
+     * Where Microsoft's C++ tools stand against the engine in the folder given, asked each time;
+     * none: this computer can't tell.
+     */
+    visualStudio?: (engineDir: string | undefined) => VisualStudioStatus;
   } = {},
 ) {
   const root = await realpath(await tmpDir("studio-unreal-first-use-"));
@@ -71,7 +103,7 @@ async function computer(
     return folder;
   };
   const list = [];
-  for (const [version, build] of options.engines ?? ONLY_58)
+  for (const [version, build] of options.engines ?? NEW_GAMES_UNREAL)
     list.push({
       InstallLocation: await engineFolder(version),
       AppVersion: `${build}-1+++UE5+Release-${version}-Mac`,
@@ -111,7 +143,8 @@ async function computer(
   const project = async (name: string) => {
     const file = path.join(root, "Projects", name, `${name}.uproject`);
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify({ FileVersion: 3, EngineAssociation: "5.8" }, null, "\t")}\n`);
+    const made = { FileVersion: 3, EngineAssociation: options.madeWith ?? NEW_GAMES_ENGINE };
+    await writeFile(file, `${JSON.stringify(made, null, "\t")}\n`);
     return file;
   };
   /**
@@ -141,6 +174,9 @@ async function computer(
     }),
     freeBytes: async () => 200 * GIB,
     totalMemory: () => 32 * GIB,
+    ...(options.visualStudio
+      ? { visualStudio: async (engineDir) => options.visualStudio?.(engineDir) ?? BUILD_TOOLS_READY }
+      : {}),
   };
   const launched: Launch[] = [];
   const clock = { now: START };
@@ -159,8 +195,9 @@ async function computer(
   const game: { link: PluginEngineLink | null } = { link: null };
   /** The games whose Loop is going, as the host's `game.engine.runs` names them. */
   const runs: Array<{ game: string; title: string; project: string }> = [];
-  /** Each task handed to the chat with `game.engine.assist`. */
+  /** Each task handed to the chat with `game.engine.assist`, and the news of each. */
   const assisted: string[] = [];
+  const handed = new Changes();
   const host = async (method: string, args?: { project: string; task?: string }) => {
     if (method === "storage.root") return storage;
     if (method === "game.engine.runs") return runs;
@@ -169,6 +206,7 @@ async function computer(
     if (method === "game.engine.canAssist" && options.assist) return options.assist.can;
     if (method === "game.engine.assist" && options.assist) {
       assisted.push(args?.task ?? "");
+      handed.notify();
       return options.assist.answer;
     }
     if (method !== "game.engine.link") throw new Error(`unexpected host call ${method}`);
@@ -190,6 +228,8 @@ async function computer(
   const actFor = async (other: string, name: string) => backend.action?.(name, {}, inGame(other));
   const toolFor = async (other: string, name: string, args: Record<string, unknown> = {}) =>
     backend.tool?.(name, args as never, inGame(other));
+  /** Waits until the chat has been handed `count` tasks, told of each as the host gets it. */
+  const handedToChat = (count: number) => until(handed, () => assisted.length >= count);
   const lantern = await project("Lantern");
   const harbor = await project("Harbor");
   /** Lantern set up and this game linked to it, as New game leaves it. */
@@ -205,6 +245,7 @@ async function computer(
     clock,
     launched,
     assisted,
+    handedToChat,
     installByRecord,
     addLauncher,
     act,
@@ -219,20 +260,55 @@ async function computer(
 }
 
 describe("engine-status, before a new game's engine question", () => {
-  const rows: Array<[string, Installed, string, string | null]> = [
-    ["no Unreal at all", [], EngineReadiness.None, null],
-    ["only an Unreal older than 5.8", [["5.4", "5.4.4"]], EngineReadiness.OlderOnly, "5.4"],
-    ["Unreal 5.8", ONLY_58, EngineReadiness.Ready, "5.8"],
-    ["only a newer Unreal", [["5.9", "5.9.0"]], EngineReadiness.NewerOnly, "5.9"],
-    ["a newer Unreal beside 5.8", [["5.9", "5.9.0"], ...ONLY_58], EngineReadiness.Ready, "5.8"],
+  const NEWER: Installed = [["6.0", "6.0.0"]];
+  /** What is installed, the readiness and the version it names, and what the note says to offer. */
+  const rows: Array<[string, Installed, string, string | null, RegExp]> = [
+    ["no Unreal at all", [], EngineReadiness.None, null, /get Unreal 5\.9 free from Epic/],
+    [
+      "only an Unreal older than Genex works with",
+      [["5.4", "5.4.4"]],
+      EngineReadiness.OlderOnly,
+      "5.4",
+      /"Needs 5\.9 installed beside your 5\.4, about \d+ GB"/,
+    ],
+    [
+      "only Unreal 5.8, which games made with it stay on",
+      OLDER_UNREAL,
+      EngineReadiness.OlderOnly,
+      "5.8",
+      /"Needs 5\.9 installed beside your 5\.8, about \d+ GB"/,
+    ],
+    ["Unreal 5.9", NEW_GAMES_UNREAL, EngineReadiness.Ready, "5.9", /call unreal__new-game/],
+    ["Unreal 5.8 beside 5.9", BOTH_UNREALS, EngineReadiness.Ready, "5.9", /call unreal__new-game/],
+    [
+      "only a newer Unreal",
+      NEWER,
+      EngineReadiness.NewerOnly,
+      "6.0",
+      /"Needs 5\.9 installed beside your 6\.0, about \d+ GB"/,
+    ],
+    [
+      "a newer Unreal beside 5.9",
+      [...NEWER, ...NEW_GAMES_UNREAL],
+      EngineReadiness.Ready,
+      "5.9",
+      /call unreal__new-game/,
+    ],
+    [
+      "a newer Unreal beside 5.8",
+      [...NEWER, ...OLDER_UNREAL],
+      EngineReadiness.NewerOnly,
+      "6.0",
+      /install 5\.9 beside 6\.0 in the Epic Games Launcher/,
+    ],
   ];
-  for (const [name, engines, engine, version] of rows)
+  for (const [name, engines, engine, version, says] of rows)
     it(`says ${engine} for ${name}`, async () => {
       const c = await computer({ engines });
       const answer = (await c.tool("engine-status")) as Record<string, unknown>;
       assert.deepEqual({ engine: answer.engine, version: answer.version }, { engine, version });
       assert.equal(answer.ready, engine === EngineReadiness.Ready, "ready only when a new game can be made here");
-      assert.equal(typeof answer.note, "string", "with the words the card shows");
+      assert.match(String(answer.note), says, "with the words the card shows");
     });
 });
 
@@ -408,7 +484,7 @@ describe("the toolbar with no Unreal installed", () => {
       const c = await computer({ engines: [], game });
       const status = (await c.act("toolbar-status")) as { badge: string; title: string; dot: boolean };
       assert.deepEqual([status.badge, status.dot], ["Not installed", true]);
-      assert.match(status.title, /5\.8/);
+      assert.match(status.title, /^Get Unreal Engine 5\.9 /);
     });
 
   it("comes out only on a game whose chat chose Unreal (show-steps, or new-game refused), never on another", async () => {
@@ -424,7 +500,7 @@ describe("the toolbar with no Unreal installed", () => {
     assert.equal(await shown("harbor-night"), undefined, "another game's strip stays as it was");
     await assert.rejects(
       c.toolFor("harbor-night", "new-game", { template: "TP_BlankBP", name: "Harbor" }),
-      /isn't on this computer/,
+      /Unreal Engine 5\.9 isn't on this computer yet/,
     );
     assert.equal(await shown("harbor-night"), true, "a new game refused for want of Unreal brings it out too");
   });
@@ -459,12 +535,12 @@ describe("Unreal on a fresh Windows PC", () => {
     const c = await computer({ engines: [], platform: "win32" });
     await c.tool("show-steps");
     assert.equal((await card(c)).open, true);
-    await c.installByRecord("5.8", "5.8.4");
+    await c.installByRecord("5.9", "5.9.1");
     const status = (await c.tool("engine-status")) as Record<string, unknown>;
-    assert.deepEqual([status.engine, status.version, status.ready], [EngineReadiness.Ready, "5.8", true]);
+    assert.deepEqual([status.engine, status.version, status.ready], [EngineReadiness.Ready, "5.9", true]);
     const done = await card(c);
     assert.equal(done.open, false);
-    assert.match(String(done.doneSays), /^Unreal 5\.8 is installed on this computer\. Go on with the person's game/);
+    assert.match(String(done.doneSays), /^Unreal 5\.9 is installed on this computer\. Go on with the person's game/);
     const toolbar = (await c.act("toolbar-status")) as { badge?: string };
     assert.notEqual(toolbar.badge, "Not installed");
   });
@@ -505,7 +581,12 @@ describe("Do it for me on the Unreal setup card", () => {
   const EPIC = "CN=Epic Games Inc., O=Epic Games Inc., L=Cary, S=North Carolina, C=US";
   const MICROSOFT = "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US";
 
-  /** Looks again, a turn of the event loop apart, until `check` holds. */
+  /**
+   * Looks again, a turn of the event loop apart, until `check` holds. Only for a `check` that reads
+   * the card: each look then takes file reads, as the install it waits for does, so the looks keep
+   * pace with it on a busy machine. A `check` that reads nothing uses up its turns in milliseconds:
+   * what the fake host is told of is waited for as a change (`handedToChat`).
+   */
   async function settle(check: () => Promise<boolean>) {
     for (let turn = 0; turn < 500; turn++) {
       if (await check()) return;
@@ -520,7 +601,11 @@ describe("Do it for me on the Unreal setup card", () => {
    * `unsigned`), and each installer's run handed to `onInstall`.
    */
   async function fakeInstall(
-    script: { gate?: Promise<void>; unsigned?: boolean; onInstall?: (file: string) => Promise<void> } = {},
+    script: {
+      gate?: Promise<void>;
+      unsigned?: boolean;
+      onInstall?: (file: string, args: readonly string[]) => Promise<void>;
+    } = {},
   ) {
     const ran: string[] = [];
     const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) => {
@@ -530,10 +615,10 @@ describe("Do it for me on the Unreal setup card", () => {
       await Promise.race([script.gate ?? Promise.resolve(), stopped]);
       return new Response(Buffer.from("epic installer"), { status: 200 });
     }) as typeof fetch;
-    const run: EpicInstallDeps["run"] = async (file, _args, options) => {
+    const run: EpicInstallDeps["run"] = async (file, args, options) => {
       ran.push(path.win32.basename(file));
       if (!file.endsWith("powershell.exe")) {
-        await script.onInstall?.(file);
+        await script.onInstall?.(file, args);
         return { code: 0, stdout: "" };
       }
       const subject = options.env?.GENEX_INSTALLER?.endsWith(".msi") ? EPIC : MICROSOFT;
@@ -568,7 +653,8 @@ describe("Do it for me on the Unreal setup card", () => {
     );
     assert.equal(c.assisted.length, 1);
     const task = c.assisted[0] ?? "";
-    assert.match(task, /^Install Unreal Engine 5\.8 in the Epic Games Launcher/);
+    assert.match(task, /^Install Unreal Engine 5\.9 in the Epic Games Launcher/);
+    assert.match(task, /Engine Versions › 5\.9 /, "the version to pick in the launcher's list");
     assert.ok(task.length <= 300 && !task.includes("\n"), "one plain line, as the host takes a task");
   });
 
@@ -577,7 +663,7 @@ describe("Do it for me on the Unreal setup card", () => {
     await c.addLauncher();
     const answer = (await c.act("install-for-me")) as Answer;
     assert.deepEqual([answer.started, answer.reason], [false, "declined"]);
-    assert.match(answer.message, /Library, \+ beside Engine Versions, 5\.8, Install/);
+    assert.match(answer.message, /Library, \+ beside Engine Versions, 5\.9, Install/);
     assert.equal(c.launched.length, 1, "the launcher is open for the person");
     assert.match(String(await c.tool("install-unreal")), /couldn't hand the install to this chat \(declined\)/);
   });
@@ -659,7 +745,7 @@ describe("Do it for me on the Unreal setup card", () => {
       },
     });
     const c = await computer({ platform: "win32", install, runtime: () => present.runtime });
-    const redist = path.join(c.root, "Engines", "UE_5.8", "Engine", "Extras", "Redist", "en-us");
+    const redist = path.join(c.root, "Engines", `UE_${NEW_GAMES_ENGINE}`, "Engine", "Extras", "Redist", "en-us");
     await mkdir(redist, { recursive: true });
     await writeFile(path.join(redist, "vc_redist.x64.exe"), "MZ");
     await assert.rejects(c.tool("new-game", { template: "TP_BlankBP", name: "Lantern" }), /Visual C\+\+ runtime/);
@@ -678,16 +764,350 @@ describe("Do it for me on the Unreal setup card", () => {
     assert.deepEqual([answer.step, answer.started], ["runtime", true]);
     await settle(async () => !(await card(c)).open);
     assert.deepEqual(ran, ["powershell.exe", "vc_redist.x64.exe"]);
-    assert.match(String((await card(c)).doneSays), /^Unreal 5\.8 is installed on this computer/);
+    assert.match(String((await card(c)).doneSays), /^Unreal 5\.9 is installed on this computer/);
+  });
+
+  it("installs Microsoft's Build Tools from a Windows game's steps card, and tells the agent once they are in", async () => {
+    const tools = { ready: false };
+    const { install, ran } = await fakeInstall({
+      onInstall: async () => {
+        tools.ready = true;
+      },
+    });
+    const c = await computer({
+      platform: "win32",
+      install,
+      runtime: () => true,
+      visualStudio: () => (tools.ready ? BUILD_TOOLS_READY : NO_BUILD_TOOLS),
+    });
+    await c.linkLantern();
+    const shown = await card(c);
+    assert.deepEqual(
+      [shown.open, step(shown, "install-build-tools")?.done, shown.primary?.name],
+      [true, false, "install-for-me"],
+    );
+    assert.match(step(shown, "install-build-tools")?.detail ?? "", /choose Yes when Windows asks/);
+    const answer = (await c.act("install-for-me")) as Answer;
+    assert.deepEqual([answer.step, answer.started], ["build-tools", true]);
+    await settle(async () => !(await card(c)).open);
+    assert.deepEqual(ran, ["powershell.exe", "vs_BuildTools.exe"], "Microsoft's signature checked before it ran");
+    const done = await card(c);
+    assert.equal(step(done, "install-build-tools")?.done, true);
+    assert.match(String(done.doneSays), /^Visual Studio's C\+\+ tools are installed on this PC/);
+    assert.equal(done.primary, undefined);
+  });
+
+  it("with two Unreals installed, a Windows game's steps card and Do it for me judge Microsoft's C++ tools against the Unreal its project names", async () => {
+    const tools = { ready: false };
+    const judged: Array<string | undefined> = [];
+    const { install } = await fakeInstall({
+      onInstall: async () => {
+        tools.ready = true;
+      },
+    });
+    const c = await computer({
+      platform: "win32",
+      engines: BOTH_UNREALS,
+      madeWith: OLDEST_ENGINE,
+      install,
+      runtime: () => true,
+      visualStudio: (engineDir) => {
+        judged.push(engineDir);
+        return tools.ready ? BUILD_TOOLS_READY : NO_BUILD_TOOLS;
+      },
+    });
+    await c.linkLantern();
+    judged.length = 0;
+    assert.equal(step(await card(c), "install-build-tools")?.done, false);
+    const answer = (await c.act("install-for-me")) as Answer;
+    assert.deepEqual([answer.step, answer.started], ["build-tools", true]);
+    await settle(async () => !(await card(c)).open);
+    assert.deepEqual([...new Set(judged)], [path.join(c.root, "Engines", "UE_5.8")], "Lantern is a 5.8 project");
+  });
+
+  it("updates Build Tools whose compiler Unreal refuses, then adds what they lack, in one press", async () => {
+    const installPath = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools";
+    const outdated: VisualStudioStatus = {
+      state: VisualStudioState.Outdated,
+      toolset: null,
+      windowsSdk: true,
+      netFxSdk: false,
+      plan: "update",
+      installPath,
+    };
+    const lacking: VisualStudioStatus = {
+      state: VisualStudioState.Missing,
+      toolset: "14.44.35211",
+      windowsSdk: true,
+      netFxSdk: false,
+      plan: "modify",
+      installPath,
+    };
+    const stages = [outdated, lacking, BUILD_TOOLS_READY];
+    const commands: string[] = [];
+    const { install } = await fakeInstall({
+      onInstall: async (_file, args) => {
+        commands.push(args[0] ?? "");
+        stages.shift();
+      },
+    });
+    const c = await computer({
+      platform: "win32",
+      install,
+      runtime: () => true,
+      visualStudio: () => stages[0] ?? BUILD_TOOLS_READY,
+    });
+    await c.linkLantern();
+    const answer = (await c.act("install-for-me")) as Answer;
+    assert.deepEqual([answer.step, answer.started], ["build-tools", true]);
+    await settle(async () => !(await card(c)).open);
+    assert.deepEqual(commands, ["update", "modify"], "the update first, then the .NET Framework SDK added");
+    assert.match(String((await card(c)).doneSays), /^Visual Studio's C\+\+ tools are installed on this PC/);
+  });
+
+  it("adds what Build Tools lack, then updates the compiler Unreal refuses, in one press", async () => {
+    const installPath = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools";
+    // Only a refused compiler and no Windows SDK: Missing, so the SDKs come first; then Outdated.
+    const lacking: VisualStudioStatus = {
+      state: VisualStudioState.Missing,
+      toolset: null,
+      windowsSdk: false,
+      netFxSdk: false,
+      plan: "modify",
+      installPath,
+    };
+    const outdated: VisualStudioStatus = {
+      ...lacking,
+      state: VisualStudioState.Outdated,
+      windowsSdk: true,
+      netFxSdk: true,
+      plan: "update",
+    };
+    const stages = [lacking, outdated, BUILD_TOOLS_READY];
+    const commands: string[] = [];
+    const { install } = await fakeInstall({
+      onInstall: async (_file, args) => {
+        commands.push(args[0] ?? "");
+        stages.shift();
+      },
+    });
+    const c = await computer({
+      platform: "win32",
+      install,
+      runtime: () => true,
+      visualStudio: () => stages[0] ?? BUILD_TOOLS_READY,
+    });
+    await c.linkLantern();
+    await c.act("install-for-me");
+    await settle(async () => !(await card(c)).open);
+    assert.deepEqual(commands, ["modify", "update"]);
+    assert.match(String((await card(c)).doneSays), /^Visual Studio's C\+\+ tools are installed on this PC/);
+  });
+
+  it("runs no plan twice in one press: a modify that leaves the tools as they were stops", async () => {
+    const installPath = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools";
+    const lacking: VisualStudioStatus = {
+      state: VisualStudioState.Missing,
+      toolset: "14.44.35211",
+      windowsSdk: true,
+      netFxSdk: false,
+      plan: "modify",
+      installPath,
+    };
+    const commands: string[] = [];
+    const { install } = await fakeInstall({ onInstall: async (_file, args) => void commands.push(args[0] ?? "") });
+    const c = await computer({ platform: "win32", install, runtime: () => true, visualStudio: () => lacking });
+    await c.linkLantern();
+    await c.act("install-for-me");
+    await settle(async () => (await card(c)).stuckSays !== undefined);
+    assert.match(String((await card(c)).stuckSays), /Unreal still can't build C\+\+ with what it installed/);
+    assert.deepEqual(commands, ["modify"]);
+  });
+
+  it("follows the Build Tools install on the card, and tells the agent once when it stops on its own", async () => {
+    const held = await fakeInstall({ gate: new Promise<void>(() => {}) });
+    const c = await computer({ platform: "win32", install: held.install, visualStudio: () => NO_BUILD_TOOLS });
+    await c.linkLantern();
+    assert.match(String(await c.tool("install-unreal")), /^Genex is downloading Microsoft's Visual Studio Build Tools/);
+    const working = await card(c);
+    assert.deepEqual(
+      [step(working, "install-build-tools")?.working, working.secondary?.name, working.primary],
+      [true, "stop-install", undefined],
+    );
+    assert.match(step(working, "install-build-tools")?.detail ?? "", /^Downloading the Visual Studio Build Tools/);
+    await c.act("stop-install");
+    await settle(async () => (await card(c)).secondary === undefined);
+    assert.equal((await card(c)).stuckSays, undefined, "the person's own Stop is not news to the agent");
+    const unsigned = await fakeInstall({ unsigned: true });
+    const d = await computer({ platform: "win32", install: unsigned.install, visualStudio: () => NO_BUILD_TOOLS });
+    await d.linkLantern();
+    await d.act("install-for-me");
+    await settle(async () => (await card(d)).stuckSays !== undefined);
+    assert.match(String((await card(d)).stuckSays), /^Do it for me stopped; the card says: The installer isn't signed/);
+    assert.deepEqual(unsigned.ran, ["powershell.exe"], "an unsigned installer never runs");
+  });
+
+  it("lets another press go on while the chat's install of Unreal waits on the person", {
+    timeout: CASE_TIMEOUT_MS,
+  }, async () => {
+    const c = await computer({ engines: [], assist: { can: true, answer: new Promise<never>(() => {}) } });
+    await c.addLauncher();
+    void c.act("install-for-me");
+    void c.actFor("harbor-run", "install-for-me");
+    await c.handedToChat(2);
+  });
+
+  it("starts one install for two presses at once: the card's and the agent's", async () => {
+    const held = await fakeInstall({ gate: new Promise<void>(() => {}) });
+    const c = await computer({ platform: "win32", install: held.install, visualStudio: () => NO_BUILD_TOOLS });
+    await c.linkLantern();
+    const [first, second] = (await Promise.all([c.act("install-for-me"), c.act("install-for-me")])) as Answer[];
+    assert.deepEqual([first?.started, second?.started, second?.reason], [true, false, "running"]);
+    await c.act("stop-install");
+  });
+
+  it("leaves the Build Tools to the person once an install that ended well still left them missing", async () => {
+    const { install, ran } = await fakeInstall();
+    const c = await computer({ platform: "win32", install, visualStudio: () => NO_BUILD_TOOLS });
+    await c.linkLantern();
+    await c.act("install-for-me");
+    await settle(async () => (await card(c)).stuckSays !== undefined);
+    const after = await card(c);
+    assert.match(String(after.stuckSays), /Unreal still can't build C\+\+ with what it installed/);
+    assert.equal(after.primary, undefined, "no Do it for me to press again");
+    assert.match(step(after, "install-build-tools")?.detail ?? "", /Desktop development with C\+\+/);
+    assert.match(String(await c.tool("install-unreal")), /Genex can't install them here/);
+    assert.deepEqual(ran, ["powershell.exe", "vs_BuildTools.exe"], "the installer ran once");
+  });
+
+  it("leaves the Build Tools to the person where Genex can't install them, and installs none before a game has a project", async () => {
+    const c = await computer({ platform: "win32", visualStudio: () => NO_BUILD_TOOLS });
+    const before = (await c.act("install-for-me")) as Answer;
+    assert.deepEqual([before.step, before.started], ["done", false], "a new game in Blueprints needs none");
+    await c.linkLantern();
+    const shown = await card(c);
+    assert.equal(shown.primary, undefined);
+    assert.match(step(shown, "install-build-tools")?.detail ?? "", /Desktop development with C\+\+/);
+    assert.match(String(await c.tool("install-unreal")), /Genex can't install them here/);
+  });
+
+  it("on a PC with only Unreal 5.8, installs Microsoft's Build Tools for a game made with 5.8, and no other Unreal", async () => {
+    const tools = { ready: false };
+    const { install, ran } = await fakeInstall({
+      onInstall: async () => {
+        tools.ready = true;
+      },
+    });
+    const c = await computer({
+      platform: "win32",
+      engines: OLDER_UNREAL,
+      madeWith: OLDEST_ENGINE,
+      install,
+      runtime: () => true,
+      visualStudio: () => (tools.ready ? BUILD_TOOLS_READY : NO_BUILD_TOOLS),
+      assist: { can: true, answer: { started: true } },
+    });
+    await c.linkLantern();
+    const shown = await card(c);
+    assert.deepEqual(
+      [shown.open, step(shown, "install-build-tools")?.done, shown.primary?.name],
+      [true, false, "install-for-me"],
+    );
+    const answer = (await c.act("install-for-me")) as Answer;
+    assert.deepEqual([answer.step, answer.started], ["build-tools", true]);
+    await settle(async () => !(await card(c)).open);
+    assert.deepEqual(ran, ["powershell.exe", "vs_BuildTools.exe"]);
+    assert.deepEqual([c.assisted, c.launched], [[], []], "no install of another Unreal is handed to the chat");
   });
 
   it("answers what is left once everything is in", async () => {
     const c = await computer({ assist: { can: true, answer: { started: true } } });
     const answer = (await c.act("install-for-me")) as Answer;
     assert.deepEqual([answer.step, answer.started], ["done", false]);
-    assert.match(answer.message, /Unreal 5\.8 and everything it needs are on this computer/);
+    assert.match(answer.message, /Unreal 5\.9 and everything it needs are on this computer/);
     assert.match(String(await c.tool("install-unreal")), /call unreal__new-game/);
     assert.deepEqual(c.assisted, [], "nothing handed to the chat");
+  });
+});
+
+describe("a computer with only Unreal 5.8, which games made with it stay on", () => {
+  type Stage = { next: string; project: { name: string } | null };
+  const olderOnly = () => computer({ engines: OLDER_UNREAL, madeWith: OLDEST_ENGINE });
+
+  it("still sets up, opens and waits for a game made with 5.8, on 5.8, while engine-status says older-only", async () => {
+    const c = await olderOnly();
+    const status = (await c.tool("engine-status")) as Record<string, unknown>;
+    assert.deepEqual([status.engine, status.version, status.ready], [EngineReadiness.OlderOnly, "5.8", false]);
+    const set = (await c.act("setup", { project: c.lantern })) as { ready: boolean; engine: string };
+    assert.deepEqual([set.ready, set.engine], [true, "5.8"], "set up, and left on the Unreal it was made with");
+    assert.equal(JSON.parse(await readFile(c.lantern, "utf8")).EngineAssociation, "5.8");
+    await c.act("use-project", { project: c.lantern });
+    const project = await realpath(c.lantern);
+    const closed = (await c.act("stage-status")) as Stage;
+    assert.deepEqual(
+      [closed.next, closed.project?.name],
+      [PanelStep.Open, "Lantern"],
+      "nothing asks for another Unreal",
+    );
+    await c.act("open-editor", { project: c.lantern });
+    const [opened] = c.launched;
+    assert.equal(c.launched.length, 1);
+    assert.equal(
+      path.normalize(opened?.args[2] ?? ""),
+      path.join(c.root, "Engines", "UE_5.8", "Engine", "Binaries", "Mac", "UnrealEditor.app"),
+      "opened by the 5.8 editor",
+    );
+    Object.assign(c.live, { running: true, serving: project });
+    assert.deepEqual(await c.tool("wait-editor", { seconds: 0 }), { state: EditorWait.Ready, project: "Lantern" });
+    assert.equal(((await c.act("stage-status")) as Stage).next, PanelStep.Connected);
+    assert.equal(((await c.tool("engine-status")) as Record<string, unknown>).engine, EngineReadiness.OlderOnly);
+  });
+
+  it("the toolbar of a game made with 5.8 never says Not installed, and its steps card asks for no other Unreal", async () => {
+    const c = await olderOnly();
+    await c.linkLantern();
+    const toolbar = (await c.act("toolbar-status")) as { badge?: string; title: string };
+    assert.notEqual(toolbar.badge, "Not installed");
+    assert.doesNotMatch(toolbar.title, /Get Unreal/);
+    const card = (await c.act("steps")) as { open: boolean; steps: { id: string; label: string; done: boolean }[] };
+    assert.deepEqual(
+      card.steps.filter((row) => row.id === "set-up").map((row) => [row.label, row.done]),
+      [["Unreal 5.8 is set up for Lantern", true]],
+    );
+    assert.deepEqual(
+      card.steps.map((row) => row.id).filter((id) => id === "get-launcher" || id === "install-engine"),
+      [],
+    );
+  });
+
+  it("Do it for me in a game made with 5.8 finds everything there, names 5.8 and hands the chat no install", async () => {
+    const c = await computer({
+      engines: OLDER_UNREAL,
+      madeWith: OLDEST_ENGINE,
+      assist: { can: true, answer: { started: true } },
+    });
+    await c.linkLantern();
+    const answer = (await c.act("install-for-me")) as { step: string; started: boolean; message: string };
+    assert.deepEqual([answer.step, answer.started], ["done", false]);
+    assert.match(answer.message, /Unreal 5\.8 and everything it needs are on this computer/);
+    assert.match(String(await c.tool("install-unreal")), /^Unreal 5\.8 and everything it needs/);
+    assert.deepEqual([c.assisted, c.launched], [[], []], "no install of another Unreal is handed to the chat");
+  });
+
+  it("a game with no Unreal project is shown how to get 5.9, the launcher's step done", async () => {
+    const c = await olderOnly();
+    await c.addLauncher();
+    assert.match(String(await c.tool("show-steps")), /Unreal 5\.9/);
+    const card = (await c.act("steps")) as { open: boolean; steps: { id: string; label: string; done: boolean }[] };
+    assert.equal(card.open, true);
+    assert.deepEqual(
+      card.steps.map((row) => [row.id, row.done]),
+      [
+        ["get-launcher", true],
+        ["install-engine", false],
+      ],
+    );
+    assert.equal(card.steps[1]?.label, "Install Unreal 5.9");
   });
 });
 

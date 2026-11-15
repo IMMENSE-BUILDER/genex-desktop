@@ -15,7 +15,7 @@ import { blankSuspected, liveRefusedProperties, liveShownProperties } from "../.
 import { guarded, track } from "../../analytics/client.ts";
 import { gameRef } from "../../analytics/game-ref.ts";
 import { AnalyticsEvent } from "../../analytics/events.ts";
-import { LiveOutcome, LiveTrigger } from "../../analytics/events/builds.ts";
+import { LiveOutcome, LiveTrigger, LiveWaitSaw } from "../../analytics/events/builds.ts";
 import { oneOf } from "../../analytics/properties.ts";
 
 /** While a page loads behind the loader the stage asks often; otherwise once a second is enough. */
@@ -171,15 +171,29 @@ export function useWebGamePage(
   }, [project, folder, onWebGame, stopped, setLiveLoad]);
 }
 
-/** How one page load is settling, tracked across probes. */
+/** How one page load is settling, tracked across probes: when this game's page was first seen, and what the last probe saw. */
 export interface Settle {
   since: number;
   currentAt: number;
   lastResources: number;
   quietAt: number;
+  saw: LiveWaitSaw;
 }
 /** A settle with nothing seen yet. */
-export const freshSettle = (): Settle => ({ since: -1, currentAt: 0, lastResources: -1, quietAt: 0 });
+export const freshSettle = (): Settle => ({
+  since: -1,
+  currentAt: 0,
+  lastResources: -1,
+  quietAt: 0,
+  saw: LiveWaitSaw.Nothing,
+});
+
+/** What a probe saw of the page Live holds, for `project`'s wait. */
+function sawOf(live: LivePage | null, project: string): LiveWaitSaw {
+  if (!live) return LiveWaitSaw.Nothing;
+  if (live.project !== project) return LiveWaitSaw.OtherGame;
+  return live.navigating ? LiveWaitSaw.Navigating : LiveWaitSaw.ThisGame;
+}
 
 /**
  * Why waiting for the page any longer is pointless, if it is: no time left, a broken build, a failed
@@ -209,17 +223,30 @@ function settled(
   probe: { live: LivePage | null; current: boolean; broken: boolean; now: number },
 ): LiveOutcome | null {
   const { live, current, now } = probe;
-  if (load.since !== settle.since) Object.assign(settle, freshSettle(), { since: load.since });
   const gaveUp = givenUp(load, probe);
-  if (!current) return gaveUp;
+  // Out of time with this game's page never seen: there was none to wait for, not a slow one.
+  if (!current) return gaveUp === LiveOutcome.TimedOut && !settle.currentAt ? LiveOutcome.NoPage : gaveUp;
   settle.currentAt ||= now;
   let ready = now - settle.currentAt > LIVE_SETTLE_MAX_MS;
   const page = live?.page;
-  if (page?.complete && page.resources !== settle.lastResources) {
-    settle.lastResources = page.resources;
+  // A page too busy to answer the probe (a long loop before its first frame) is not quiet.
+  const busy = !page || page.resources !== settle.lastResources || settingUp(page.state);
+  if (busy) {
+    settle.lastResources = page?.resources ?? -1;
     settle.quietAt = now;
-  } else if (page?.complete && now - settle.quietAt >= LIVE_QUIET_MS) ready = true;
+  } else if (page.complete && now - settle.quietAt >= LIVE_QUIET_MS) ready = true;
   return gaveUp ?? (ready ? LiveOutcome.Shown : null);
+}
+
+/**
+ * Whether the page says its game is still setting its scene up: it has a canvas, and has neither
+ * drawn on it nor asked for a first frame (pictures awaited, pixels filled before the loop starts).
+ * A hidden view draws no frames, so this, not a frame, is what Live can wait on. A page that says
+ * nothing of it is not held.
+ */
+function settingUp(state: Record<string, unknown> | null): boolean {
+  if (state?.canvas !== true || state.frameAsked !== false) return false;
+  return !(typeof state.drawCalls === "number" && state.drawCalls > 0);
 }
 
 /** What this game's own page says on a probe: whether it is stopped, and the state it reports. */
@@ -231,6 +258,10 @@ function noteGame(live: LivePage, set: Pick<ReturnType<typeof useLiveLoad>, "set
     previous?.phase === next?.phase && previous?.drawCalls === next?.drawCalls ? previous : next,
   );
 }
+
+/** A load main has not answered: timed out once it has kept the game hidden too long. */
+const pendingOutcome = (load: LiveLoad, now: number): LiveOutcome | null =>
+  now - load.since > LIVE_LOAD_MAX_MS ? LiveOutcome.TimedOut : null;
 
 /**
  * The load this game's probe settled, and how; null while there is none to wait on or the wait
@@ -244,8 +275,9 @@ export function settledLoad(
   probe: { live: LivePage | null; current: boolean; broken: boolean; now: number },
 ): { load: LiveLoad; outcome: LiveOutcome } | null {
   if (!load || load.project !== project) return null;
-  if (load.pending) return probe.now - load.since > LIVE_LOAD_MAX_MS ? { load, outcome: LiveOutcome.TimedOut } : null;
-  const outcome = settled(settle, load, probe);
+  if (load.since !== settle.since) Object.assign(settle, freshSettle(), { since: load.since });
+  settle.saw = sawOf(probe.live, project);
+  const outcome = load.pending ? pendingOutcome(load, probe.now) : settled(settle, load, probe);
   return outcome ? { load, outcome } : null;
 }
 
@@ -281,6 +313,7 @@ function noteSettled(
     about: RefObject<LiveAbout | null>;
     state: Record<string, unknown> | null;
     failure: { load: unknown; gone: unknown } | null;
+    settle: Settle;
   },
 ): Shown | null {
   const firstInLaunch = !shownThisLaunch.has(load.project);
@@ -297,6 +330,7 @@ function noteSettled(
       state: at.state,
       gameRef: gameRef(load.project),
       failure: at.failure,
+      probes: { pageSeenAt: at.settle.currentAt || null, saw: at.settle.saw, mainAnswered: !load.pending },
     }),
   );
   if (outcome !== LiveOutcome.Shown) return null;
@@ -360,7 +394,8 @@ export function useLiveProbe({
         now,
       });
       if (!done) return;
-      shown.current = noteSettled(done.load, done.outcome, { now, about, state, failure: pageFailure(live, current) });
+      const failure = pageFailure(live, current);
+      shown.current = noteSettled(done.load, done.outcome, { now, about, state, failure, settle });
       setLiveLoad((value) => (value === done.load ? null : value));
     };
     const tick = async (): Promise<void> => {

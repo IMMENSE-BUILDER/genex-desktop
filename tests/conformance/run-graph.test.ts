@@ -16,10 +16,10 @@ import {
   plannedFlips,
   roundStep,
   type IterationNode,
-  type Rect,
 } from "../../src/renderer/run-graph.ts";
 import { checkCounts } from "../../src/renderer/words.ts";
-import { answeredRecords } from "../../src/shared/run-graph-events.ts";
+import { customRecord } from "../../src/shared/custom-events.ts";
+import { answeredRecords, compactGraphEvents } from "../../src/shared/run-graph-events.ts";
 
 let counter = 0;
 function event(eventType: string, payload: Record<string, unknown>): EventEnvelope {
@@ -218,6 +218,82 @@ describe("buildRunGraph", () => {
       [log[2]!.id, log[4]!.id],
     );
     assert.deepEqual(answeredRecords(log, "run_other"), [], "a run with no record of its own answers nothing");
+  });
+
+  describe("a paused build the chat goes on with", () => {
+    /** A record of the chat's thread: its queue's, or the steer the chat records for a resume. */
+    const chat = (eventType: string, payload: Record<string, unknown>): EventEnvelope => {
+      const record = event(eventType, {});
+      return { ...record, thread_id: "chat", data: { type: "custom", event_type: eventType, payload } };
+    };
+    /** The person's message, as the chat queues it. */
+    const queued = (messageId: string, text: string, pictures = 0): EventEnvelope =>
+      chat("coordinator_message_queued", {
+        messageId,
+        action: pictures
+          ? { text, attachmentsArtifact: `message_attachments_${messageId}`, imageCount: pictures }
+          : { text },
+      });
+    /** The person's message, as the chat queues it and begins answering it. */
+    const said = (messageId: string, text: string, pictures = 0): EventEnvelope[] => [
+      queued(messageId, text, pictures),
+      chat("coordinator_message_processing", { messageId }),
+    ];
+    /** A start of the build: its registration and its start, both carrying the goal it began with. */
+    const start = (extra: Record<string, unknown> = {}): EventEnvelope[] => [
+      event("run_registered", { goal: "Recreate this area", ...extra }),
+      event("run_started", { goal: "Recreate this area", ...extra }),
+    ];
+    /** The lead's turn ended with nothing at work: the build pauses for the person's next word. */
+    const paused = (): EventEnvelope => event("run_finished", { paused: true, stoppedBecause: "waiting" });
+    /** The chat's `resume_run`: the words it goes on with, from the message it answers. */
+    const goingOn = (messageId: string, text: string): EventEnvelope =>
+      chat("run_steering", { runId: "run_x", text, sourceMessageId: messageId });
+    /** The first build, started from a message with two pictures, and paused. */
+    const firstBuild = (): EventEnvelope[] => [...said("m1", "Recreate this area", 2), ...start(), paused()];
+    const startOf = (graph: ReturnType<typeof buildRunGraph>) => {
+      const run = graph?.nodes.find((node) => node.kind === "run");
+      return run?.kind === "run" ? { goal: run.goal, asked: run.asked } : undefined;
+    };
+
+    it("asks it what the chat went on with, and shows that message's pictures", () => {
+      const log = [
+        ...firstBuild(),
+        ...said("m2", "now make it rain, like this", 1),
+        goingOn("m2", "Add rain over the area"),
+        ...start({ resumed: true }),
+      ];
+      const expected = {
+        goal: "Add rain over the area",
+        asked: { threadId: "chat", messageId: "m2", count: 1 },
+      };
+      assert.deepEqual(startOf(buildRunGraph(log)), expected, "the chat's own log");
+      // The run's summary hands the graph its own records and the messages it answers: the same start.
+      const own = log.filter((record) => customRecord(record.data)?.payload.runId === "run_x");
+      const summary = compactGraphEvents([...answeredRecords(log, "run_x"), ...own]);
+      assert.deepEqual(startOf(buildRunGraph(summary)), expected, "the run's summary");
+    });
+
+    it("shows no pictures when the message it went on with had none", () => {
+      const log = [...firstBuild(), ...said("m2", "add rain"), goingOn("m2", "Add rain"), ...start({ resumed: true })];
+      assert.deepEqual(startOf(buildRunGraph(log)), { goal: "Add rain", asked: null });
+    });
+
+    it("keeps the last ask when no words went on with it, and while the build works", () => {
+      const asked = { goal: "Add rain over the area", asked: { threadId: "chat", messageId: "m2", count: 1 } };
+      const resumed = [
+        ...firstBuild(),
+        ...said("m2", "now make it rain, like this", 1),
+        goingOn("m2", "Add rain over the area"),
+        ...start({ resumed: true }),
+      ];
+      // A word the lead hears while it works steers the build; it is not what the build was asked.
+      const steered = [...resumed, queued("m3", "brighter", 1), goingOn("m3", "Make it brighter")];
+      assert.deepEqual(startOf(buildRunGraph(steered)), asked, "a steer while the build works");
+      // Resume on the build's card says nothing new: the build goes on with what it was last asked.
+      const button = [...resumed, paused(), ...start({ resumed: true })];
+      assert.deepEqual(startOf(buildRunGraph(button)), asked, "a Resume with no words");
+    });
   });
 
   it("returns null for a thread with no run", () => {
@@ -469,10 +545,6 @@ describe("the plan's checks and the judge's own notes", () => {
   });
 });
 
-/** Two cards share pixels: what no timeline layout may do. */
-const rectsOverlap = (a: Rect, b: Rect): boolean =>
-  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-
 // ── the Builds tab: notes, plain words, timeline ─────────────────────────────────────────
 
 import {
@@ -486,7 +558,7 @@ import {
   runStillPath,
   thumbShot,
 } from "../../src/renderer/run-graph.ts";
-import { layoutSteps, partRows, STEPS, Tone } from "../../src/renderer/run-steps.ts";
+import { Tone } from "../../src/renderer/run-steps.ts";
 import { assetsStatus, isMaking, stoppedShort } from "../../src/renderer/panels/inspector/asset-jobs.ts";
 import { MakingPhase } from "../../src/shared/asset-making.ts";
 
@@ -695,13 +767,6 @@ describe("the modeller in the run graph (AG-930)", () => {
     assert.equal(node.assets[0]!.renderFront, "/runs/run_x/facet_buildings/blender/barn-1-front.png");
     assert.equal(node.assets[1]!.renderFront, null, "an event without the second view still folds");
     assert.equal(graph.runDir, "/runs/run_x", "the first render names the run folder like any still");
-    // The modeller is part of the one assets node, under the start.
-    const layout = layoutSteps(partRows(graph), { assets: true });
-    assert.ok(layout.rects.assets!.y >= layout.rects.start!.y + layout.rects.start!.h, "below the start");
-    // A part built in one session has no label, only its node; neither may sit under the assets.
-    for (const [id, rect] of Object.entries(layout.rects))
-      if (/^(row|step|session):/.test(id))
-        assert.equal(rectsOverlap(layout.rects.assets!, rect), false, `never over ${id}`);
   });
 
   it("no Blender node when the run had none, and an asset event alone still creates one", () => {
@@ -714,7 +779,6 @@ describe("the modeller in the run graph (AG-930)", () => {
       without.nodes.some((n) => n.kind === "blender"),
       false,
     );
-    assert.equal(layoutSteps(partRows(without)).rects.assets, undefined);
     counter = 0;
     const lateGrant = buildRunGraph([
       event("run_started", { goal: "g", project: "p", reference: { name: "x" } }),
@@ -845,10 +909,6 @@ describe("the plugins' asset jobs in the run graph", () => {
       status.nodes.some((n) => n.kind === "assets"),
       false,
     );
-    assert.equal(
-      layoutSteps(partRows(status), { assets: status.nodes.some((n) => n.kind === "assets") }).rects.assets,
-      undefined,
-    );
   });
 
   it("says a failed call failed, in the plugin's own words, and keeps the card", () => {
@@ -866,6 +926,63 @@ describe("the plugins' asset jobs in the run graph", () => {
     assert.equal(node.jobs[0]!.error, "out of credits");
     assert.equal(node.jobs[0]!.facetId, "ground");
     assert.equal(node.jobs[0]!.iteration, 2);
+  });
+
+  it("lists a call only when its tool makes something, or once it delivers: a lookup that failed is no failed asset", () => {
+    counter = 0;
+    const lookup = {
+      pluginId: "unreal",
+      pluginName: "Unreal Engine",
+      tool: "find-nodes",
+      toolName: "unreal__find-nodes",
+      args: "query=set intensity",
+    };
+    const refusal = "There is no node reference for this engine yet.";
+    const lookups = buildRunGraph([
+      event("run_started", { goal: "a farm", project: "farm" }),
+      started("call-1", lookup),
+      finished("call-1", { ...lookup, ok: false, error: refusal, result: "" }),
+      started("call-2", lookup),
+    ])!;
+    assert.equal(
+      lookups.nodes.some((n) => n.kind === "assets"),
+      false,
+      "a tool that never said it makes anything is not an asset, whether it failed or is still out",
+    );
+
+    counter = 0;
+    const painter = { pluginId: "painter", pluginName: "Painter", toolName: "painter__paint" };
+    const paint = {
+      ...painter,
+      tool: "paint",
+      args: "prompt=a red barn",
+      making: { kind: "image", prompt: "a red barn" },
+    };
+    const exported = { ...painter, tool: "export", toolName: "painter__export", args: "name=barn" };
+    const graph = buildRunGraph([
+      event("run_started", { goal: "a farm", project: "farm" }),
+      started("call-3", paint),
+      finished("call-3", { ...paint, ok: false, error: "out of paint", result: "" }),
+      started("call-4", exported),
+      finished("call-4", {
+        ...exported,
+        result: '{"id":"job-4","files":["assets/barn.png"]}',
+        jobId: "job-4",
+        files: ["assets/barn.png"],
+      }),
+      started("call-5", lookup),
+      finished("call-5", { ...lookup, ok: false, error: refusal, result: "" }),
+    ])!;
+    const node = graph.nodes.find((n) => n.kind === "assets");
+    assert.ok(node && node.kind === "assets");
+    assert.deepEqual(
+      node.jobs.map((job) => [job.callId, job.state, job.error]),
+      [
+        ["call-3", "failed", "out of paint"],
+        ["call-4", "delivered", null],
+      ],
+      "a tool that says what it makes keeps its failure, and any call that delivered files is an asset",
+    );
   });
 
   it("drops a Genex request refused before a generation started, and fails a generation that did", () => {
@@ -1019,7 +1136,10 @@ describe("the plugins' asset jobs in the run graph", () => {
       started("call-4", {
         pluginId: "blender",
         pluginName: "Local Blender",
+        tool: "model",
+        toolName: "blender__model",
         args: "operation=model name=hero-tank script=assets/src/hero.py",
+        making: { kind: "model" },
       }),
     ])!;
     const node = graph.nodes.find((n) => n.kind === "assets");
@@ -1047,6 +1167,7 @@ describe("the plugins' asset jobs in the run graph", () => {
         tool: "paint",
         toolName: "sprite-forge__paint",
         args: "prompt=a shop sign that reads operation=status",
+        making: { kind: "image", prompt: "a shop sign that reads operation=status" },
       }),
     ])!;
     const node = graph.nodes.find((n) => n.kind === "assets");
@@ -1179,49 +1300,6 @@ describe("the plugins' asset jobs in the run graph", () => {
     assert.equal(blender.assets[0]!.source, "blender");
     assert.equal(blender.assets[0]!.state, "delivered");
     assert.deepEqual(blender.assets[0]!.files, ["assets/barn.glb"]);
-  });
-
-  it("hangs the assets under the start, and crosses no part's row", () => {
-    counter = 0;
-    const graph = buildRunGraph([
-      event("run_started", { goal: "a farm", project: "farm", blender: { version: "5.2.1" } }),
-      event("autopilot_started", { facets, maxParallel: 2 }),
-      verdict("buildings", 1, "challenger"),
-      verdict("ground", 1, "challenger"),
-      event("blender_asset", {
-        facetId: "buildings",
-        iteration: 1,
-        name: "barn",
-        file: "assets/barn.glb",
-        bytes: 1,
-        render: null,
-        ok: true,
-        error: null,
-        stats: null,
-      }),
-      started("call-1", { facetId: "ground", iteration: 1 }),
-      finished("call-1", { facetId: "ground", iteration: 1, jobId: "job-1", files: ["assets/genex/job-1/hay.png"] }),
-    ])!;
-    const layout = layoutSteps(partRows(graph), { assets: true });
-    assert.ok(layout.rects.assets, "the graph places one assets node for the modeller and the plugins");
-    assert.equal(layout.rects.assets!.x, layout.rects.start!.x, "the same column as the start");
-    assert.ok(
-      layout.rects.assets!.x + layout.rects.assets!.w <= STEPS.pad + STEPS.startW + STEPS.busGap,
-      "clear of the parts' bus",
-    );
-    assert.ok(layout.rects.assets!.y >= layout.rects.start!.y + layout.rects.start!.h, "under the start, not over it");
-    const entries = Object.entries(layout.rects).filter(([id]) => !id.startsWith("row:"));
-    for (const [aId, a] of entries) {
-      for (const [bId, b] of entries) {
-        if (aId >= bId) continue;
-        assert.equal(rectsOverlap(a, b), false, `${aId} overlaps ${bId}`);
-      }
-    }
-    // A dotted thread hangs it off the start: a tool every part reaches for, not a step.
-    assert.ok(
-      layout.edges.some((edge) => edge.kind === "dotted" && edge.d.endsWith(`V${layout.rects.assets!.y}`)),
-      "hung off the start",
-    );
   });
 
   it("reads one field out of the host's arguments digest, and nothing out of a digest without it", () => {
@@ -1513,7 +1591,6 @@ describe("a finished lead run its chat's own session reopens", () => {
     const run = graph.nodes.find((node) => node.kind === "run")!;
     assert.ok(run.kind === "run");
     assert.deepEqual([run.finishedAt, run.victory, run.stoppedBecause], [null, null, null]);
-    assert.equal(run.durationMs, 1_800_000, "the reopen's own half hour");
     assert.equal(graph.mergedHead, null, "only a merge of the reopened run is new to the stage");
     assert.equal(newBuildOffer(graph.mergedHead, null), null);
     assert.ok(
@@ -1536,26 +1613,4 @@ describe("a finished lead run its chat's own session reopens", () => {
     const final = graph.nodes.find((node) => node.kind === "final")!;
     assert.deepEqual(final.kind === "final" && final.facets.map((row) => row.facetId), ["a", "b"]);
   });
-});
-
-it("gives an ∞ build no duration, so it is never called a 24 h build", () => {
-  const graph = buildRunGraph([event("run_started", { budgets: { wallClockMs: 86_400_000, untilSatisfied: true } })]);
-  assert.ok(graph);
-  assert.equal(graph.nodes.find((node) => node.kind === "run")?.durationMs, undefined);
-});
-
-it("a director working without worker rows has a compact, connected input-to-result path", () => {
-  const graph = buildRunGraph([
-    event("run_started", { budgets: { wallClockMs: 3_600_000 } }),
-    event("autopilot_started", { director: true, facets: [] }),
-  ])!;
-  assert.equal(graph.nodes.find((node) => node.kind === "run")?.durationMs, 3_600_000);
-  const layout = layoutSteps(partRows(graph)),
-    start = layout.rects.start!,
-    final = layout.rects.final!;
-  assert.ok(final.x - start.x - start.w <= 80, "no empty worker-sized gap");
-  assert.ok(
-    layout.edges.some((edge) => edge.d === `M${start.x + start.w} ${start.y + start.h / 2} H${final.x}`),
-    "one continuous connector",
-  );
 });

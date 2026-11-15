@@ -15,6 +15,14 @@ export const StudioTool = {
 } as const;
 export type StudioTool = (typeof StudioTool)[keyof typeof StudioTool];
 
+/**
+ * Whether a session handed `tools` is an interview: one handed the question card, which reads no
+ * message mid-turn (an answer read after its question would reach a turn that had already asked).
+ */
+export function isInterview(tools: readonly { name: string }[] | undefined): boolean {
+  return (tools ?? []).some((tool) => tool.name === StudioTool.AskUser);
+}
+
 /** The studio's own MCP server, as a contractor sees it: every tool is `mcp__studio__<name>`. */
 export const STUDIO_MCP_SERVER = "studio";
 export const STUDIO_TOOL_PREFIX = `mcp__${STUDIO_MCP_SERVER}__`;
@@ -22,6 +30,14 @@ export const STUDIO_TOOL_PREFIX = `mcp__${STUDIO_MCP_SERVER}__`;
 /** The name a contractor calls a studio tool by. */
 export function studioToolName(name: string): string {
   return `${STUDIO_TOOL_PREFIX}${name}`;
+}
+
+/** A bridge call as a command: `node .studio/bridge/tool.mjs <name> …`. */
+const STUDIO_BRIDGE_COMMAND = /^node \.studio\/bridge\/tool\.mjs ([\w-]+)/;
+
+/** The studio tool a shell command calls through the bridge, or none for any other command. */
+export function bridgedStudioTool(command: string | null | undefined): string | undefined {
+  return command ? STUDIO_BRIDGE_COMMAND.exec(command)?.[1] : undefined;
 }
 
 /** The studio's shell as the contractor calls it; the host and the never-touch screen read it as `Bash`. */
@@ -35,15 +51,6 @@ export const RUN_COMMAND_TOOL = {
   timeout: "Milliseconds before the command is stopped (default 2 minutes, at most 10).",
   /** The sandbox could not run the command at all: the session reads why and goes on. */
   failed: (why: string) => `The command could not run: ${why}`,
-} as const;
-
-/**
- * The shell a resumed Windows session has this turn: an unattended turn runs its commands in Genex's
- * sandbox and one the person answers in Bash, so a session may remember the other one.
- */
-export const SHELL_THIS_TURN = {
-  Studio: `This turn your shell is ${STUDIO_SHELL_TOOL} (Genex's sandbox, Git Bash syntax): Bash and PowerShell are off for this turn, whatever this session used before.`,
-  Bash: `This turn your shell is Bash (Git Bash): ${STUDIO_SHELL_TOOL} is not here this turn, whatever this session used before.`,
 } as const;
 
 /** `checkpoint`: an optional save point the session may make. */

@@ -9,15 +9,17 @@
  * name those producers pass is a key of {@link UiEventMap}, and that every key is still produced.
  */
 import type { AgentScreenEvent, AgentScreenFrame } from "./agent-screen.ts";
-import type { ReadyUpdate, UpdateFailure } from "./app-update.ts";
+import type { ReadyUpdate, UpdateFailedNote } from "./app-update.ts";
 import type { MainDiagnostic } from "./app-session.ts";
-import type { BootFailureCode } from "./boot.ts";
+import type { BootFailureCode, SandboxFolderKind } from "./boot.ts";
+import type { DesignChoices, DesignMaking, DesignShown } from "./design-board.ts";
+import type { DesignTold } from "./design-marks.ts";
 import type { AssetDeliveredPayload } from "./game-assets.ts";
 import type { LiveBehindEvent } from "./live-behind.ts";
 import type { McpChange } from "./mcp.ts";
 import type { CliInstallJob } from "./cli-install.ts";
 import type { ModelInstallJob, ModelInstallProblem, ModelPullProblem } from "./model-install.ts";
-import type { SendFailure, SendRefusal } from "./composer.ts";
+import type { SendFailure } from "./composer.ts";
 import type { ProviderUsageReport } from "./provider-usage.ts";
 import type { ToolPermissionState } from "./permissions.ts";
 import type { PlayViewerEvent, RemixProgress } from "./play.ts";
@@ -59,8 +61,8 @@ export interface ChatDelta {
 export interface UiEventMap {
   // — chat and threads —
   "chat.message": { threadId?: string; role?: string; content?: string };
-  /** A message that did not reach its chat (`failure`), or reached it and was refused there (`refusal`). */
-  "chat.error": { threadId?: string; message?: string; failure?: SendFailure; refusal?: SendRefusal };
+  /** An error in the chat; a message that did not reach it says why (`failure`). */
+  "chat.error": { threadId?: string; message?: string; failure?: SendFailure };
   "chat.delta": ChatDelta;
   "chat.stream.started": { threadId: string; streamId: string; afterEventId: string | null };
   "chat.stream.ended": { threadId: string; streamId: string; failed?: boolean };
@@ -98,6 +100,11 @@ export interface UiEventMap {
   "harness.boot": Partial<BootNotice>;
   /** The open studio's harness would not start (main's own, never the harness's): why, for its line. */
   "harness.start-failed": { failure: string; failureCode?: BootFailureCode };
+  /**
+   * Windows refused the sandbox's write grant on a folder, and the agents started without it: what
+   * the folder is, and whether it is on another drive than the person's profile (never its path).
+   */
+  "sandbox.folder-left-out": { kind?: SandboxFolderKind; otherDrive?: boolean };
   "seed.upgraded": { added: string[]; updated: string[]; kept: string[]; retired: string[] };
   "watchdog.triggered": { reason: string; snapshot: string | null };
   "watchdog.recovered": { reason: string; ok: boolean; reseeded?: boolean };
@@ -107,8 +114,8 @@ export interface UiEventMap {
   "notification.open": { id: string };
   /** A new version of the app is downloaded; a restart installs it (`main/auto-update.ts`). */
   "update.ready": ReadyUpdate;
-  /** An update the app looked for on its own failed, at `stage` (`main/auto-update.ts`). */
-  "update.failed": { stage?: UpdateFailure };
+  /** An update the app looked for on its own failed, at `stage`, and why (`main/auto-update.ts`). */
+  "update.failed": Partial<UpdateFailedNote>;
   /** Main's own process caught an error nowhere, or a window answered again after `durationMs`. */
   "app.diagnostic": { kind?: MainDiagnostic; durationMs?: number; errorType?: string };
 
@@ -126,6 +133,14 @@ export interface UiEventMap {
   // — games and builds —
   "game.changed": { project?: string; file?: string; warning?: string };
   "game.archived": { project: string; trash: boolean };
+  /** The game's agent showed the person a page of its design board (`show_design`). */
+  "design.shown": DesignShown;
+  /** The game's agent said which artboards it is about to make: the canvas shows them being drawn. */
+  "design.making": DesignMaking;
+  /** The game's agent offered artboards to pick among: only those wear Use this and Not this. */
+  "design.choices": DesignChoices;
+  /** The person's notes and picks on the board went to the agent with their message: they are told. */
+  "design.told": DesignTold;
   "delegation.started": { project: string; engine: string; active: number };
   "delegation.finished": { project: string; engine: string; active: number };
   "delegation.checkpoint": { project: string; cwd: string; note: string };
@@ -134,8 +149,6 @@ export interface UiEventMap {
   "asset.delivered": AssetDeliveredPayload;
   /** A call making an asset started or ended: the game's waiting jobs changed (`ProjectAssets.jobs`). */
   "asset.jobs": { project: string };
-  /** A coordinator tool put a build on screen: the chat of that game brings Live forward. */
-  "stage.show": { project: string; view: "live" };
 
   // — runs —
   "run.keepawake": { runId?: string };
@@ -179,6 +192,12 @@ export interface UiEventMap {
    * settle after its publish): its Listing draft cards read them again (`studio:items.local`). Host only.
    */
   "items.local": { project: string };
+  /**
+   * Genex's review of a game's apps or its takedown changed, as the host's review watch read it
+   * (`main/core/genex-review-watch.ts`): the Publish dialog, the chat's review card and the sidebar
+   * read it again. A nudge, never state. Host only.
+   */
+  "genex.review": { project: string };
 
   // — plugins and connectors —
   "plugins.changed": PluginChange;
@@ -249,6 +268,7 @@ export const UiEvent = {
   HarnessLog: "harness.log",
   HarnessBoot: "harness.boot",
   HarnessStartFailed: "harness.start-failed",
+  SandboxFolderLeftOut: "sandbox.folder-left-out",
   SeedUpgraded: "seed.upgraded",
   WatchdogTriggered: "watchdog.triggered",
   WatchdogRecovered: "watchdog.recovered",
@@ -267,13 +287,16 @@ export const UiEvent = {
   ModelPull: "model.pull",
   GameChanged: "game.changed",
   GameArchived: "game.archived",
+  DesignShown: "design.shown",
+  DesignMaking: "design.making",
+  DesignChoices: "design.choices",
+  DesignTold: "design.told",
   DelegationStarted: "delegation.started",
   DelegationFinished: "delegation.finished",
   DelegationCheckpoint: "delegation.checkpoint",
   DelegatedEvent: "delegated.event",
   AssetDelivered: "asset.delivered",
   AssetJobs: "asset.jobs",
-  StageShow: "stage.show",
   RunKeepawake: "run.keepawake",
   RunStopping: "run.stopping",
   RunFinished: "run.finished",
@@ -294,6 +317,7 @@ export const UiEvent = {
   PlayGameLink: "play.game-link",
   ItemDrafted: "item.drafted",
   ItemsLocal: "items.local",
+  GenexReviewChanged: "genex.review",
   PluginsChanged: "plugins.changed",
   PluginEvent: "plugin.event",
   PluginConsent: "plugin.consent",
@@ -362,6 +386,7 @@ const HOST_ONLY: ReadonlySet<string> = new Set<UiEventType>([
   UiEvent.LiveBehind,
   UiEvent.ItemDrafted,
   UiEvent.ItemsLocal,
+  UiEvent.GenexReviewChanged,
 ]);
 
 /** Whether a harness notification names an event only the host sends. */

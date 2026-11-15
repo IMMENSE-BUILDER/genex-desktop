@@ -236,6 +236,24 @@ describe("desktop target", () => {
     assert.equal(focused, 1);
   });
 
+  it("reads its state by the app in front alone where the driver can say it, never waiting on the password check", async () => {
+    const fake = fakeDriver();
+    const asked: string[] = [];
+    fake.driver.focus = async () => {
+      asked.push("focus");
+      return { app: EDITOR, secure: false };
+    };
+    fake.driver.frontApp = async () => {
+      asked.push("front app");
+      return EDITOR;
+    };
+    const { target } = await targetOver(fake);
+    assert.deepEqual(await target.state?.(), { app: "TextEdit", tree: { role: "AXWindow", title: "Untitled" } });
+    assert.deepEqual(asked, ["front app"]);
+    fake.driver.frontApp = async () => STUDIO;
+    assert.match(JSON.stringify(await target.state?.()), /never driven/, "a refused app in front is still refused");
+  });
+
   it("refuses a click over a point no window covers, never the app in front in its place", async () => {
     const fake = fakeDriver({ focus: { app: EDITOR, secure: false }, under: null });
     const { target, asked } = await targetOver(fake);
@@ -262,7 +280,7 @@ describe("a drag's drop point", () => {
   const MAIL: DesktopApp = { name: "Mail", bundleId: "com.apple.mail", pid: 5 };
   const SETTINGS: DesktopApp = { name: "System Settings", bundleId: "com.apple.systempreferences", pid: 4 };
   const MANAGER: DesktopApp = { name: "1Password", bundleId: "com.1password.1password", pid: 3 };
-  const TOY_EDITOR: DesktopApp = { name: "Toy Editor", bundleId: "com.example.toy", pid: 31 };
+  const PLAYER: DesktopApp = { name: "Roblox", bundleId: "com.roblox.RobloxPlayer", pid: 31 };
 
   /** A screen whose left half (in points) is TextEdit and right half is `right`. */
   async function split(right: DesktopApp | null) {
@@ -276,7 +294,12 @@ describe("a drag's drop point", () => {
         return app.bundleId === EDITOR.bundleId;
       },
       ownApp: (app) => app.bundleId === STUDIO.bundleId,
-      engineApps: (app) => engineAppRefusal(app, { declared: new Set(["com.example.toy"]), granted: null }),
+      engineApps: (app) =>
+        engineAppRefusal(app, {
+          declared: new Set(["com.example.toy"]),
+          granted: null,
+          players: new Set([PLAYER.bundleId!]),
+        }),
     });
     await target.screenshot({ quality: 80, surface: "auto" as never });
     return { target, calls: fake.calls, asked };
@@ -288,7 +311,7 @@ describe("a drag's drop point", () => {
     ["System Settings", SETTINGS, /never driven/],
     ["a password manager", MANAGER, /never driven/],
     ["the studio itself", STUDIO, /never driven/],
-    ["an engine's editor outside its assist", TOY_EDITOR, /game engine's editor/],
+    ["the app an engine's games are played in", PLAYER, /where an engine's games are played/],
     ["a point no window covers", null, /no app's window is under that point/],
   ];
   for (const [label, right, why] of rows) {
@@ -318,10 +341,9 @@ describe("a drag's drop point", () => {
 });
 
 /**
- * The engine-app guard: computer use never builds or play-tests in an engine's editor. The apps an
- * enabled engine plugin declares (`engine.apps`) are refused outside that plugin's setup assist; in
- * an assist, only the apps it was granted are driven, and the apps the studio never drives stay
- * refused whatever the grant names.
+ * The engine-app guard: outside a setup assist an engine's apps (`engine.apps`) are the agent's like
+ * any app, asked about as any app is; in an assist, only the apps it was granted are driven, and the
+ * apps the studio never drives stay refused whatever the grant names.
  */
 describe("the engine-app guard", () => {
   const TOY_EDITOR: DesktopApp = { name: "Toy Editor", bundleId: "com.example.toy", pid: 31 };
@@ -345,13 +367,13 @@ describe("the engine-app guard", () => {
     return { done, calls: fake.calls, asked, refused: target.refusals?.() ?? [] };
   }
 
-  it("refuses an engine's editor outside a setup assist, before the person is asked about it", async () => {
+  // Flipped (agents act by themselves): an engine's app outside an assist is driven like any app.
+  it("drives an engine's app outside a setup assist once the person's card allows it, as any app", async () => {
     const { done, calls, asked, refused } = await guarded(TOY_EDITOR, null);
-    assert.equal(done.applied, 0);
-    assert.deepEqual(calls, []);
-    assert.deepEqual(asked, [], "a refused app is never put to the person");
-    assert.match(refused[0]!.message, /Toy Editor is a game engine's editor/);
-    assert.match(refused[0]!.message, /use the engine's own tools/);
+    assert.equal(done.applied, 1);
+    assert.deepEqual(calls, ["click 5,5 left×1"]);
+    assert.deepEqual(asked, ["Toy Editor"], "the person's per-app card asks, as for any app");
+    assert.deepEqual(refused, []);
   });
 
   it("drives an engine's editor inside an assist that was granted it", async () => {
@@ -413,8 +435,8 @@ describe("the engine-app guard", () => {
 /**
  * Bringing an app to the front by name: how the agent reaches the person's browser behind a
  * full-screen editor, since the taskbar is the shell and never driven. The app is held to a click's
- * rules: the apps the studio never drives and an engine's editor outside its assist are refused
- * before the person is asked, and an app they decline is never raised.
+ * rules: the apps the studio never drives are refused before the person is asked, an engine's editor
+ * is asked about as any app, and an app they decline is never raised.
  */
 describe("bringing an app to the front", () => {
   const EDGE: DesktopApp = { name: "Microsoft Edge", bundleId: "msedge.exe", pid: 51 };
@@ -474,7 +496,13 @@ describe("bringing an app to the front", () => {
     { name: "a password manager", app: "1password.exe", why: /never driven/ },
     { name: "the studio itself", app: STUDIO.bundleId ?? "", why: /never driven/ },
     { name: "system settings on a Mac", app: "com.apple.systempreferences", why: /never driven/ },
-    { name: "an engine's editor outside its assist", app: ROBLOX_STUDIO, why: /game engine's editor/ },
+    // Flipped (agents act by themselves): an engine's editor is asked about as any app, never refused unasked.
+    {
+      name: "an engine's editor outside its assist the person declines",
+      app: ROBLOX_STUDIO,
+      why: /did not allow/,
+      asked: [ROBLOX_STUDIO],
+    },
     { name: "a path instead of an app", app: "C:\\Windows\\explorer.exe", why: /names no app/ },
     { name: "a relative path", app: "../../tools/evil.exe", why: /names no app/ },
     { name: "nothing at all", app: "  ", why: /names no app/ },
@@ -521,6 +549,14 @@ describe("bringing an app to the front", () => {
       assert.deepEqual(calls, ["raise com.Roblox.RobloxStudio"]);
     });
 
+    // Flipped (agents act by themselves): outside its assist an engine's editor is raised as any app.
+    it("raises an engine's editor outside its assist once the person allows it, asked in another case", async () => {
+      const { target, calls, asked } = macFronting([MAC_STUDIO.bundleId ?? ""]);
+      assert.equal(await target.front?.("com.roblox.robloxstudio"), null);
+      assert.deepEqual(asked, ["com.Roblox.RobloxStudio"]);
+      assert.deepEqual(calls, ["raise com.Roblox.RobloxStudio"]);
+    });
+
     it("asks the person about the app under its own id", async () => {
       const { target, asked } = macFronting(["com.apple.Safari"]);
       assert.equal(await target.front?.("com.apple.safari"), null);
@@ -529,11 +565,6 @@ describe("bringing an app to the front", () => {
 
     const macRefused: Array<{ name: string; app: string; why: RegExp }> = [
       { name: "system settings in another case", app: "com.apple.SystemPreferences", why: /never driven/ },
-      {
-        name: "an engine's editor in another case, outside its assist",
-        app: "com.roblox.robloxstudio",
-        why: /game engine's editor/,
-      },
       { name: "an app that is not running", app: "com.google.Chrome", why: /is not running.*opens nothing/ },
     ];
     for (const row of macRefused) {
@@ -601,6 +632,37 @@ describe("bringing an app to the front", () => {
       const why = String(await target.front?.("com.apple.Safari"));
       assert.match(why, /did not come to the front/);
       assert.doesNotMatch(why, /Windows/);
+    });
+  });
+
+  describe("on Windows, picking one of an app's windows by its title", () => {
+    const UNREAL: DesktopApp = { name: "Unreal Editor", bundleId: "unrealeditor.exe", pid: 70 };
+    const MAIN = { pid: 70, windowId: 7001, title: "MyGame - Unreal Editor" };
+    const FAB = { pid: 70, windowId: 7002, title: "Fab" };
+
+    /** Unreal Editor's main window in front of its separate Fab window, both of one process. */
+    function editorWindows(raises = true) {
+      const fake = raisingDriver([]);
+      let window = MAIN.windowId;
+      fake.driver.focus = async () => ({ app: UNREAL, secure: false, window });
+      fake.driver.appWindows = async () => [MAIN, FAB];
+      fake.driver.bringToFront = async (id, picked) => {
+        fake.calls.push(`raise ${id} ${picked?.windowId}`);
+        if (raises && picked?.windowId) window = picked.windowId;
+      };
+      const target = desktopTarget({ driver: fake.driver, allowApp: async () => true, frontSettleMs: 0 });
+      return { target, calls: fake.calls };
+    }
+
+    it("raises the Fab window though the editor's main window, of the same process, is in front", async () => {
+      const { target, calls } = editorWindows();
+      assert.equal(await target.front?.("UnrealEditor.exe", "fab"), null);
+      assert.deepEqual(calls, ["raise unrealeditor.exe 7002"]);
+    });
+
+    it("says so when the main window stayed in front: the same process is not the window asked for", async () => {
+      const { target } = editorWindows(false);
+      assert.match(String(await target.front?.("unrealeditor.exe", "Fab")), /did not come to the front/);
     });
   });
 

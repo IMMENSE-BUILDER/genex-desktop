@@ -4,27 +4,21 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { setImmediate } from "node:timers/promises";
 import {
   composerOpening,
   composerSendOptions,
   effectiveRoles,
   effortOnModelPick,
   pinComposerOpening,
+  pickedKeys,
+  pickReplaced,
   rememberEffortPick,
+  rereadsWanted,
   resolveComposerModel,
+  sendBlockOf,
 } from "../../src/renderer/chat/use-composer-model.ts";
-import {
-  autopilotSendOptions,
-  composerExtras,
-  composerLoopView,
-  lastLoop,
-  loopCommissions,
-  modeMenuReach,
-  pinChatLoop,
-  rememberChatLoop,
-  reportCommissions,
-  storedChatLoop,
-} from "../../src/renderer/loop-setting.ts";
+import { createEnginesStore, REREAD_UNAVAILABLE } from "../../src/renderer/state/engines.ts";
 import { openingRoles, presetRoles } from "../../src/renderer/role-store.ts";
 import { toChoices } from "../../src/renderer/model-choices.ts";
 import type { KeyValueStorage } from "../../src/renderer/storage.ts";
@@ -95,7 +89,14 @@ describe("a saved model the plan no longer offers", () => {
         "codex::gpt-5.5",
         `a ${unsure.catalog?.state} list is not proof the model is gone`,
       );
-    assert.equal(notOffered([claude, catalog("ready")], "codex::gpt-5.5").selected?.split("::")[0], "claude-code");
+    const listedAgain = resolveComposerModel({
+      studio: false,
+      engines: [claude, { ...catalog("ready"), catalog: { state: "ready", revision: 2, refreshing: false } }],
+      modelKey: "codex::gpt-5.5",
+      effort: null,
+      rereads: { codex: 1 },
+    });
+    assert.equal(listedAgain.selected?.split("::")[0], "claude-code");
     assert.equal(
       notOffered([], "codex::gpt-5.5").selected,
       "codex::gpt-5.5",
@@ -106,6 +107,231 @@ describe("a saved model the plan no longer offers", () => {
   it("keeps a signed-out provider's pick, where the sign-in is asked for", () => {
     const out: EngineDescriptor = { ...codex, status: { code: "needs_login", detail: "" } };
     assert.equal(notOffered([claude, out], "codex::gpt-5.5").selected?.split("::")[0], "codex");
+  });
+
+  it("gives the workers and reviewers of a dropped local model the model that replaced it", () => {
+    // Field case (0.1.25): Ollama lost the model every job was on; the chat opened on the one left,
+    // and the workers and reviewers were still sent to the model that was gone.
+    const left = { ...local, models: [model("small")] };
+    const dropped = { planner: "big", builder: "big", judge: "big" };
+    const view = resolveComposerModel({
+      studio: false,
+      engines: [left],
+      modelKey: "ollama::big",
+      effort: null,
+      roles: dropped,
+    });
+    assert.equal(view.selected, "ollama::small");
+    assert.deepEqual(
+      { planner: view.roles?.planner, builder: view.roles?.builder, judge: view.roles?.judge },
+      { planner: "small", builder: "small", judge: "small" },
+    );
+    const sent = composerSendOptions({ ...view, preferences: {} }, "ollama::small");
+    assert.equal(sent.roles?.builder, "small", "a worker the turn hires runs on the model that is there");
+
+    const reading = { ...left, catalog: { state: "loading", revision: 1, refreshing: false } } as EngineDescriptor;
+    const unsure = resolveComposerModel({
+      studio: false,
+      engines: [reading],
+      modelKey: "ollama::small",
+      effort: null,
+      roles: { planner: "small", builder: "big", judge: "big" },
+    });
+    assert.equal(unsure.roles?.builder, "big", "a list still being read is not proof the model is gone");
+  });
+
+  it("keeps a worker on a signed-out subscription, and moves one whose subscription dropped its model", () => {
+    const crossed = {
+      planner: "qwen",
+      builder: "gpt-old",
+      judge: "gpt-old",
+      engines: { builder: "codex", judge: "codex" },
+    };
+    const out: EngineDescriptor = { ...codex, status: { code: "needs_login", detail: "" } };
+    const kept = resolveComposerModel({
+      studio: false,
+      engines: [local, out],
+      modelKey: "ollama::qwen",
+      effort: null,
+      roles: crossed,
+    });
+    assert.deepEqual(
+      kept.roles?.engines,
+      { builder: "codex", judge: "codex" },
+      "the sign-in is asked for, the pick stays",
+    );
+    const moved = resolveComposerModel({
+      studio: false,
+      engines: [local, codex],
+      modelKey: "ollama::qwen",
+      effort: null,
+      roles: crossed,
+    });
+    assert.deepEqual(
+      { builder: moved.roles?.builder, judge: moved.roles?.judge, engines: moved.roles?.engines },
+      { builder: "qwen", judge: "qwen", engines: undefined },
+      "a model the ready subscription no longer lists falls back to the chat's own preset",
+    );
+  });
+});
+
+describe("a saved model its ready provider no longer offers", () => {
+  // Field case (Windows, 0.1.40 and 0.1.41): the app's built-in Genex list and its first-launch
+  // default named a model genex.games does not list; every send on it was refused (model_unavailable,
+  // 9 in a row) until the person picked another Genex model by hand.
+  const genex: EngineDescriptor = {
+    id: "genex",
+    label: "Genex",
+    kind: "delegated",
+    supportsSessions: true,
+    status: { code: "ready", detail: "" },
+    defaultModel: "sonnet-5.5-medium-or",
+    models: [model("sonnet-5.5-medium-or"), model("opus-5.5-medium-or")],
+  };
+  const pick = "genex::gemini-4-hydrogen-medium-or";
+  const view = (engines: EngineDescriptor[]) =>
+    resolveComposerModel({ studio: false, engines, modelKey: pick, effort: null });
+
+  it("opens on that provider's own default when no other model runs without credits", () => {
+    assert.equal(view([genex]).selected, "genex::sonnet-5.5-medium-or");
+    assert.equal(sendBlockOf(view([genex]), view([genex]).selected), null);
+    assert.equal(
+      view([codex, genex]).selected?.split("::")[0],
+      "codex",
+      "a plan the person already has comes first, as for any dropped pick",
+    );
+  });
+
+  it("keeps the pick while the provider is not ready: its sign-in or plan comes first", () => {
+    const needsPlan = { ...genex, status: { code: "needs_login" as const, detail: "", reason: "needs_plan" as const } };
+    assert.equal(view([needsPlan]).selected, pick);
+  });
+});
+
+describe("a saved model one listing left out", () => {
+  // Field case (Windows, 0.1.34): after each restart the chat's OpenCode model was swapped out and
+  // every Send refused. OpenCode lists the models of its cached models.dev catalog, and its built-in
+  // one while that cache is missing; a later listing named the model again.
+  const opencode = (revision: number, refreshing = false): EngineDescriptor => ({
+    id: "opencode",
+    label: "OpenCode",
+    kind: "delegated",
+    supportsSessions: true,
+    status: { code: "ready", detail: "" },
+    defaultModel: null,
+    models: [model("openrouter/old-model")],
+    catalog: { state: "ready", revision, refreshing },
+  });
+  const pick = "opencode::openrouter/new-model";
+  const view = (engines: EngineDescriptor[], rereads: Record<string, number> = {}) =>
+    resolveComposerModel({ studio: false, engines, modelKey: pick, effort: null, rereads });
+
+  it("keeps the pick and asks its provider to list its models again", () => {
+    const engines = [claude, opencode(1)];
+    assert.equal(view(engines).selected, pick, "one listing is not proof the model is gone");
+    const choices = toChoices(engines);
+    assert.deepEqual(rereadsWanted({ engines, choices, keys: [pick], rereads: {} }), [
+      { engine: "opencode", revision: 1 },
+    ]);
+    assert.deepEqual(
+      rereadsWanted({ engines, choices, keys: [pick], rereads: { opencode: 1 } }),
+      [],
+      "asked once per run",
+    );
+    assert.deepEqual(
+      rereadsWanted({ engines, choices, keys: ["opencode::openrouter/old-model"], rereads: {} }),
+      [],
+      "a listed pick needs no second listing",
+    );
+  });
+
+  it("counts the pick gone only once a newer listing leaves it out too", () => {
+    assert.equal(view([claude, opencode(1)], { opencode: 1 }).selected, pick, "the second listing has not landed");
+    assert.equal(view([claude, opencode(2, true)], { opencode: 1 }).selected, pick, "the second listing is running");
+    const gone = view([claude, opencode(2)], { opencode: 1 });
+    assert.equal(gone.selected?.split("::")[0], "claude-code", "the chat opens on a model that runs");
+    assert.equal(
+      pickReplaced({
+        engines: [claude, opencode(2)],
+        choices: toChoices([claude, opencode(2)]),
+        modelKey: pick,
+        selected: gone.selected,
+        rereads: { opencode: 1 },
+      }),
+      "model_dropped",
+    );
+    assert.equal(
+      pickReplaced({
+        engines: [claude, opencode(1)],
+        choices: toChoices([claude, opencode(1)]),
+        modelKey: pick,
+        selected: claude.id,
+        rereads: {},
+      }),
+      null,
+      "no swap is counted before the second listing",
+    );
+    const listedNow = { ...opencode(2), models: [model("openrouter/new-model")] };
+    assert.equal(view([claude, listedNow], { opencode: 1 }).selected, pick, "the second listing names it");
+  });
+
+  it("takes a provider that cannot list again at its first listing", () => {
+    assert.equal(view([claude, opencode(1)], { opencode: REREAD_UNAVAILABLE }).selected?.split("::")[0], "claude-code");
+  });
+
+  it("asks for the workers' and reviewers' models too", () => {
+    const roles = {
+      planner: "openrouter/old-model",
+      builder: "openrouter/new-model",
+      engines: { judge: "codex" },
+      judge: "gpt",
+    };
+    assert.deepEqual(pickedKeys("opencode::openrouter/old-model", roles, "opencode"), [
+      "opencode::openrouter/old-model",
+      "opencode::openrouter/new-model",
+      "codex::gpt",
+    ]);
+    assert.deepEqual(pickedKeys(null, null, "opencode"), []);
+  });
+});
+
+describe("listing a provider's models again (engines store)", () => {
+  const api = (refused: boolean) => {
+    const asked: string[] = [];
+    let reads = 0;
+    return {
+      asked,
+      reads: () => reads,
+      engines: async () => {
+        reads++;
+        return [];
+      },
+      refreshModels: async (provider: string) => {
+        asked.push(provider);
+        if (refused) throw new Error("unknown provider");
+        return true;
+      },
+    };
+  };
+
+  it("asks once per provider, then reads the engines again", async () => {
+    const fake = api(false);
+    const store = createEnginesStore(fake);
+    assert.equal(store.reread("opencode", 3), true);
+    assert.equal(store.reread("opencode", 4), false, "a second ask is not made");
+    assert.deepEqual(store.getState().rereads, { opencode: 3 });
+    await setImmediate();
+    await store.refresh();
+    assert.deepEqual(fake.asked, ["opencode"]);
+    assert.ok(fake.reads() >= 1, "the engines are read again after the listing");
+    assert.deepEqual(store.getState().rereads, { opencode: 3 });
+  });
+
+  it("marks a provider that cannot list again, so its first listing stands", async () => {
+    const store = createEnginesStore(api(true));
+    store.reread("ollama", 2);
+    await setImmediate();
+    assert.deepEqual(store.getState().rereads, { ollama: REREAD_UNAVAILABLE });
   });
 });
 
@@ -219,11 +445,6 @@ describe("what the composer derives", () => {
       view.roleModels.map((m) => m.label),
       ["Default", "opus", "sonnet"],
     );
-    assert.deepEqual(
-      view.roleOthers.map((group) => group.engine),
-      ["codex", "ollama"],
-      "another ready engine that takes roles, never a signed-out one",
-    );
     assert.equal(
       resolveComposerModel({ studio: false, engines: [claude], modelKey: "claude-code::opus", effort: "max" }).effort,
       undefined,
@@ -250,7 +471,6 @@ describe("what the composer derives", () => {
       effort: null,
     });
     assert.equal(view.rolesApply, true, "a completion-only engine still gives each job its own model");
-    assert.deepEqual(view.roleOthers, [], "its workers and reviewers stay on it");
     assert.equal(view.effortApplies, false);
     const toolless = { ...local, models: [model("tiny", { supportsTools: false })] };
     assert.equal(
@@ -380,41 +600,30 @@ describe("what a send carries", () => {
   const roles = effectiveRoles(view, { planner: "opus", builder: "sonnet", judge: "sonnet" }, "low");
   const game = { ...view, roles, preferences: { fast: true } };
 
-  it("runs the chat on the orchestrator, with the effort the model accepts and the preferences", () => {
-    assert.deepEqual(composerSendOptions(game, "claude-code::opus", { autopilot: true }), {
+  it("runs the chat on the orchestrator, with the effort the model accepts, the preferences and the roles", () => {
+    assert.deepEqual(composerSendOptions(game, "claude-code::opus"), {
       engine: "claude-code",
       model: "opus",
       effort: "low",
       preferences: { fast: true },
+      roles,
     });
   });
 
-  it("commissions a timed build with its roles, only while no build belongs to the chat", () => {
-    const extras = { autopilot: { hours: 3, frames: [], reviewPlan: true }, reviewPlan: true };
-    const sent = composerSendOptions(game, "claude-code::opus", { autopilot: true, extras });
+  it("the roles a game chat picked ride every send, with plan review and pictures beside them and no Loop commission", () => {
+    const frames = [{ label: "ref", mimeType: "image/png", data: "AA==" }];
+    const sent = composerSendOptions(game, "claude-code::opus", { reviewPlan: true, frames });
     assert.equal(sent.reviewPlan, true);
+    assert.deepEqual(sent.frames, frames);
     assert.deepEqual(
-      sent.autopilot && {
-        hours: sent.autopilot.hours,
-        reviewPlan: sent.autopilot.reviewPlan,
-        planner: sent.autopilot.roles?.planner,
-        plannerEffort: sent.autopilot.roles?.efforts?.planner,
-      },
-      { hours: 3, reviewPlan: true, planner: "opus", plannerEffort: "low" },
+      { planner: sent.roles?.planner, plannerEffort: sent.roles?.efforts?.planner },
+      { planner: "opus", plannerEffort: "low" },
     );
-    assert.equal(
-      composerSendOptions(game, "claude-code::opus", { autopilot: false, extras }).autopilot,
-      undefined,
-      "a message to a running build is not a new commission",
-    );
-    const noCap = composerSendOptions(game, "claude-code::opus", {
-      autopilot: true,
-      extras: { autopilot: { hours: null, frames: [] } },
-    });
-    assert.equal("hours" in (noCap.autopilot ?? {}), false, "no cap sends no hours");
+    assert.equal("autopilot" in sent, false);
+    assert.equal("loop" in sent, false);
   });
 
-  it("commissions a local build with a model for each job", () => {
+  it("a local main agent sends a model for each job", () => {
     const lineup = { ...local, models: [model("qwen"), model("coder", { supportsVision: false }), model("vl")] };
     const localView = resolveComposerModel({
       studio: false,
@@ -423,55 +632,39 @@ describe("what a send carries", () => {
       effort: null,
       roles: { planner: "qwen", builder: "coder", judge: "vl" },
     });
-    const sent = composerSendOptions({ ...localView, preferences: {} }, "ollama::qwen", {
-      autopilot: true,
-      extras: { autopilot: { hours: 1, frames: [] } },
-    });
+    const sent = composerSendOptions({ ...localView, preferences: {} }, "ollama::qwen");
     assert.equal(sent.engine, "ollama");
     assert.equal(sent.model, "qwen", "the chat itself runs on the main agent");
-    const { planner, builder, judge, engines } = sent.autopilot?.roles ?? {};
+    const { planner, builder, judge, engines } = sent.roles ?? {};
     assert.deepEqual(
       { planner, builder, judge, engines },
-      {
-        planner: "qwen",
-        builder: "coder",
-        judge: "vl",
-        engines: undefined,
-      },
+      { planner: "qwen", builder: "coder", judge: "vl", engines: undefined },
     );
   });
 
-  it("a subscription's reviewers may be local models, its workers may not", () => {
+  it("a subscription's reviewers may be local models; a local worker under it is sent too, and only the worker's start refuses it", () => {
     const claudeView = resolveComposerModel({
       studio: false,
       engines: [claude, local],
       modelKey: "claude-code::opus",
       effort: null,
     });
-    const commission = { autopilot: true, extras: { autopilot: { hours: 1, frames: [] } } };
     const localReviewers = effectiveRoles(
       claudeView,
       { planner: "opus", builder: "sonnet", judge: "qwen", engines: { judge: "ollama" } },
       null,
     );
-    const sent = composerSendOptions(
-      { ...claudeView, roles: localReviewers, preferences: {} },
-      "claude-code::opus",
-      commission,
-    );
-    const { builder, judge, engines } = sent.autopilot?.roles ?? {};
+    const sent = composerSendOptions({ ...claudeView, roles: localReviewers, preferences: {} }, "claude-code::opus");
+    const { builder, judge, engines } = sent.roles ?? {};
     assert.deepEqual({ builder, judge, engines }, { builder: "sonnet", judge: "qwen", engines: { judge: "ollama" } });
     const localWorkers = effectiveRoles(
       claudeView,
       { planner: "opus", builder: "qwen", engines: { builder: "ollama" } },
       null,
     );
-    assert.throws(
-      () =>
-        composerSendOptions({ ...claudeView, roles: localWorkers, preferences: {} }, "claude-code::opus", commission),
-      /unavailable/,
-      "a local worker under a subscription is refused before the build, never sent to the subscription",
-    );
+    const withWorkers = { ...claudeView, roles: localWorkers, preferences: {} };
+    assert.equal(sendBlockOf(withWorkers, "claude-code::opus"), null, "a chat message is never blocked by a role");
+    assert.equal(composerSendOptions(withWorkers, "claude-code::opus").engine, "claude-code");
   });
 
   it("a local main agent may hand its workers and reviewers to a signed-in subscription", () => {
@@ -486,182 +679,25 @@ describe("what a send carries", () => {
       { planner: "qwen", builder: "gpt", judge: "gpt", engines: { builder: "codex", judge: "codex" } },
       null,
     );
-    const sent = composerSendOptions({ ...localView, roles, preferences: {} }, "ollama::qwen", {
-      autopilot: true,
-      extras: { autopilot: { hours: 1, frames: [] } },
-    });
+    const sent = composerSendOptions({ ...localView, roles, preferences: {} }, "ollama::qwen");
     assert.equal(sent.model, "qwen");
-    assert.deepEqual(sent.autopilot?.roles?.engines, { builder: "codex", judge: "codex" });
+    assert.deepEqual(sent.roles?.engines, { builder: "codex", judge: "codex" });
   });
 
   it("a pick on another engine than the roles' sends that model, with no roles", () => {
-    const sent = composerSendOptions(game, "codex::gpt", {
-      autopilot: true,
-      extras: { autopilot: { hours: 1, frames: [] } },
-    });
+    const sent = composerSendOptions(game, "codex::gpt");
     assert.equal(sent.engine, "codex");
     assert.equal(sent.model, "gpt");
-    assert.equal(sent.autopilot?.roles, undefined);
+    assert.equal(sent.roles, undefined);
     assert.deepEqual(
-      composerSendOptions({ ...game, roles: null, studio: true }, null, { autopilot: true }),
+      composerSendOptions({ ...game, roles: null, studio: true }, null),
       { effort: "low", preferences: { fast: true } },
       "no model picked sends no engine",
     );
   });
 });
 
-describe("what a chat's Loop is", () => {
-  const view = resolveComposerModel({ studio: false, engines: [claude], modelKey: "claude-code::opus", effort: null });
-  const game = { ...view, roles: null, preferences: {} };
-  const infinite = { on: true, hours: null };
-  const halfHour = { on: true, hours: 0.5 };
-  /** What the chat's composer would send now, through the real send contract. */
-  const sendFrom = (store: KeyValueStorage, threadId: string) =>
-    composerSendOptions(game, "claude-code::opus", {
-      autopilot: true,
-      extras: composerExtras({
-        gameMode: true,
-        view: composerLoopView({ own: storedChatLoop(store, threadId), build: null }),
-        reviewPlan: false,
-        frames: [],
-      }),
-    });
-
-  it("keeps a chat's ∞ when another chat picks 30 m (the reported leak)", () => {
-    const store = storage({ "studio.composer.loop": "1", "studio.autopilotHours": "inf" });
-    pinChatLoop(store, "A");
-    rememberChatLoop(store, "B", halfHour);
-    assert.deepEqual(storedChatLoop(store, "A"), infinite);
-    const sent = sendFrom(store, "A");
-    assert.ok(sent.autopilot, "A still commissions a Loop");
-    assert.equal("hours" in sent.autopilot, false, "A's build is until satisfied, not B's 30 m");
-    assert.equal(sendFrom(store, "B").autopilot?.hours, 0.5);
-  });
-
-  it("keeps a chat's Loop off when another chat turns it on", () => {
-    const store = storage({ "studio.composer.loop": "0" });
-    pinChatLoop(store, "A");
-    rememberChatLoop(store, "B", halfHour);
-    assert.equal(storedChatLoop(store, "A").on, false);
-    assert.equal(sendFrom(store, "A").autopilot, undefined);
-  });
-
-  it("a fresh chat starts from the last pick, which the global keys keep", () => {
-    const store = storage();
-    rememberChatLoop(store, "B", halfHour);
-    assert.deepEqual(storedChatLoop(store, "C"), halfHour);
-    assert.deepEqual(lastLoop(store), halfHour);
-    assert.equal(store.getItem("studio.composer.loop"), "1");
-    assert.equal(store.getItem("studio.autopilotHours"), "0.5");
-    pinChatLoop(store, "B");
-    assert.deepEqual(storedChatLoop(store, "B"), halfHour, "pinning never overwrites a chat's own pick");
-  });
-
-  // A one-line idea in a fresh install asked a style question, then ran a multi-agent build with a
-  // 24-hour ceiling: twenty minutes in, nothing had landed, where the plain agent had finished the
-  // game. The first chat is the plain agent; Loop is one tap, or the person's words, away.
-  it("a fresh install's first chat starts with Loop off", () => {
-    const store = storage();
-    assert.equal(storedChatLoop(store, "A").on, false);
-    assert.equal(sendFrom(store, "A").autopilot, undefined, "a message builds in the chat, no Loop commissioned");
-  });
-
-  it("Off keeps the saved time", () => {
-    const store = storage();
-    rememberChatLoop(store, "A", { on: false, hours: 2 });
-    assert.equal(store.getItem("studio.autopilotHours"), "2");
-    assert.equal(store.getItem("studio.composer.loop"), "0");
-    assert.deepEqual(storedChatLoop(store, "A"), { on: false, hours: 2 });
-  });
-
-  it("a malformed chat value falls back to the last pick", () => {
-    const globals = { "studio.composer.loop": "1", "studio.autopilotHours": "1" };
-    for (const bad of ["{not json", JSON.stringify({ on: true, hours: 99 }), JSON.stringify({ on: "yes", hours: 1 })]) {
-      assert.deepEqual(storedChatLoop(storage({ ...globals, "studio.loop.A": bad }), "A"), { on: true, hours: 1 }, bad);
-    }
-    assert.deepEqual(storedChatLoop(storage(globals)), { on: true, hours: 1 }, "no chat reads the last pick");
-  });
-
-  it("while a build owns the chat, or its coordinator answers, Mode stays shut; with neither it opens and changes", () => {
-    const running = composerLoopView({ own: halfHour, build: { state: "running", loop: infinite } });
-    for (const coordinating of [false, true])
-      assert.deepEqual(
-        modeMenuReach({ view: running, coordinating }),
-        { opens: false, changes: false },
-        `coordinating: ${coordinating}`,
-      );
-    const own = composerLoopView({ own: halfHour, build: null });
-    assert.deepEqual(modeMenuReach({ view: own, coordinating: false }), { opens: true, changes: true });
-    assert.deepEqual(modeMenuReach({ view: own, coordinating: true }), { opens: false, changes: false });
-  });
-
-  it("Mode shows the chat's own Loop with no build, after it finished or while it is paused, and a running build's own limit", () => {
-    const own = halfHour;
-    assert.deepEqual(composerLoopView({ own, build: null }), { shown: own, editable: true });
-    assert.deepEqual(composerLoopView({ own, build: { state: "running", loop: infinite } }), {
-      shown: infinite,
-      editable: false,
-    });
-    // A paused build no longer holds Mode on its own limit: Off can be picked after a Stop.
-    assert.deepEqual(
-      composerLoopView({ own: infinite, build: { state: "paused", loop: halfHour } }),
-      { shown: infinite, editable: true, forLater: true },
-      "a paused build shows the chat's own Loop, which can change",
-    );
-    assert.deepEqual(
-      composerLoopView({ own, build: { state: "running", loop: null } }).shown,
-      infinite,
-      "a build whose limit was not kept reads as Loop",
-    );
-    assert.deepEqual(
-      composerLoopView({ own, build: { state: "finished", loop: infinite } }),
-      { shown: own, editable: true },
-      "after a finished build Mode is the chat's own Loop again, not the build's",
-    );
-  });
-
-  it("keeps Review plan and the Loop's commission for a finished chat and drops both for a paused one", () => {
-    const own = halfHour;
-    const extrasFor = (state: "paused" | "finished") =>
-      composerExtras({
-        gameMode: true,
-        view: composerLoopView({ own, build: { state, loop: infinite } }),
-        reviewPlan: true,
-        frames: [],
-      });
-    assert.deepEqual(extrasFor("finished"), { reviewPlan: true, autopilot: { hours: 0.5, frames: [] } });
-    assert.deepEqual(extrasFor("paused"), {});
-    const frames = [{ label: "a", mimeType: "image/png", data: "x" }];
-    assert.deepEqual(
-      composerExtras({
-        gameMode: false,
-        view: composerLoopView({ own, build: null }),
-        reviewPlan: true,
-        frames,
-      }),
-      { frames },
-      "the Studio chat sends its pictures, never a commission",
-    );
-  });
-
-  it("a Loop commissions a chat with no build or a finished one, never a running or paused build", () => {
-    assert.equal(loopCommissions(null), true);
-    assert.equal(loopCommissions(undefined), true);
-    assert.equal(loopCommissions({ state: "finished" }), true);
-    assert.equal(loopCommissions({ state: "running" }), false);
-    assert.equal(loopCommissions({ state: "paused" }), false);
-  });
-
-  it("a command's result commissions only a chat with no build yet, while a typed message commissions a finished one too", () => {
-    assert.equal(reportCommissions(null), true);
-    assert.equal(reportCommissions(undefined), true);
-    for (const state of ["running", "paused", "finished"] as const)
-      assert.equal(reportCommissions({ state }), false, `${state}: a result never commissions`);
-    assert.equal(loopCommissions({ state: "finished" }), true);
-  });
-});
-
-it("submission rejects an unavailable main model or worker it is handed, never sending it as another", () => {
+it("submission rejects an unavailable main model it is handed, never sending it as another; a worker's model blocks nothing", () => {
   const view = resolveComposerModel({
     studio: false,
     engines: [claude, codex],
@@ -669,10 +705,7 @@ it("submission rejects an unavailable main model or worker it is handed, never s
     effort: "high",
   });
   assert.notEqual(view.selected, "codex::gpt-6-sol", "the composer itself opens on a model that runs");
-  assert.throws(
-    () => composerSendOptions({ ...view, preferences: {} }, "codex::gpt-6-sol", { autopilot: false }),
-    /unavailable/i,
-  );
+  assert.throws(() => composerSendOptions({ ...view, preferences: {} }, "codex::gpt-6-sol"), /unavailable/i);
   const other = resolveComposerModel({
     studio: false,
     engines: [claude],
@@ -680,17 +713,11 @@ it("submission rejects an unavailable main model or worker it is handed, never s
     effort: "high",
     roles: { planner: "opus", builder: "gpt-6-sol", engines: { builder: "codex" } },
   });
-  assert.throws(
-    () =>
-      composerSendOptions({ ...other, preferences: {} }, other.selected, {
-        autopilot: true,
-        extras: { autopilot: { hours: null, frames: [] } },
-      }),
-    /unavailable/i,
-  );
+  const sent = composerSendOptions({ ...other, preferences: {} }, other.selected);
+  assert.equal(sent.roles?.builder, "gpt-6-sol", "the worker's pick goes with the message; its start refuses it");
 });
 
-it("submission rejects a default worker on a signed-out or missing provider", () => {
+it("a default worker on a signed-out or missing provider blocks no message", () => {
   for (const engines of [
     [claude, { ...codex, models: [], status: { code: "needs_login" as const, detail: "" } }],
     [claude],
@@ -702,28 +729,6 @@ it("submission rejects a default worker on a signed-out or missing provider", ()
       effort: null,
       roles: { planner: "opus", builder: "default", engines: { builder: "codex" } },
     });
-    assert.throws(
-      () =>
-        composerSendOptions({ ...view, preferences: {} }, view.selected, {
-          autopilot: true,
-          extras: { autopilot: { hours: null, frames: [] } },
-        }),
-      /unavailable/i,
-    );
+    assert.equal(sendBlockOf(view, view.selected), null);
   }
-});
-
-describe("a send's Loop commission", () => {
-  it("drops ∞ hours and empty pictures, and carries plan review and roles only when set", () => {
-    const frames = [{ label: "ref", mimeType: "image/png", data: "AA==" }];
-    const roles = { planner: "opus", builder: "default" };
-    assert.deepEqual(autopilotSendOptions({ hours: null, frames: [] }, null), {});
-    assert.deepEqual(autopilotSendOptions({ hours: 2, frames, reviewPlan: true }, roles), {
-      hours: 2,
-      frames,
-      reviewPlan: true,
-      roles,
-    });
-    assert.deepEqual(autopilotSendOptions({ hours: 0.5, frames: [], reviewPlan: false }, null), { hours: 0.5 });
-  });
 });

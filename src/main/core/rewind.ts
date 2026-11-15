@@ -44,12 +44,12 @@ import { CodedError, errorMessage } from "../../shared/errors.ts";
 import { t } from "../../shared/i18n.ts";
 import { EventKind, type EventData, type EventEnvelope, type Message, ThreadKind } from "../../shared/event-log.ts";
 import { messageQueueState } from "../../shared/message-queue.ts";
-import { DispatchActionType, HarnessCapability, HarnessState, type ReferenceFrame } from "../../shared/protocol.ts";
+import { DispatchActionType, HarnessCapability, HarnessState } from "../../shared/protocol.ts";
 import { RunState } from "../../shared/run-state.ts";
-import { latestRun } from "../../shared/coordinator.ts";
+import { latestRun } from "../../shared/chat-run.ts";
 import type { PlacedRule } from "../../shared/project-workspace.ts";
 import { UiEvent } from "../../shared/ui-events.ts";
-import { listDirs, pathExists } from "../../substrate/fsx.ts";
+import { pathExists } from "../../substrate/fsx.ts";
 import { isUuid } from "../../substrate/ids.ts";
 import { toolchain } from "../../substrate/toolchain.ts";
 import {
@@ -59,7 +59,6 @@ import {
   ChatCheckpoints,
 } from "../chat-checkpoints.ts";
 import type { CoreInternals, StudioCore } from "../studio-core.ts";
-import { noteUnsaved } from "./unsaved-files.ts";
 import { HookBlockedError } from "./plugin-hooks.ts";
 import { HookHold } from "../../shared/plugin-hooks.ts";
 
@@ -70,8 +69,6 @@ export const CHAT_CHECKPOINT_WAIT_MS = 30 * SECOND_MS;
  * save first (`PluginHook.messages`) end this long before the wait does.
  */
 export const MESSAGE_SNAPSHOT_ROOM_MS = 5 * SECOND_MS;
-/** How long a rewind waits for the harness to take back the mood board; it never waits for more. */
-const REWIND_NOTICE_TIMEOUT_MS = 3 * SECOND_MS;
 /**
  * How long a rewind waits for the build it stopped to close (its workers settle, its close is
  * written). A stopped build lands nothing, so this is its workers winding down, never the run.
@@ -85,9 +82,6 @@ const LOG_DETAIL_CHARS = 300;
 const MESSAGE_ID = /^[\w-]{1,80}$/;
 /** A reference picture a message saved: one file directly in the game's `references/`. */
 const REFERENCE_FILE = /^references\/[^/]+$/;
-/** The artifacts a run coordinator keeps its session in, one per run. */
-const COORDINATOR_ARTIFACT_PREFIX = "coordinator_";
-
 /**
  * What the person reads when Genex itself kept their Rewind from the game's app (its lock), by the
  * hold and the app's label: never the words written for agents. Their own action never waits for
@@ -139,8 +133,6 @@ const MESSAGE = {
     `[core] the engine steps before ${messageId} failed; its files are still saved: ${errorMessage(err).slice(0, LOG_DETAIL_CHARS)}`,
   rulesFailed: (err: unknown) =>
     `[core] a game checkpoint went on without the folder's ignore rules: ${errorMessage(err).slice(0, LOG_DETAIL_CHARS)}`,
-  skippedNotReported: (threadId: string, err: unknown) =>
-    `[core] files too large to save in ${threadId} could not be reported: ${errorMessage(err).slice(0, LOG_DETAIL_CHARS)}`,
   putBackFailed: (err: unknown) => `[core] rewind could not put the game files back: ${errorMessage(err)}`,
   tidyFailed: (threadId: string, what: string, err: unknown) =>
     `[core] after rewinding ${threadId}, ${what} failed: ${errorMessage(err)}`,
@@ -170,7 +162,6 @@ interface RewoundAction {
   extraReads?: string[];
   references?: string[];
   attachmentsArtifact?: string;
-  autopilot?: { frames?: unknown };
 }
 /** A message that stays after a rewind: its bubble and its saved action. */
 interface RemainingAction {
@@ -184,7 +175,7 @@ interface RestoredFiles {
   rewindId: string;
   stayed?: string[];
 }
-/** Who left files too large to save, for the chat's line: a message's checkpoint, or a rewind. */
+/** The rewind that left files too large to save as they are, for the chat's line. */
 type SkippedReport = Required<Pick<CheckpointSkippedPayload, "project" | "messageId" | "by">>;
 
 /** Each file with its size now, largest first (0 for one already gone); links are never followed. */
@@ -244,9 +235,9 @@ function afterBuilds(files: RewindFiles, planned: PlannedRewind): RewindFiles {
 
 const actionOf = (message: { action?: unknown }): RewoundAction => (message.action ?? {}) as RewoundAction;
 
-/** A withdrawn message changed state the remaining ones may share: named folders, a mood board, pictures. */
+/** A withdrawn message changed state the remaining ones may share: named folders, pictures. */
 const sharesState = (action: RewoundAction): boolean =>
-  Boolean(action.extraReads?.length || action.references?.length || action.autopilot || action.attachmentsArtifact);
+  Boolean(action.extraReads?.length || action.references?.length || action.attachmentsArtifact);
 
 /** The saved actions of the messages from a bubble on. */
 function withdrawnActions(rows: readonly EventEnvelope[], eventId: string): RewoundAction[] {
@@ -304,8 +295,6 @@ export class ChatRewindService {
   readonly #inFlight = new Map<string, Set<Promise<void>>>();
   /** Per chat, the game checkpoint its next answer waits for (bounded; it never fails the answer). */
   readonly #checkpointsBefore = new Map<string, Promise<void>>();
-  /** Per chat, the files too large to save its last report named (sorted, one per line). */
-  readonly #reportedSkips = new Map<string, string>();
   #checkpoints?: ChatCheckpoints;
 
   constructor(core: StudioCore, x: CoreInternals) {
@@ -446,15 +435,9 @@ export class ChatRewindService {
     const before = phase === CheckpointPhase.Before;
     await this.#saveEngineFirst(dir, meta.project, { threadId, messageId, phase }, deadline);
     const taken = await this.checkpoints.take(dir, threadId, messageId, phase, before ? deadline : undefined);
-    if (!taken) {
-      this.#log(MESSAGE.checkpointLate(messageId));
-      return;
-    }
-    await this.#reportCheckpointSkips(threadId, dir, taken, {
-      project: meta.project,
-      messageId,
-      by: SkippedBy.Checkpoint,
-    });
+    // Files it left out for their size are named only by a rewind that leaves them as they are:
+    // here nothing is lost yet, and nothing the person or a session does brings them back.
+    if (!taken) this.#log(MESSAGE.checkpointLate(messageId));
   }
 
   /**
@@ -485,33 +468,8 @@ export class ChatRewindService {
   }
 
   /**
-   * A checkpoint that left files out for their size says so once per new set: the chat gets a line
-   * and the thread's next delegated session is told. A report that fails is logged, never more.
-   */
-  async #reportCheckpointSkips(threadId: string, dir: string, commit: string, report: SkippedReport): Promise<void> {
-    try {
-      const { skipped } = await this.checkpoints.leftOut(dir, commit);
-      const set = [...skipped].sort().join("\n");
-      const reported = this.#reportedSkips.get(threadId);
-      if (set === (reported ?? "")) return;
-      if (!skipped.length) {
-        this.#reportedSkips.delete(threadId);
-        return;
-      }
-      // Claimed before the report's awaits, so a checkpoint right behind it is not told twice.
-      this.#reportedSkips.set(threadId, set);
-      await this.#reportSkipped(threadId, dir, skipped, report).catch((err: unknown) => {
-        if (this.#reportedSkips.get(threadId) === set) this.#reportedSkips.delete(threadId);
-        throw err;
-      });
-    } catch (err) {
-      this.#log(MESSAGE.skippedNotReported(threadId, err));
-    }
-  }
-
-  /**
-   * Changed files a rewind left as they are for their size, reported like a checkpoint's: those a
-   * restore held back, or, when only the chat went back, every changed file if all were too large.
+   * Changed files a rewind left as they are for their size, the only time the chat names them: those
+   * a restore held back, or, when only the chat went back, every changed file if all were too large.
    */
   async #reportLeftTooLarge(threadId: string, project: string, applied: AppliedRewind): Promise<void> {
     const messageId = applied.planned.rewind.messageId;
@@ -529,10 +487,12 @@ export class ChatRewindService {
     return tooLarge ? (plan.tooLargeFiles ?? []) : [];
   }
 
-  /** Files too large to save, with their sizes: noted for the lead, and a line in the chat. */
+  /**
+   * Files too large to save, with their sizes: a line in the chat for the person. No session is told
+   * of them: nothing it can do brings them back, and it would only say Genex's line again.
+   */
   async #reportSkipped(threadId: string, dir: string, files: readonly string[], report: SkippedReport): Promise<void> {
     const sized = await sizedFiles(dir, files);
-    noteUnsaved(this.#x.unsavedFiles, threadId, sized);
     const listed = sized.slice(0, CHECKPOINT_SKIPPED_FILES_LISTED);
     const record = customEventData(CustomEvent.CheckpointSkipped, {
       ...report,
@@ -609,7 +569,7 @@ export class ChatRewindService {
   /**
    * A rewind lands between answers, never under one: a running answer would outlive it. A running
    * build is no answer: the rewind stops it first, with whatever this chat's turns do for it
-   * meanwhile (its lead, its coordinator, its workers). Returns that build.
+   * meanwhile (its lead, its workers). Returns that build.
    */
   async #assertRewindable(threadId: string, meta: RewindMeta): Promise<string | null> {
     if (meta?.kind !== ThreadKind.Game) throw new CodedError(RewindBlock.NotGameChat, MESSAGE.OnlyGameChat());
@@ -917,7 +877,6 @@ export class ChatRewindService {
         () => {},
         (err: unknown) => this.#log(MESSAGE.tidyFailed(threadId, what, err)),
       );
-    await tidy("clearing coordinator sessions", () => this.#clearCoordinatorSessions(threadId));
     const rewindId = undoOf(applied.restored);
     const marker = customEventData(CustomEvent.ConversationRewound, {
       ...applied.planned.rewind,
@@ -931,11 +890,6 @@ export class ChatRewindService {
     }
     // Rebuilt now, so the chat reloading after the marker gets it at once.
     await tidy("rebuilding the chat state", () => this.#core.store.chatState(threadId));
-    // The harness keeps the Loop mood board the remaining messages gave it (best effort: the
-    // rewind itself never waits on the harness for long).
-    if (this.#core.host.hasCapability(HarnessCapability.Rewind)) {
-      await tidy("telling the harness", () => this.#tellHarness(threadId, applied));
-    }
     // The build's Stop held the queue: what was sent before the message is answered again as usual.
     if (stopped) await tidy("resuming the queue", () => this.#resumeQueue(threadId));
     const project = meta?.project ?? null;
@@ -998,41 +952,5 @@ export class ChatRewindService {
       throw err;
     }
     return restored.files;
-  }
-
-  /** A run coordinator's saved session remembers the withdrawn turns: the next one starts fresh. */
-  async #clearCoordinatorSessions(threadId: string): Promise<void> {
-    const store = this.#core.store;
-    for (const artifact of await listDirs(store.artifactsDir(threadId)).catch(() => [] as string[])) {
-      if (!artifact.startsWith(COORDINATOR_ARTIFACT_PREFIX)) continue;
-      const prior = await store
-        .readArtifact<{ sessionId?: string | null; engine?: string }>(threadId, artifact)
-        .catch(() => null);
-      if (prior?.sessionId) await store.writeArtifact(threadId, artifact, { ...prior, sessionId: null });
-    }
-  }
-
-  async #tellHarness(threadId: string, applied: AppliedRewind): Promise<void> {
-    const boardChanged = applied.withdrawn.some((action) => action.autopilot);
-    const board = boardChanged ? { frames: await this.#latestBoard(threadId, applied.remaining) } : {};
-    await this.#core.host.dispatch({ type: DispatchActionType.Rewind, threadId, ...board }, REWIND_NOTICE_TIMEOUT_MS);
-  }
-
-  /** The mood board the Loop interview still has: the latest remaining one, unless a run took it. */
-  async #latestBoard(threadId: string, remaining: readonly RemainingAction[]): Promise<ReferenceFrame[] | null> {
-    const runStarts = new Set<string>([CustomEvent.RunRegistered, CustomEvent.RunStarted]);
-    const lastRun = (await this.#core.store.chatState(threadId))
-      .filter((event) => runStarts.has(customRecord(event.data)?.event_type ?? ""))
-      .reduce((latest, event) => (event.id > latest ? event.id : latest), "");
-    for (const entry of [...remaining].reverse()) {
-      const artifact = entry.action.attachmentsArtifact;
-      if (!entry.action.autopilot || !artifact) continue;
-      if (entry.eventId < lastRun) return null;
-      const saved = await this.#core.store
-        .readArtifact<{ frames?: ReferenceFrame[] }>(threadId, artifact)
-        .catch(() => null);
-      if (saved?.frames?.length) return saved.frames;
-    }
-    return null;
   }
 }

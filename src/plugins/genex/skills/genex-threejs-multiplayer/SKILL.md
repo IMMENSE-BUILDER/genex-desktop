@@ -39,7 +39,8 @@ serve web, Godot and Unity players.
   are one player: the newer tab takes the seat (close code 4409).
 - `genex__package {"package":"@genex-ai/multiplayer"}` adds both SDKs in one call (it includes
   embed-sdk; nobody is asked). `genex__publish {"operation":"draft"}` puts a draft online and
-  `genex__publish-status` gives its link.
+  `genex__publish-status` gives its link, `draftPlayUrl`. Open that link in a normal and a private
+  window to be two players; `draftUrl` is the owner's draft page, behind their sign-in.
 - Nobody can save or buy on the draft link, the owner included: saves and purchases work once the
   game is published.
 - Studio installs the version it pins, which satisfies the card's `^0.17.0`. Never run
@@ -90,7 +91,7 @@ listed: `skills/genex-threejs-multiplayer/references/realtime-patterns.md`, for 
 built from the SDK calls the card shows. Commands map onto Studio tools as the `genex` skill
 describes (`genex__skill {"name":"genex"}`).
 
-<!-- upstream @genex-ai/cli-demo/templates/skills/genex-threejs-multiplayer/SKILL.md v1.36.17 sha256 9e1be9fb9b87c75c58488776d2e49ac0a757a8f81e21966ed890f5e8915f0a3f -->
+<!-- upstream @genex-ai/cli-demo/templates/skills/genex-threejs-multiplayer/SKILL.md v1.43.1 sha256 828a133e60acfadb48467315d9bfaefcdcbc11643b29b78eef58984c019502ed -->
 ---
 name: genex-threejs-multiplayer
 description: Realtime multiplayer for Genex Three.js games with `@genex-ai/multiplayer` — a relay whose SDK auto-smooths remote players AND shared objects (you do NOT write interpolation). Use whenever 2+ players share a world: movement sync, a shared ball/NPC via objects + ownership, host-authoritative scores/waves, shots/emotes, presence.
@@ -104,6 +105,13 @@ runs no physics and no game logic — but it *does* enforce two generic invarian
 path is the correct one: **exactly one smoother** (the SDK interpolates remote players and
 objects for you) and **exactly one owner/host** (server-arbitrated). You read a remote player
 or a shared object and it is already smooth; you never fight over who simulates the ball.
+
+**Competitive play where cheating matters** (ranked PvP, an arena or shooter with a winner worth
+faking, "so nobody can cheat") is a different kind of game: the server runs the rules. Use
+`$genex-authoritative-multiplayer` for it instead of this skill, and never mix the two in one game.
+A first-person shooter through a real level is that kind of game: the `firstperson` preset predicts
+your body through a world the module exports, and "A real level" in that skill's presets.md turns
+your glb or three.js scene into that world with `genex world fit` and `sceneFromThree`.
 
 
 ## Two rules that decide whether it feels good

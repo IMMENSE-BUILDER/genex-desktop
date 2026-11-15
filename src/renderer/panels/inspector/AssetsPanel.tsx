@@ -1,9 +1,12 @@
-/** The panel of the run's assets: every job a plugin was asked for, grouped by where it got to, and the modeller's work. */
+/**
+ * The panel of the run's assets: every job a plugin was asked for, grouped by where it got to, and
+ * the modeller's work; and the card of one asset a worker delivered, its versions newest first.
+ */
 import type { JSX } from "react";
 import { useState } from "react";
 import { t, tc } from "../../../shared/i18n.ts";
 import type { AssetInfo, BlenderNode, RunGraph as RunGraphModel } from "../../run-graph.ts";
-import { runIdOf, truncate } from "../../run-graph.ts";
+import { truncate } from "../../run-graph.ts";
 import { AssetCardState, earlierVersion } from "../../run-graph-assets.ts";
 import { useStill } from "../../stills.ts";
 import { BlenderLogo } from "../../ui/brand.tsx";
@@ -20,7 +23,7 @@ import {
   stoppedShort,
   trianglesWords,
 } from "./asset-jobs.ts";
-import { Details, Panel, PanelRow, Row, Rows, Section } from "./chrome.tsx";
+import { Panel, Section } from "./chrome.tsx";
 import { joinDots } from "./format.ts";
 import { IMAGE_OUTLINE, PictureChange } from "./pictures.tsx";
 import { GraphSelection } from "./selection.ts";
@@ -36,7 +39,7 @@ const BLENDER_ERROR_CHARS = 140;
  * when the same file was delivered again since), its Assets-stage thumbnail, the modeller's render,
  * a still of it in the game, or its kind in words (a sound has no picture).
  */
-function DeliveredPicture({ job, project }: { job: AssetInfo; project: string | null }): JSX.Element {
+export function DeliveredPicture({ job, project }: { job: AssetInfo; project: string | null }): JSX.Element {
   const kept = useStill(job.picture ? { run: job.picture, maxPx: ASSET_THUMB_PX } : null);
   const drawn = job.picture || job.preview?.kind === "audio" ? null : (job.preview ?? null);
   const picture = !job.preview && !job.picture ? firstImage(job) : null;
@@ -276,32 +279,6 @@ function assetsSub(jobs: AssetInfo[], modelled: AssetInfo[]): string {
   return [madeWords, ...plugins].join(" · ");
 }
 
-function AssetDetails({
-  graph,
-  jobs,
-  modelled,
-}: {
-  graph: RunGraphModel;
-  jobs: AssetInfo[];
-  modelled: AssetInfo[];
-}): JSX.Element {
-  const files = [
-    ...jobs.flatMap((job) => [...job.files, ...(job.derived ?? []).flatMap((step) => step.files)]),
-    ...modelled.map((asset) => asset.file ?? ""),
-  ];
-  return (
-    <Row row={PanelRow.TechnicalDetails} label={t("Technical details")}>
-      <Details
-        rows={[
-          [t("run"), runIdOf(graph)],
-          [t("files"), joinDots(files) || null],
-          [t("jobs"), joinDots(jobs.map((job) => job.jobId)) || null],
-        ]}
-      />
-    </Row>
-  );
-}
-
 /** The lightbox of the modeller's renders: both views of every asset it made. */
 function blenderViews(modelled: AssetInfo[]): Array<{ item: AssetInfo; path: string }> {
   return modelled.flatMap((item) => {
@@ -310,16 +287,21 @@ function blenderViews(modelled: AssetInfo[]): Array<{ item: AssetInfo; path: str
   });
 }
 
-/** The panel of what the run made. */
-export function AssetsPanel(props: InspectorProps): JSX.Element {
-  const { graph, blender, assets, project } = props;
-  const partNumber = (facetId: string | null): string =>
+/** A part's number as the panels name it, by its place in the plan; an asset no part asked for is the chat's. */
+function partNumberOf(graph: RunGraphModel): (facetId: string | null) => string {
+  return (facetId) =>
     facetId
       ? t("Part {number}", { number: graph.facets.findIndex((facet) => facet.facetId === facetId) + 1 })
       : t("Chat");
-  const jobs = assets?.jobs ?? [];
-  const modelled = blender?.assets ?? [];
-  const openBlender = (asset: AssetInfo): void => {
+}
+
+/** Opening a modelled asset shows the lightbox of every modelled render, at this asset's. */
+function blenderOpener(
+  props: InspectorProps,
+  partNumber: (facetId: string | null) => string,
+): (asset: AssetInfo) => void {
+  const modelled = props.blender?.assets ?? [];
+  return (asset) => {
     const views = blenderViews(modelled);
     if (!views.length) return;
     const items = views.map(({ item, path }) => ({
@@ -336,14 +318,21 @@ export function AssetsPanel(props: InspectorProps): JSX.Element {
       ),
     );
   };
+}
+
+/** The panel of what the run made. */
+export function AssetsPanel(props: InspectorProps): JSX.Element {
+  const { graph, blender, assets, project } = props;
+  const partNumber = partNumberOf(graph);
+  const jobs = assets?.jobs ?? [];
+  const modelled = blender?.assets ?? [];
+  const openBlender = blenderOpener(props, partNumber);
   return (
     <Panel
       id={GraphSelection.Assets}
       label={t("Assets")}
       title={t("Assets")}
       sub={assetsSub(jobs, modelled)}
-      onPrev={props.onPrev}
-      onNext={props.onNext}
       onClose={props.onClose}
     >
       {jobGroups(jobs)
@@ -363,9 +352,6 @@ export function AssetsPanel(props: InspectorProps): JSX.Element {
           </Section>
         ))}
       <BlenderSection blender={blender} project={project} partNumber={partNumber} onOpen={openBlender} />
-      <Rows>
-        <AssetDetails graph={graph} jobs={jobs} modelled={modelled} />
-      </Rows>
     </Panel>
   );
 }

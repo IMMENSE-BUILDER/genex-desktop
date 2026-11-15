@@ -10,9 +10,13 @@ this preface wins.
   `npx genex preview` alone is `genex__publish {"operation":"draft"}`: an unlisted test build that
   leaves the public version as it is. Each asks the user first and returns a job: follow it with
   `genex__publish-status {"operation":"wait","jobId":"<jobId>"}`, then give the user the operation’s
-  reported link verbatim: `galleryUrl` for a public release, `draftUrl` for a draft. Do not
+  reported link verbatim: `galleryUrl` for a public release, `draftPlayUrl` for a draft. Do not
   construct a URL or report a draft link as the public release. If the job has not succeeded,
   report its actual state rather than claiming publication.
+- A draft's link to share and test is `draftPlayUrl`, the draft build's own address
+  (`preview--<slug>`): anyone with it plays the draft, as a guest or signed in, in rooms apart from
+  the live game. `draftUrl` (`<dashboard>/draft/<slug>`, the card's "your game's page") is the
+  owner's draft page and asks for their sign-in: never give it as the place to play or test.
 - Studio exports and uploads the game itself. Glue step 3 (the CLI as a dev dependency) and
   `init --convert` do not apply, and `npx genex pull` is not available. Glue steps 1 and 2 still
   apply; for step 2 read `genex__skill {"name":"genex-threejs-embed-auth"}`.
@@ -27,7 +31,7 @@ this preface wins.
 - `npx genex doctor` is `genex__cli {"command":"doctor"}`. Other commands map onto Studio tools as
   the `genex` skill describes (`genex__skill {"name":"genex"}`).
 
-<!-- upstream @genex-ai/cli-demo/templates/skills/genex-tool-publish/SKILL.md v1.36.17 sha256 42daa8bcd57c7693cbd2297ea5d66c0335b58cd019dcc3a60f88b09f5510f4a1 -->
+<!-- upstream @genex-ai/cli-demo/templates/skills/genex-tool-publish/SKILL.md v1.43.1 sha256 616e167a6471ea6d4ea536ce4061ff1f8e46da6aa690a636e82797c9c73a969a -->
 ---
 name: genex-tool-publish
 description: Put the game in this folder on the web with Genex — the draft page, `npx genex preview`, then `promote` / `publish`; the link you hand the user, the size limits, and what to do with the preflight lines. Installed once the folder is connected to a hosted Genex game (`npx genex init --convert`). Load it before the first preview.
@@ -101,7 +105,8 @@ anything changed since the last `preview`, preview again before promoting.
 
 ## Limits and refusals
 
-- **Upload size**: ~95 MB per file, ~500 MB in total. Over that, tell the user
+- **Upload size**: 500 MB per file, 2 GB in total, 200 files; the CLI prints
+  the account's own numbers when a build is over one. Over that, tell the user
   plainly which part is too large (usually a video, model or audio file) and by
   roughly how much; ask before compressing or removing anything.
 - **Terms refusal**: the CLI prints a link, waits for the user's click and
@@ -109,5 +114,12 @@ anything changed since the last `preview`, preview again before promoting.
 - **`preview` says the folder is behind another machine** (`stale_source`):
   `npx genex pull` takes the newer draft, then redo the change — never
   `--force` over somebody else's work.
+- **`promote` or `publish` says the page shows the game's Mac/Windows/Linux
+  app** (`native_page_would_be_replaced`): the game ships as desktop apps, and
+  this web build would replace the page that offers them. Nothing changed. Ask
+  the user whether this folder really is the game's web version; only on a
+  clear yes, re-run the same command with `--replace-native-page`. A web
+  version that went up by mistake comes off with `npx genex web remove --yes`
+  (the apps stay).
 - **Out of credits or a lane down**: `npx genex doctor` says which; publishing
   itself costs nothing.

@@ -29,17 +29,17 @@ import { RewindDialog } from "../chat/RewindDialog.tsx";
 import { type ChatParts, useChatPanel } from "../chat/use-chat-panel.ts";
 import { HeldState } from "../chat/use-launch-handover.ts";
 import { chatPlaceholder } from "../composer-placeholder.ts";
-import { loopAvailableFor } from "../loop-setting.ts";
 import { notifyProblem } from "../state/toasts.ts";
 import { isLocalDraft } from "../../shared/item-draft.ts";
 import { useLocalItemsSettle } from "../chat/use-local-items.ts";
 import { ChatSkeleton } from "../chat/ChatSkeleton.tsx";
 import { chatRoom, trackSendBlocked } from "../chat/send-analytics.ts";
+import { sendBlockOf } from "../chat/use-composer-model.ts";
 import { QuestionVia, SendBlock, SendSource } from "../analytics/chat-vocabulary.ts";
 import { sendQuestionAnswer } from "../analytics/events/chat.ts";
 import { LoadFailed } from "../ui/LoadFailed.tsx";
 import { PromptBar, type PromptBarHandle } from "../ui/PromptBar.tsx";
-import { engineLoopGate, engineRewindNote } from "../engine-game.ts";
+import { engineRewindNote } from "../engine-game.ts";
 
 export function ChatPanel(props: ChatPanelProps): JSX.Element {
   const { loading } = props;
@@ -123,6 +123,21 @@ function ownSend(own: OwnAnswer | null, send: Send, thread: string | undefined):
   };
 }
 
+/**
+ * The chat's model cannot take a message now (`sendBlockOf`): Send keeps the prompt and points at
+ * the model button. An answer a card takes itself needs no model, so it is never held.
+ */
+function modelHold(parts: ChatParts, own: OwnAnswer | null) {
+  const { model } = parts.composer;
+  const block = own?.send ? null : sendBlockOf(model, model.selected);
+  return {
+    modelUnavailable: block !== null,
+    onModelUnavailable: () => {
+      if (block) trackSendBlocked(parts, block, model.selected);
+    },
+  };
+}
+
 /** The quiet card an engine plugin offers above a game chat's composer: its steps, and what they did. */
 function EngineSteps(parts: ChatParts): JSX.Element {
   const { chat, props, report } = parts;
@@ -137,7 +152,7 @@ function EngineSteps(parts: ChatParts): JSX.Element {
 
 /** The composer and the cards docked above it: sign-in, questions, the plan and consents. */
 function ChatComposer(parts: ChatParts & { composerRef: RefObject<PromptBarHandle | null> }): JSX.Element {
-  const { chat, composer, work, submit, composerRef, reply } = parts;
+  const { chat, composer, work, submit, sendAnswered, composerRef, reply } = parts;
   const { threadId, transcript, working, run } = chat;
   const { drafts, gate, model, compact } = composer;
   const { plan } = work;
@@ -160,9 +175,10 @@ function ChatComposer(parts: ChatParts & { composerRef: RefObject<PromptBarHandl
       loading={parts.props.loading}
       connectModel={chat.isStudioThread && !gate.needsSignIn && composer.noModel}
       signIn={heldAsksSignIn(parts) ? null : gate.card}
+      genex={heldAsksSignIn(parts) ? null : gate.genex}
       questions={transcript.interviewQuestions.filter((entry) => entry.kind === EntryKind.Question)}
       questionsDisabled={busy || working}
-      onAnswerQuestion={(answer) => submit(answer, undefined, true, SendSource.QuestionCard)}
+      onAnswerQuestion={(answer) => sendAnswered(answer, undefined, true, SendSource.QuestionCard)}
       plan={planPrompt(parts, composerRef)}
       consents={transcript.pendingConsents.filter((entry) => entry.kind === EntryKind.Action)}
       onConsent={answerConsent}
@@ -175,8 +191,6 @@ function ChatComposer(parts: ChatParts & { composerRef: RefObject<PromptBarHandl
         <PromptBar
           ref={composerRef}
           project={chat.meta.project}
-          loopAvailable={loopAvailableFor(chat.folder)}
-          loopGate={engineLoopGate(chat.folder)}
           conversationKey={threadId}
           build={composer.build}
           about={
@@ -221,6 +235,7 @@ function ChatComposer(parts: ChatParts & { composerRef: RefObject<PromptBarHandl
             trackSendBlocked(parts, SendBlock.SignInNeeded, model.selected);
             void gate.signIn();
           }}
+          {...modelHold(parts, own)}
         />
       )}
     </ComposerDock>

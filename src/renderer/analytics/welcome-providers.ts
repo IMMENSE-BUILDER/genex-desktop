@@ -42,6 +42,7 @@ import type {
   WelcomeEvent,
   WelcomeEventProperties,
 } from "./events/welcome.ts";
+import { httpStatus, netErrorCode } from "./events/launch.ts";
 import { elapsedMs, oneOf } from "./properties.ts";
 import {
   DownloadOutcome,
@@ -89,6 +90,7 @@ const TERMINAL_SIGN_INS: Partial<Record<TerminalKind, EngineId>> = {
   [TerminalKind.OpenCodeLogin]: EngineId.OpenCode,
   [TerminalKind.GrokLogin]: EngineId.Grok,
   [TerminalKind.CursorLogin]: EngineId.Cursor,
+  [TerminalKind.AntigravityLogin]: EngineId.Antigravity,
 };
 
 /** How each provider's sign-in starts. */
@@ -99,6 +101,7 @@ const SIGN_IN_METHODS: Partial<Record<string, SignInMethod>> = {
   [EngineId.OpenCode]: SignInMethod.TerminalTui,
   [EngineId.Grok]: SignInMethod.TerminalTui,
   [EngineId.Cursor]: SignInMethod.TerminalTui,
+  [EngineId.Antigravity]: SignInMethod.TerminalTui,
 };
 
 /** How a download that did not finish ended, by the installer's last phase. */
@@ -124,6 +127,15 @@ export interface SignInAttempt {
   fellBackToTerminal: boolean;
   /** Cancel was pressed on a CLI's own terminal sign-in. */
   cancelRequested: boolean;
+  /** What a Codex sign-in's stream showed: a sign-in link, its window, and how many output lines. */
+  codex?: CodexLoginProgress;
+}
+
+/** What a Codex sign-in got to before it ended: it says where one that timed out stopped. */
+export interface CodexLoginProgress {
+  linkSeen: boolean;
+  cardShown: boolean;
+  outputLines: number;
 }
 
 /** A local model's download, from its press to its end. */
@@ -330,8 +342,13 @@ export function loginSeen(
   now: number,
 ): LoginReport {
   const { engine, state } = update;
+  codexProgressSeen(memory, update);
   if (!freshStep(pairing, engine, state)) return {};
-  if (loginActive(update)) return { phase: stepTaken(memory, update, now) };
+  if (loginActive(update)) {
+    const phase = stepTaken(memory, update, now);
+    codexProgressSeen(memory, update);
+    return { phase };
+  }
   const outcome = LOGIN_ENDS[state.phase];
   const attempt = memory.signIns.get(engine);
   // An end with no press and no step seen before it is an old sign-in's, not news.
@@ -339,6 +356,21 @@ export function loginSeen(
   memory.signIns.delete(engine);
   const problem = outcome === SignInOutcome.Failed ? signInProblem(state.problem) : null;
   return { finished: loginEnded(engine, outcome, attempt, now, problem) };
+}
+
+/** A Codex state's progress, kept on its sign-in: what was once seen stays seen, whatever order states come in. */
+function codexProgressSeen(memory: ProviderMemory, update: LoginUpdate): void {
+  const attempt = memory.signIns.get(update.engine);
+  if (update.engine !== EngineId.Codex || !attempt) return;
+  const { state } = update;
+  const seen = attempt.codex ?? { linkSeen: false, cardShown: false, outputLines: 0 };
+  // The first line is the app's own "Starting Codex sign-in…".
+  const outputLines = Math.max(0, state.lines.length - 1);
+  attempt.codex = {
+    linkSeen: seen.linkSeen || state.hasBrowserUrl,
+    cardShown: seen.cardShown || state.visible,
+    outputLines: Math.max(seen.outputLines, outputLines),
+  };
 }
 
 function stepTaken(memory: ProviderMemory, update: LoginUpdate, now: number): SignInPhaseProperties {
@@ -376,8 +408,13 @@ function loginEnded(
     surface: attempt?.surface ?? null,
     used_code_box: attempt?.usedCodeBox ?? false,
     fell_back_to_terminal: attempt?.fellBackToTerminal ?? false,
+    ...codexProgressProperties(attempt?.codex),
   };
 }
+
+/** A Codex sign-in's progress, as its end event says it; nothing for another engine's. */
+const codexProgressProperties = (progress: CodexLoginProgress | undefined) =>
+  progress ? { link_seen: progress.linkSeen, card_shown: progress.cardShown, output_lines: progress.outputLines } : {};
 
 /**
  * A terminal event: a CLI's own sign-in terminal that exited ends its sign-in, once — cancelled
@@ -448,7 +485,14 @@ export function cliInstallSeen(
   pairing.cliTold.add(key);
   if (job.phase === CliInstallPhase.Installing) return { started: base };
   return {
-    finished: { ...base, phase: job.phase, problem: job.problem ?? null, duration_ms: jobDuration(job) },
+    finished: {
+      ...base,
+      phase: job.phase,
+      problem: job.problem ?? null,
+      duration_ms: jobDuration(job),
+      http_status: httpStatus(job.httpStatus),
+      net_error: netErrorCode(job.netError),
+    },
   };
 }
 

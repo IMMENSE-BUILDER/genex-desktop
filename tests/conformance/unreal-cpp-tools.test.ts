@@ -2,10 +2,11 @@
  * C++ parts on the editor's side. `landPartCpp` brings a part's own C++ folder from a
  * builder's copy into the game's project before the editor queue hot-reloads it: plain headers
  * and sources only, that one folder replaced, nothing else touched, and a hostile folder (a link,
- * a file outside, another kind of file) copies nothing. The runner's `cpp-status` says whether this
- * computer compiles C++, the game's module and how adding it goes; `add-cpp-module` adds the module
+ * a file outside, another kind of file) copies nothing. `cpp-status` says whether this computer
+ * compiles C++, the game's module and how adding it goes; `add-cpp-module` adds the module
  * in the background: saves the editor's work, quits Unreal, writes the module, builds it and opens
- * Unreal again, and on any failure says why and reopens an editor it closed. Unreal, UBT and time
+ * Unreal again, and on any failure says why and reopens an editor it closed. With two Unreals
+ * installed, both judge and build with the one the game's own project names. Unreal, UBT and time
  * are stand-ins; the module's files are written for real.
  */
 import assert from "node:assert/strict";
@@ -14,7 +15,6 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { CppAddState as SeedCppAddState, readCppStatus } from "../../src/harness-seed/loop/unreal/cpp.ts";
 import type { PluginContext, PluginHookContext } from "../../src/plugin-sdk/index.d.ts";
 import { HookEvent } from "../../src/shared/plugin-hooks.ts";
 import { CppAddState, CppEditorTool, landPartCpp } from "../../src/plugins/unreal/cpp-tools.ts";
@@ -27,8 +27,10 @@ import {
   LoopToolName,
 } from "../../src/plugins/unreal/loop-tools.ts";
 import { CompileFailure, type CompileOptions, type CompileResult } from "../../src/plugins/unreal/ubt.ts";
+import { VisualStudioState } from "../../src/plugins/unreal/visual-studio.ts";
 import { XcodeState } from "../../src/plugins/unreal/xcode.ts";
 import { tmpDir } from "../helpers/tmp.ts";
+import { engineByGame, unrealBackendFixture } from "../helpers/unreal-fake-engine.ts";
 
 const MODULE = "Rush";
 const XCODE_APP = "/Applications/Xcode-26.2.app";
@@ -273,6 +275,8 @@ type Editor = {
 type Options = {
   platform?: NodeJS.Platform;
   xcode?: XcodeState;
+  /** Where Microsoft's C++ tools stand; none: the computer can't tell (not Windows). */
+  visualStudio?: VisualStudioState;
   /** The project's own module, or none (a Blueprint project). */
   module?: boolean;
   /** Whether Unreal is open on this game when the test starts (default), or closed. */
@@ -289,7 +293,13 @@ type Options = {
   portBlockedOnOpen?: boolean;
   /** UBT's build goes on until this settles. */
   building?: Promise<unknown>;
+  /** A newer Unreal is installed beside the game's own, which answers only when asked for this game. */
+  newerUnreal?: boolean;
 };
+
+/** Microsoft's C++ tools where `state` says, or no answer at all (a computer that isn't Windows). */
+const visualStudioOf = (state: VisualStudioState | undefined) =>
+  state ? { visualStudio: async () => ({ state }) } : {};
 
 /** A Blueprint game (or one with its module) open in a stand-in Unreal, through the Loop's tools. */
 async function cppWorld(options: Options = {}) {
@@ -302,6 +312,10 @@ async function cppWorld(options: Options = {}) {
   await mkdir(unreal, { recursive: true });
   await mkdir(storage, { recursive: true });
   await mkdir(engineDir, { recursive: true });
+  const own = { version: "5.8", directory: engineDir };
+  const newer = { version: "5.9", directory: path.join(root, "engine-5.9") };
+  await mkdir(newer.directory, { recursive: true });
+  const xcodeAsked: Array<string | undefined> = [];
   const modules = options.module ? { Modules: [{ Name: MODULE, Type: "Runtime", LoadingPhase: "Default" }] } : {};
   await writeFile(
     projectFile,
@@ -330,9 +344,13 @@ async function cppWorld(options: Options = {}) {
   };
   const tools = createLoopTools({
     platform: options.platform ?? "darwin",
-    engine: async () => ({ version: "5.8", directory: engineDir }),
+    engine: options.newerUnreal ? engineByGame("rush", own, newer) : async () => own,
     project: async () => (options.unlinked ? undefined : projectFile),
-    xcode: async () => ({ state: options.xcode ?? XcodeState.Ready, app: XCODE_APP }),
+    xcode: async (judged) => {
+      xcodeAsked.push(judged);
+      return { state: options.xcode ?? XcodeState.Ready, app: XCODE_APP };
+    },
+    ...visualStudioOf(options.visualStudio),
     compile: async (compile) => {
       events.push("compile");
       compiles.push(compile);
@@ -381,9 +399,11 @@ async function cppWorld(options: Options = {}) {
     (await tools.call(LoopToolName.CppStatus, {}, context, storage)) as {
       canCompile: boolean;
       xcode: string;
+      visualStudio: string;
       platform: string;
       module: string | null;
       adding: { state: string; error?: string; seconds?: number };
+      jobRunning: boolean;
     };
   const add = () => tools.call(LoopToolName.AddCppModule, {}, context, storage);
   /** The add job's end, once it is no longer adding. */
@@ -394,7 +414,22 @@ async function cppWorld(options: Options = {}) {
   /** A tool called at one of Genex's moments. */
   const atMoment = (name: string, hook: PluginHookContext) =>
     tools.call(name as LoopToolName, {}, { ...context, hook }, storage);
-  return { root, game, unreal, projectFile, engineDir, events, compiles, clock, editor, status, add, added, atMoment };
+  return {
+    root,
+    game,
+    unreal,
+    projectFile,
+    engineDir,
+    events,
+    compiles,
+    xcodeAsked,
+    clock,
+    editor,
+    status,
+    add,
+    added,
+    atMoment,
+  };
 }
 
 describe("cpp-status", () => {
@@ -404,12 +439,12 @@ describe("cpp-status", () => {
     assert.deepEqual(answer, {
       canCompile: true,
       xcode: XcodeState.Ready,
+      visualStudio: VisualStudioState.NotApplicable,
       platform: "darwin",
       module: null,
       adding: { state: CppAddState.Idle },
+      jobRunning: false,
     });
-    assert.deepEqual(readCppStatus(answer), answer, "the Loop's runner reads it as it is");
-    assert.deepEqual(SeedCppAddState, CppAddState, "the runner names the same states");
   });
 
   it("names the game's module once it has one", async () => {
@@ -418,7 +453,12 @@ describe("cpp-status", () => {
   });
 
   const cannot: Array<[string, Options, string]> = [
-    ["off a Mac", { platform: "win32", xcode: XcodeState.NotApplicable }, XcodeState.NotApplicable],
+    [
+      "on Windows that can't tell its C++ tools",
+      { platform: "win32", xcode: XcodeState.NotApplicable },
+      XcodeState.NotApplicable,
+    ],
+    ["on Linux", { platform: "linux", xcode: XcodeState.NotApplicable }, XcodeState.NotApplicable],
     ["before Xcode's first launch", { xcode: XcodeState.FirstLaunch }, XcodeState.FirstLaunch],
     ["without Xcode", { xcode: XcodeState.Missing }, XcodeState.Missing],
   ];
@@ -433,6 +473,19 @@ describe("cpp-status", () => {
   it("names no module for a game without a linked project", async () => {
     assert.equal((await (await cppWorld({ unlinked: true })).status()).module, null);
   });
+
+  it("compiles on Windows exactly when Microsoft's C++ tools are ready for the engine, and names where they stand", async () => {
+    const rows: Array<[VisualStudioState, boolean]> = [
+      [VisualStudioState.Ready, true],
+      [VisualStudioState.Missing, false],
+      [VisualStudioState.Outdated, false],
+    ];
+    for (const [visualStudio, canCompile] of rows) {
+      const w = await cppWorld({ platform: "win32", xcode: XcodeState.NotApplicable, visualStudio });
+      const answer = await w.status();
+      assert.deepEqual([answer.visualStudio, answer.canCompile], [visualStudio, canCompile], visualStudio);
+    }
+  });
 });
 
 describe("add-cpp-module", () => {
@@ -445,8 +498,12 @@ describe("add-cpp-module", () => {
   });
 
   for (const [when, options] of [
-    ["off a Mac", { platform: "win32", xcode: XcodeState.NotApplicable }],
+    ["on Linux", { platform: "linux", xcode: XcodeState.NotApplicable }],
     ["without a ready Xcode", { xcode: XcodeState.FirstLaunch }],
+    [
+      "on Windows without Microsoft's C++ tools",
+      { platform: "win32", xcode: XcodeState.NotApplicable, visualStudio: VisualStudioState.Missing },
+    ],
   ] as const) {
     it(`refuses ${when} and starts nothing`, async () => {
       const w = await cppWorld(options);
@@ -466,8 +523,10 @@ describe("add-cpp-module", () => {
     const w = await cppWorld();
     assert.deepEqual(await w.add(), { started: true });
     assert.equal((await w.status()).adding.state, CppAddState.Adding);
+    assert.equal((await w.status()).jobRunning, true, "Genex reads that the job runs, to wake the chat when it ends");
     const end = await w.added();
     assert.equal(end.state, CppAddState.Done, end.error);
+    assert.equal((await w.status()).jobRunning, false);
     assert.deepEqual(w.events, [CppEditorTool.SaveAll, "quit Rush.uproject", "compile", "open Rush.uproject"]);
     assert.equal(end.seconds, Math.round(w.clock.at / 1000));
     assert.ok(w.clock.at >= QUIT_TAKES_MS + OPEN_TAKES_MS, "it waited for Unreal to close and to answer again");
@@ -479,6 +538,33 @@ describe("add-cpp-module", () => {
       [[w.engineDir, w.projectFile, MODULE, XCODE_APP]],
     );
     assert.deepEqual(await w.add(), { module: MODULE, already: true }, "a second call finds it");
+  });
+
+  it("adds the module on Windows with Microsoft's C++ tools: the same save, quit, build and open, with no Xcode", async () => {
+    const w = await cppWorld({
+      platform: "win32",
+      xcode: XcodeState.NotApplicable,
+      visualStudio: VisualStudioState.Ready,
+    });
+    assert.deepEqual(await w.add(), { started: true });
+    const end = await w.added();
+    assert.equal(end.state, CppAddState.Done, end.error);
+    assert.deepEqual(w.events, [CppEditorTool.SaveAll, "quit Rush.uproject", "compile", "open Rush.uproject"]);
+    assert.deepEqual(
+      w.compiles.map((c) => [c.projectFile, c.module]),
+      [[w.projectFile, MODULE]],
+    );
+    assert.equal((await w.status()).module, MODULE);
+  });
+
+  it("refuses on Windows without Microsoft's C++ tools, pointing the agent at their install", async () => {
+    const w = await cppWorld({
+      platform: "win32",
+      xcode: XcodeState.NotApplicable,
+      visualStudio: VisualStudioState.Missing,
+    });
+    await assert.rejects(w.add(), /unreal__install-unreal/);
+    assert.deepEqual(w.events, []);
   });
 
   it("restarts Unreal as Genex's own: a health look meanwhile is no crash, and the crash steps start no second editor or build", async () => {
@@ -761,4 +847,43 @@ describe("run-part on a C++ part", () => {
     const landed = path.join(w.game, "unreal", "Source", MODULE, "Parts", "Bike", "BikeCamera.cpp");
     assert.equal(await readFile(landed, "utf8"), changed);
   });
+});
+
+describe("the C++ tools where two Unreals are installed", () => {
+  it("cpp-status judges Xcode against the game's own Unreal, not a newer one beside it", async () => {
+    const w = await cppWorld({ newerUnreal: true });
+    assert.equal((await w.status()).canCompile, true);
+    assert.deepEqual(w.xcodeAsked, [w.engineDir]);
+  });
+
+  it("add-cpp-module judges Xcode against the game's own Unreal and builds the module with it", async () => {
+    const w = await cppWorld({ newerUnreal: true });
+    assert.deepEqual(await w.add(), { started: true });
+    const end = await w.added();
+    assert.equal(end.state, CppAddState.Done, end.error);
+    assert.deepEqual(
+      w.compiles.map((c) => c.engineDir),
+      [w.engineDir],
+    );
+    assert.deepEqual([...new Set(w.xcodeAsked)], [w.engineDir]);
+  });
+
+  type Fixture = Awaited<ReturnType<typeof unrealBackendFixture>>;
+  const olderOf = (f: Fixture) => f.older?.directory;
+  const newerOf = (f: Fixture) => f.engine.directory;
+  /** What the game's project names, and the installed Unreal the plugin's backend then judges Xcode against. */
+  const rows: Array<[string, string | null, (f: Fixture) => string | undefined]> = [
+    ["the older Unreal", "5.8", olderOf],
+    ["the newer Unreal", "5.9", newerOf],
+    ["an Unreal that isn't installed", "5.10", newerOf],
+    ["a source build's id", "{2E6C4A1B-0D4F-4B63-9B5E-0F3C1A7D9E52}", newerOf],
+    ["nothing: the game has no project", null, newerOf],
+  ];
+  for (const [named, association, judged] of rows)
+    it(`through the plugin's backend, cpp-status judges Xcode for a game whose project names ${named}`, async () => {
+      const f = await unrealBackendFixture({ older: true });
+      if (association !== null) await f.linkProject(association);
+      await f.call(LoopToolName.CppStatus, {});
+      assert.deepEqual(f.xcodeAsked, [judged(f)]);
+    });
 });

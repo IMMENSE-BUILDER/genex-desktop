@@ -6,7 +6,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  buildsWithGenex,
   connectView,
+  genexChoiceView,
+  genexSignInEnd,
+  genexStep,
   markState,
   shouldWelcome,
   startTrouble,
@@ -14,6 +18,7 @@ import {
   type ConnectInput,
 } from "../../src/renderer/onboarding/state.ts";
 import { composerOpening } from "../../src/renderer/chat/use-composer-model.ts";
+import { offersGenex } from "../../src/renderer/genex-build.ts";
 import { resolveChoice, toChoices } from "../../src/renderer/model-choices.ts";
 import { rememberWelcomeModel } from "../../src/renderer/stored-model.ts";
 import type { EngineDescriptor } from "../../src/renderer/types.ts";
@@ -187,6 +192,58 @@ describe("first launch", () => {
     assert.equal(markState({ kind: "code" }), "busy");
     assert.equal(markState({ kind: "action", action: "install", label: "" }), "missing");
     assert.equal(markState({ kind: "action", action: "connect", label: "" }), "idle");
+  });
+
+  it("reads where building with Genex stands from the app's Genex account", () => {
+    const step = (account: Parameters<typeof genexStep>[0]["account"], installing = false) =>
+      genexStep({ account, installing });
+    assert.equal(step(null), "offer", "main has not said where the account stands yet");
+    assert.equal(step("signed-out"), "offer");
+    assert.equal(step("ended"), "offer", "a sign-in genex.games ended signs in again");
+    assert.equal(step("signing-in"), "browser");
+    assert.equal(step("signing-in", true), "browser", "Claude Code is set up behind the sign-in");
+    assert.equal(step("signed-in", true), "setup");
+    assert.equal(step("signed-in"), "on");
+  });
+
+  it("offers Use Genex, which opens Genex's screen, and follows its sign-in from the connect screen", () => {
+    const offer = { kind: "action", action: "connect", label: "Use Genex" };
+    for (const step of ["offer", "browser", "setup", "on"] as const)
+      assert.deepEqual(genexChoiceView({ picked: false, step }), offer, `not picked yet, ${step}`);
+    assert.deepEqual(genexChoiceView({ picked: true, step: "offer" }), offer, "back without signing in");
+    const waiting = genexChoiceView({ picked: true, step: "browser" });
+    assert.deepEqual(waiting, { kind: "busy", label: "Finish in your browser", cancel: true });
+    assert.equal(markState(waiting), "busy");
+    const setting = genexChoiceView({ picked: true, step: "setup" });
+    assert.deepEqual(setting, { kind: "busy", label: "Getting Genex ready…", cancel: false });
+    const ready = genexChoiceView({ picked: true, step: "on" });
+    assert.deepEqual(ready, { kind: "on", label: "Genex ready" });
+    assert.equal(markState(ready), "on", "its mark lights once signed in");
+  });
+
+  it("counts Genex as something to build with only once its screen signed in", () => {
+    assert.equal(buildsWithGenex({ picked: true, step: "on" }), true);
+    assert.equal(buildsWithGenex({ picked: true, step: "setup" }), true, "the first message waits for the setup");
+    assert.equal(buildsWithGenex({ picked: true, step: "browser" }), false, "the browser still has the sign-in");
+    assert.equal(buildsWithGenex({ picked: true, step: "offer" }), false, "Use Genex alone connects nothing");
+    assert.equal(buildsWithGenex({ picked: false, step: "on" }), false, "an account signed in earlier is no choice");
+  });
+
+  it("says how a sign-in Genex's screen started ended", () => {
+    assert.equal(genexSignInEnd("signed-out", false), null, "main has not answered the press yet");
+    assert.equal(genexSignInEnd("signing-in", true), null, "the browser has it");
+    assert.equal(genexSignInEnd("signed-in", true), "connected");
+    assert.equal(genexSignInEnd("signed-in", false), "connected", "a kept sign-in needs no browser");
+    assert.equal(genexSignInEnd("signed-out", true), "failed", "the browser gave it up");
+    assert.equal(genexSignInEnd("ended", true), "failed");
+    assert.equal(genexSignInEnd(null, true), "failed");
+  });
+
+  it("offers Genex only where genex.games offers building with it", () => {
+    assert.equal(offersGenex({ status: { code: "needs_login", detail: "", reason: "not_signed_in" } }), true);
+    assert.equal(offersGenex({ status: { code: "error", detail: "", reason: "check_failed" } }), true);
+    assert.equal(offersGenex({ status: { code: "not_installed", detail: "", reason: "not_offered" } }), false);
+    assert.equal(offersGenex(undefined), false, "a build without Genex never shows it");
   });
 });
 
@@ -380,6 +437,43 @@ describe("the free model first launch builds with", () => {
     rememberWelcomeModel(storage, "opencode::opencode/big-pickle");
     assert.equal(resolveChoice(toChoices([freeOpenCode]), composerOpening(storage, home).modelKey)?.name, "Big Pickle");
   });
+
+  it("seeds the first game's chat with Genex's Sonnet, which asks for what Genex still needs itself", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    };
+    const genex = {
+      id: "genex",
+      label: "Genex",
+      kind: "delegated",
+      status: { code: "needs_login", detail: "", reason: "not_signed_in" },
+      models: [
+        {
+          id: "sonnet-5.5-medium-or",
+          label: "Sonnet 5.5",
+          contextWindow: 200_000,
+          supportsTools: true,
+          supportsVision: true,
+        },
+        {
+          id: "opus-5.5-medium-or",
+          label: "Opus 5.5",
+          contextWindow: 200_000,
+          supportsTools: true,
+          supportsVision: true,
+        },
+      ],
+      defaultModel: "sonnet-5.5-medium-or",
+    } satisfies EngineDescriptor;
+    rememberWelcomeModel(storage, "genex::sonnet-5.5-medium-or");
+    const home = { id: "home", meta: { kind: "game" as const, project: null } };
+    const chosen = resolveChoice(toChoices([genex]), composerOpening(storage, home).modelKey);
+    assert.equal(chosen?.name, "Sonnet 5.5");
+    assert.notEqual(chosen?.disabled, true, "the first message goes there and asks for the sign-in itself");
+  });
 });
 
 /** A 2D context that records what is drawn and refuses a non-finite coordinate. */
@@ -458,13 +552,22 @@ describe("first-launch art", () => {
       for (const tg of [0, 0.3, 2, 7.5]) {
         drawMarks(
           recorder().ctx,
-          { claude: state, codex: state },
+          { claude: state, codex: state, genex: state },
           tg,
-          { claude: tg < 1 ? tg : -1, codex: -1 },
-          { claude: 192, codex: 448 },
+          { claude: tg < 1 ? tg : -1, codex: -1, genex: -1 },
+          { claude: 152, codex: 320, genex: 488 },
           palette,
         );
       }
+    const fills = (states: Parameters<typeof drawMarks>[1]) => {
+      const { ctx, calls } = recorder();
+      drawMarks(ctx, states, 1, { claude: -1, codex: -1, genex: -1 }, { claude: 152, codex: 320, genex: 488 }, palette);
+      return calls.filter((call) => call.name === "fill").length;
+    };
+    assert.ok(
+      fills({ claude: "on", codex: "on" }) < fills({ claude: "on", codex: "on", genex: "on" }),
+      "a mark with no state is left out",
+    );
     for (const id of ["openrouter", "opencode", "grok", "cursor"] as const)
       for (const state of ["idle", "busy", "on", "missing"] as const)
         for (const tg of [0, 0.3, 2, 7.5]) drawMeteredMark(recorder().ctx, id, state, tg, tg < 1 ? tg : -1, palette);

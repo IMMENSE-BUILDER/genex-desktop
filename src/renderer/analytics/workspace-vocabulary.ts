@@ -104,10 +104,6 @@ export type DraftSource = (typeof DraftSource)[keyof typeof DraftSource];
 export const HomeLeftTo = { Game: "game", Harness: "harness", Other: "other" } as const;
 export type HomeLeftTo = (typeof HomeLeftTo)[keyof typeof HomeLeftTo];
 
-/** How a launch's first message runs: as a Loop, or answered in the chat. */
-export const LaunchMode = { Loop: "loop", Auto: "auto" } as const;
-export type LaunchMode = (typeof LaunchMode)[keyof typeof LaunchMode];
-
 /** The launch step that stopped. */
 export const LaunchStage = { Naming: "naming", Creating: "creating", Opening: "opening" } as const;
 export type LaunchStage = (typeof LaunchStage)[keyof typeof LaunchStage];
@@ -207,8 +203,6 @@ export const StageSwitchVia = {
   Tab: "tab",
   /** A run started and Builds opened by itself. */
   AutoRunStarted: "auto_run_started",
-  /** The chat put a build on screen (`stage.show`). */
-  ChatStageShow: "chat_stage_show",
   /** A link or button in the chat (Show Live, Assets, Builds). */
   ChatLink: "chat_link",
   /** A build opened from Builds. */
@@ -250,7 +244,13 @@ export const RuleScope = { OneGame: "one_game", AllGames: "all_games" } as const
 export type RuleScope = (typeof RuleScope)[keyof typeof RuleScope];
 
 /** How a notification was opened. */
-export const NoticeVia = { Panel: "panel", SystemNotification: "system_notification" } as const;
+export const NoticeVia = {
+  Panel: "panel",
+  SystemNotification: "system_notification",
+  Toast: "toast",
+  /** A review row's Fix in the bell: Fix with agent pressed, then its game's chat. */
+  Fix: "fix",
+} as const;
 export type NoticeVia = (typeof NoticeVia)[keyof typeof NoticeVia];
 
 /** Where opening a notification took the person. */

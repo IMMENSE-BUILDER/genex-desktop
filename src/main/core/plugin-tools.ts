@@ -1,13 +1,19 @@
 import { allowedInChat, consentAudience, priorConsentDecline } from "./consent-audience.ts";
-import { STUDIO_CONSENT_NAMES, type StudioConsentSource } from "../../shared/plugins.ts";
+import { PluginCallFailure, STUDIO_CONSENT_NAMES, type StudioConsentSource } from "../../shared/plugins.ts";
 /**
  * Plugin and connector tools as agents call them: the consent a confirmed tool waits for, the
  * call itself with its durable record, and the MCP servers a plugin declares. Composed by
  * `StudioCore`; its state stays in the core.
  */
-import { PluginConsentDeclined, type PluginMcpLaunch } from "../../substrate/plugins/registry.ts";
+import { PluginCallRefused, PluginConsentDeclined, type PluginMcpLaunch } from "../../substrate/plugins/registry.ts";
 import { shownCardTool } from "../../substrate/plugins/manifest-words.ts";
-import { PluginCallCutOff, PluginCallNotSent } from "../../substrate/plugins/process.ts";
+import {
+  PluginBackendError,
+  PluginCallCutOff,
+  PluginCallNotSent,
+  type PluginInvocation,
+  PluginRestartPaused,
+} from "../../substrate/plugins/process.ts";
 import { containedReal } from "../../substrate/paths.ts";
 import { finishedPayload, roleOf, startedPayload } from "../plugin-activity.ts";
 import type { PluginToolStartedPayload } from "../../shared/game-assets.ts";
@@ -36,6 +42,7 @@ import { windowsHomeEnv } from "../../substrate/child-env.ts";
 import { type ConnectorCall, type ConnectorToolEvent, McpHealth, type McpChange } from "../../shared/mcp.ts";
 import { connectorCallFields, keepCaptures } from "./connector-record.ts";
 import { noteCutOff } from "./cut-off-calls.ts";
+import { coreJobWake, PluginJobWatches } from "./job-wake.ts";
 import { closeAssetCall, type OpenedCall, openAssetCall } from "./asset-calls.ts";
 import { type CallMaking, callMaking, genexCallMaking } from "../../shared/asset-making.ts";
 import { GENEX_ASSET_TOOL, GENEX_PLUGIN_ID } from "../../shared/genex.ts";
@@ -143,7 +150,7 @@ const PLAN_ANSWER = { consent: "declined", blocker: PluginCallBlocker.PlanMode, 
  * The answer, never an error, of a plugin call whose lock was not given in time: like a declined
  * consent. `hold` is Genex's typed hold, which the harness words the person's line from.
  */
-export const lockAnswer = (refused: LockRefused) =>
+const lockAnswer = (refused: LockRefused) =>
   ({
     consent: "declined",
     blocker: PluginCallBlocker.Lock,
@@ -181,6 +188,41 @@ class NotRunInTime extends Error {
     super(MESSAGE.tooLate);
     this.name = "NotRunInTime";
   }
+}
+
+/** An agent's call that ran past the time one call may take: whether it took effect is unknown. Error's own name keeps its text. */
+class CallOutOfTime extends Error {
+  constructor() {
+    super(MESSAGE.outOfTime);
+  }
+}
+
+/** An agent's paid call refused before Genex is asked: its run's jobs reached the credit cap. Error's own name keeps its text. */
+class OverCreditCap extends Error {}
+
+/** The typed stops of an agent's call, each with the failure its record names. */
+const CALL_STOPS: ReadonlyArray<readonly [(err: unknown) => boolean, PluginCallFailure]> = [
+  [(err) => err instanceof PluginCallCutOff, PluginCallFailure.CutOff],
+  [(err) => err instanceof CallOutOfTime, PluginCallFailure.OutOfTime],
+  [(err) => err instanceof NotRunInTime, PluginCallFailure.NotRunInTime],
+  [(err) => err instanceof PluginConsentDeclined, PluginCallFailure.Declined],
+  [(err) => err instanceof ToolMomentBlocked, PluginCallFailure.Blocked],
+  [isLockRefused, PluginCallFailure.LockRefused],
+  [(err) => err instanceof OverCreditCap, PluginCallFailure.CreditCap],
+  [(err) => err instanceof PluginRestartPaused, PluginCallFailure.RestartPaused],
+  [(err) => err instanceof PluginCallNotSent, PluginCallFailure.NotSent],
+];
+
+/**
+ * Why an agent's plugin call failed, as a code its record keeps: the plugin's own failure with
+ * its error code when it gave one, the registry's refusal, or a typed stop; anything else is other.
+ */
+export function pluginCallFailure(err: unknown): { failure: PluginCallFailure; code?: string } {
+  if (err instanceof PluginBackendError)
+    return { failure: PluginCallFailure.Plugin, ...(err.pluginCode ? { code: err.pluginCode } : {}) };
+  if (err instanceof PluginCallRefused) return { failure: err.failure };
+  const stop = CALL_STOPS.find(([is]) => is(err));
+  return { failure: stop?.[1] ?? PluginCallFailure.Other };
 }
 
 /**
@@ -300,6 +342,8 @@ function pluginCallMaking(
 
 export class PluginToolService {
   readonly #core: StudioCore;
+  /** The plugin jobs the chats' own agents started, watched until they end (`job-wake.ts`). */
+  readonly jobWatches: PluginJobWatches;
   /** What each run's Genex jobs committed, against its cap. */
   readonly #credits = new RunCreditLedger();
   readonly #x: Pick<
@@ -334,6 +378,7 @@ export class PluginToolService {
   ) {
     this.#core = core;
     this.#x = x;
+    this.jobWatches = new PluginJobWatches(coreJobWake(core));
   }
 
   // ── plugin consent ───────────────────────────────────────────────────────────────────────
@@ -444,8 +489,9 @@ export class PluginToolService {
   /**
    * A card's answer given before it is shown, or null to ask: the person's earlier no to the same
    * call (`user`, not logged again), their Allow in this chat for an `onAccount` tool (`chat`), or
-   * the chat's Bypass (`mode`). Bypass asks nothing: an agent's card in a Bypass chat goes on, and
-   * one asked in another mode is answered by the person's switch (`modeAnswers`).
+   * the chat's mode (`mode`): Bypass asks nothing, nor does Auto for a card that lists it (computer
+   * control's). An agent's card in such a chat goes on, and one asked in another mode is answered by
+   * the person's switch (`modeAnswers`).
    */
   async #settledBefore(asked: {
     attribution: { runId?: string; lead?: boolean } | undefined;
@@ -461,13 +507,13 @@ export class PluginToolService {
     if (declined) return declined;
     if (asked.tool.onAccount && (await allowedInChat(this.#core, threadId, name)))
       return { approved: true, by: "chat" };
-    return (await this.#bypassed(asked.modeAnswers, threadId)) ? { approved: true, by: "mode" } : null;
+    return (await this.#modeSettles(asked.modeAnswers, threadId)) ? { approved: true, by: "mode" } : null;
   }
 
-  /** Whether chat `threadId` is in Bypass now and Bypass answers this card. */
-  async #bypassed(modeAnswers: PluginConsentRequest["modeAnswers"] | null, threadId: string): Promise<boolean> {
-    if (!modeAnswers?.modes.includes(PermissionMode.Bypass)) return false;
-    return (await this.#x.chatMode(threadId)) === PermissionMode.Bypass;
+  /** Whether chat `threadId` is now in a mode that answers this card (Bypass, or Auto for computer control's). */
+  async #modeSettles(modeAnswers: PluginConsentRequest["modeAnswers"] | null, threadId: string): Promise<boolean> {
+    if (!modeAnswers?.modes.length) return false;
+    return modeAnswers.modes.includes(await this.#x.chatMode(threadId));
   }
 
   /** A card's answer, logged beside its question and announced to the chat. */
@@ -548,11 +594,16 @@ export class PluginToolService {
     );
   }
 
-  /** A plugin gets the staged public copy only after the person reviews its exact file set. */
+  /**
+   * A plugin gets the staged public copy only after the person reviews its exact file set. Asked
+   * inside a plugin call (`call`), the card closes when the call ends, and the call's own deadline
+   * stands still while it is up: reading the list is the person's time, never the plugin's.
+   */
   async reviewExport(
     pluginId: string,
     binding: PluginBinding,
     result: { included: string[]; excluded: string[] },
+    call?: Pick<PluginInvocation, "signal" | "personAnswers">,
   ): Promise<void> {
     const tool: PluginTool = {
       name: "export_review",
@@ -561,7 +612,8 @@ export class PluginToolService {
       parameters: { type: "object", properties: {} },
     };
     const review = { included: [...result.included].sort(), excluded: [...result.excluded].sort() };
-    const grant = await this.requestConsent(pluginId, tool, { files: review.included }, binding, undefined, review);
+    const ask = () => this.requestConsent(pluginId, tool, { files: review.included }, binding, call?.signal, review);
+    const grant = call ? await call.personAnswers(ask) : await ask();
     if (!grant.approved) throw new PluginConsentDeclined(tool.name, grant.by);
   }
 
@@ -587,21 +639,14 @@ export class PluginToolService {
     const deadline = this.#x.locks.clock.now() + AGENT_CALL_MS;
     if (!readsSkill(name) && (await this.#planning(binding.project, binding.threadId, callRun(ctx)?.runId)))
       return { ...PLAN_ANSWER };
-    const kindChange = await this.#beforeKindChange(name, binding);
+    const kindChange = await this.#beforeKindChange(name, args, binding);
     if (kindChange && isRefused(kindChange)) return kindChange;
     const started = await this.pluginToolStarted(name, args, binding, ctx);
     let result: unknown;
     try {
       result = await this.#callAgentTool(name, args, binding, signal, ctx, deadline);
     } catch (err) {
-      // The plugin's own `tool.before` step blocked it: the block is the answer, and the record's
-      // words (the card came first, so the call shows, not run, with why).
-      await this.pluginToolFinished(
-        started,
-        { error: err instanceof ToolMomentBlocked ? err.reason : err },
-        0,
-        binding,
-      );
+      await this.pluginToolFinished(started, { error: err }, 0, binding);
       const notRun = notRunAnswer(err);
       if (notRun) return notRun;
       throw err;
@@ -610,6 +655,8 @@ export class PluginToolService {
     const returned = (result as { images?: unknown } | null)?.images;
     const count = Array.isArray(returned) ? returned.length : 0;
     await this.pluginToolFinished(started, { result }, count, binding);
+    // A job the chat's own agent started is watched, so the chat hears when it ends (`job-wake.ts`).
+    if (chatsOwnCall(ctx)) this.jobWatches.called(name, args, binding, result);
     const answered = kindChange ? await afterKindChange(this.#core, kindChange, result) : result;
     const afterBudget = momentBudget(HookEvent.ToolAfter, deadline - this.#x.locks.clock.now());
     const after = await this.#ownToolMoment(HookEvent.ToolAfter, name, args, binding, signal, ctx, afterBudget);
@@ -689,7 +736,7 @@ export class PluginToolService {
     if (name === GenexStudioTool.Publish) await assertPublishable(this.#core, binding.project);
     // Refused before Genex is asked: the run's paid jobs have committed its credit cap.
     const overCap = this.#credits.refusal(name, ctx.credits ?? null);
-    if (overCap) throw new Error(overCap);
+    if (overCap) throw new OverCreditCap(overCap);
     // Its arguments are checked and its card answered first: a refused call runs no step of its
     // plugin's and never waits its turn, and no lock is held while the person reads the card. Then
     // the plugin's own `tool.before` steps, then its turn at its locks.
@@ -724,7 +771,7 @@ export class PluginToolService {
       const outOfTime = runEnds.signal.aborted && !signal?.aborted;
       // Ended before it was sent: it never ran, so it may be called again.
       if (outOfTime && err instanceof PluginCallNotSent) throw new NotRunInTime();
-      if (outOfTime) throw new Error(MESSAGE.outOfTime);
+      if (outOfTime) throw new CallOutOfTime();
       throw err;
     } finally {
       (ends as AbortSignal | null)?.removeEventListener("abort", cut);
@@ -737,11 +784,18 @@ export class PluginToolService {
     return Math.max(0, Math.min(this.#x.locks.agentWaitMs, room - PERSON_FIRST_ASK_MS));
   }
 
-  /** A call to a tool that makes a kind of project in the bound game: refused during its run, else snapshotted first. */
-  async #beforeKindChange(name: string, binding: PluginBinding): Promise<KindChange | KindChangeRefused | null> {
+  /**
+   * A call to a tool that makes a kind of project in the bound game: refused during its run (unless
+   * it only links a project the game holds, which is no kind change), else snapshotted first.
+   */
+  async #beforeKindChange(
+    name: string,
+    args: Record<string, unknown>,
+    binding: PluginBinding,
+  ): Promise<KindChange | KindChangeRefused | null> {
     const makes = madeBy(this.#core, name);
     if (makes.length === 0 || !binding.project) return null;
-    return beforeKindChange(this.#core, binding.project, name, makes);
+    return beforeKindChange(this.#core, binding.project, name, makes, args);
   }
 
   /**
@@ -1354,14 +1408,24 @@ export class PluginToolService {
     const { payload: call } = started;
     if (cutOff)
       noteCutOff(this.#x.cutOffCalls, call.threadId, { tool: call.toolName, args: call.args, reason: cutOff });
+    const ended = "error" in outcome ? failedOutcome(outcome.error) : outcome;
     const payload = {
-      ...finishedPayload(call, { ...outcome, ...(version ? { version } : {}) }, images, Date.now() - started.startedAt),
+      ...finishedPayload(call, { ...ended, ...(version ? { version } : {}) }, images, Date.now() - started.startedAt),
       ...(cutOff ? { cutOff } : {}),
     };
     await this.#core
       .append([customEventData(CustomEvent.PluginTool, { ...payload })], started.payload.threadId)
       .catch(() => {});
   }
+}
+
+/**
+ * A failed call's outcome as its record keeps it: why it failed, and its words. The plugin's own
+ * `tool.before` step blocked it: the block's reason is the record's words (the card came first,
+ * so the call shows, not run, with why).
+ */
+function failedOutcome(error: unknown): { error: unknown; failure: PluginCallFailure; code?: string } {
+  return { error: error instanceof ToolMomentBlocked ? error.reason : error, ...pluginCallFailure(error) };
 }
 
 /** Where a consent card belongs: the asking thread, the chat it shows in, and the run it came from. */
@@ -1455,6 +1519,12 @@ function callRun(ctx: PluginCallContext): CallRun | null {
   const attributed = ctx.attribution ? { runId: ctx.attribution.runId, facetId: ctx.attribution.agentId } : null;
   const sources = [attributed, ctx.selfCapture, ctx.director].filter((s): s is CallRun => !!s);
   return sources.find((s) => typeof s.runId === "string" && s.runId) ?? null;
+}
+
+/** A call of a chat's own session: no run's, lead's or worker's, and not one of Genex's own steps. */
+function chatsOwnCall(ctx: PluginCallContext): boolean {
+  if (callRun(ctx) || ctx.lead || ctx.outlivesTurn || ctx.holder) return false;
+  return ctx.caller !== PluginToolAudience.Harness;
 }
 
 /**

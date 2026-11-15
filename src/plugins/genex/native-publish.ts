@@ -11,6 +11,7 @@ import path from "node:path";
 // look-up at run time from the app's own bundle finds nothing and no app would ever be sent.
 import cliPackage from "@genex-ai/cli-demo/package.json" with { type: "json" };
 import {
+  GenexAppRefusal,
   GenexBuildReview,
   type GenexNativeFailure,
   type GenexNativeListing,
@@ -18,9 +19,15 @@ import {
   GenexListingState,
 } from "../../shared/genex.ts";
 import { linuxBuildOf } from "../../shared/publish-platforms.ts";
+import { keepsOffline, type MacEntitlements } from "../../substrate/mac-entitlements.ts";
+import type { MacSigning } from "./mac-notarize.ts";
+import { isAtLeast } from "./cli-version.ts";
+import { reviewDetailOf } from "./native-review.ts";
 
 /** The first Genex CLI with `genex native`: an older pin sends no app. */
 const NATIVE_CLI = [1, 36, 11] as const;
+/** The first Genex CLI whose promotion and listing take `--replace-native-page`. */
+const REPLACE_NATIVE_PAGE_CLI = [1, 36, 20] as const;
 /** The most apps one publish sends: a Mac app, a Windows program and a Linux one, each at most twice over. */
 const NATIVE_UPLOADS_MAX = 6;
 /** What a failure keeps of the CLI's words. */
@@ -35,23 +42,22 @@ const SHA256_HEX = /^[0-9a-f]{64}$/i;
 
 const MESSAGE = { NotABuild: "Genex answered without the build it published" } as const;
 
-/**
- * Whether CLI `version` has `genex native`. A prerelease comes before its release (`1.36.11-dev.4`
- * may predate the command), so only a later release's prerelease counts.
- */
-export function hasNativeCommand(version: string): boolean {
-  const match = /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(version);
-  if (!match) return false;
-  const parts = match.slice(1, 4).map(Number);
-  for (const [at, wanted] of NATIVE_CLI.entries()) {
-    const part = parts[at] ?? 0;
-    if (part !== wanted) return part > wanted;
-  }
-  return match[4] === undefined;
-}
+/** The rooms the apps players install join: Genex's live ones, as an app is live once it goes. */
+const APPS_ROOM_CHANNEL = "production";
+/** The CLI's words that bundle, check, upload and release a room module with no build (`genex native module`). */
+export const NATIVE_MODULE_ARGS = ["native", "module", "--channel", APPS_ROOM_CHANNEL] as const;
+
+/** Whether CLI `version` has `genex native`. */
+export const hasNativeCommand = (version: string): boolean => isAtLeast(version, NATIVE_CLI);
+
+/** Whether CLI `version` takes `--replace-native-page`. */
+export const takesReplaceNativePage = (version: string): boolean => isAtLeast(version, REPLACE_NATIVE_PAGE_CLI);
 
 /** Whether the CLI Studio ships, the version this build pins, can send apps. */
 export const pinnedCliSendsApps = (): boolean => hasNativeCommand(cliPackage.version);
+
+/** Whether the CLI Studio ships may let a web build replace a page that shows only the game's apps. */
+export const pinnedCliReplacesNativePage = (): boolean => takesReplaceNativePage(cliPackage.version);
 
 /**
  * One app to send: what the CLI is handed (a `.app`, or a Windows or Linux program's folder), its
@@ -61,7 +67,43 @@ export interface NativeUpload {
   target: string;
   platform: "mac" | "windows" | "linux";
   entry?: string;
+  /** A Mac app the creator asked to sign and notarize under their own Apple Developer ID first. */
+  sign?: MacSigning;
 }
+
+/** Studio's refusal to send apps, before any upload, with its typed code beside the words. */
+export class AppsRefusedError extends Error {
+  readonly code: GenexAppRefusal;
+  constructor(code: GenexAppRefusal, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/** Reads a Mac app's signed entitlements; throws when it can't (no signature, no codesign). */
+export type MacEntitlementsReader = (app: string) => Promise<MacEntitlements>;
+
+/**
+ * The Mac apps among `apps` whose sandbox keeps them off the network, and those whose signature
+ * couldn't be read. Only a positive finding counts as offline: an unreadable app is named apart.
+ */
+export async function offlineMacApps(
+  apps: readonly NativeUpload[],
+  read: MacEntitlementsReader,
+): Promise<{ offline: NativeUpload[]; unread: NativeUpload[] }> {
+  const offline: NativeUpload[] = [];
+  const unread: NativeUpload[] = [];
+  for (const app of apps.filter((one) => one.platform === "mac")) {
+    const entitlements = await read(app.target).catch(() => null);
+    if (entitlements === null) unread.push(app);
+    else if (keepsOffline(entitlements)) offline.push(app);
+  }
+  return { offline, unread };
+}
+
+/** `uploads` with the creator's notarizing on each Mac app, when they turned it on (`macSigningOf`). */
+export const withMacSigning = (uploads: readonly NativeUpload[], signing: MacSigning | null): NativeUpload[] =>
+  uploads.map((upload) => (signing && upload.platform === "mac" ? { ...upload, sign: signing } : upload));
 
 /** The CLI's words for one upload: `genex native publish <target>`, and a Linux build's platform and program. */
 export const nativePublishArgs = (upload: NativeUpload): string[] => [
@@ -154,12 +196,20 @@ export function sentBuild(answer: unknown): GenexNativeSent | null {
 
 const REVIEWS: ReadonlySet<unknown> = new Set(Object.values(GenexBuildReview));
 
-/** Genex's review of a sent build, as the API answers it beside the build; nothing for an unknown one. */
-function reviewOf(build: Record<string, unknown>): Pick<GenexNativeSent, "review" | "reviewReason"> {
+/**
+ * Genex's review of a sent build, as the API answers it beside the build, with where it holds it and
+ * who decided (`reviewDetail`) from an API that says; nothing for an unknown review.
+ */
+function reviewOf(build: Record<string, unknown>): Pick<GenexNativeSent, "review" | "reviewReason" | "reviewDetail"> {
   if (!REVIEWS.has(build.review)) return {};
   const review = build.review as GenexBuildReview;
   const reason = typeof build.reviewReason === "string" ? build.reviewReason.trim() : "";
-  return reason ? { review, reviewReason: reason.slice(0, REVIEW_REASON_CHARS) } : { review };
+  const detail = reviewDetailOf(build.reviewDetail);
+  return {
+    review,
+    ...(reason ? { reviewReason: reason.slice(0, REVIEW_REASON_CHARS) } : {}),
+    ...(detail ? { reviewDetail: detail } : {}),
+  };
 }
 
 /**

@@ -1,14 +1,10 @@
 /**
- * The words of Genex's worker pool: the brief a worker starts from (Genex's identity first), the
- * one line a lead's brief says about workers, and every answer the six worker tools give the lead.
+ * The words of Genex's worker pool: the brief a worker starts from (Genex's identity first), and
+ * every answer the six worker tools give the lead.
  */
-import { CoreFact, type FactRef, type FolderHolds, ProjectTool } from "../folder-facts.ts";
+import { type FactRef, type FolderHolds, holdsEngineProject, ProjectTool } from "../folder-facts.ts";
 import { appIdentity } from "../project-prompts.ts";
 import { MAX_WORKERS_AT_ONCE, WorkerIsolation, WorkerTool } from "./contract.ts";
-
-/** The one line a lead's brief says about its workers, the same on every engine. */
-export const WORKERS_BRIEF_LINE =
-  "You can start workers (worker_start): readers in place, writers in their own copy that you merge with worker_mark, or one writer in place. As many at once as worker_start says; they follow this chat's permission mode.";
 
 /** What a worker may do about Genex's plugins: look, and tell the lead; the card is the lead's to show. */
 const WORKER_PLUGIN_SEARCH = `To look for a Genex plugin, call ${ProjectTool.PluginsFind} and say in your report what it found; only the lead shows the person a plugin's card.`;
@@ -19,17 +15,6 @@ const WORKER_PLUGIN_SEARCH = `To look for a Genex plugin, call ${ProjectTool.Plu
  */
 const WORKER_EDITOR_ELSEWHERE =
   "The game engine's editor works on the game folder the lead works in, not on your copy: change your copy through its files, and use the editor's tools for what only it can do (start or restart it, play, look, check) or for changes the lead asked you to make there.";
-
-/** The kinds of project a game engine's editor works on. */
-const ENGINE_PROJECTS: ReadonlySet<string> = new Set([
-  CoreFact.UnrealProject,
-  CoreFact.UnityProject,
-  CoreFact.GodotProject,
-  CoreFact.RobloxProject,
-]);
-
-/** Whether a project holds a game engine's project, whose editor works on the game folder. */
-const holdsEngine = (facts: readonly FactRef[]): boolean => facts.some((fact) => ENGINE_PROJECTS.has(fact.id));
 
 /** What a worker's brief is made from. */
 export interface WorkerBriefParts {
@@ -72,7 +57,9 @@ export function workerBrief(parts: WorkerBriefParts): string {
     `Your task:\n${parts.task}`,
     "",
     WHERE[parts.isolation],
-    ...(holdsEngine(parts.identity.facts) && parts.isolation === WorkerIsolation.Copy ? [WORKER_EDITOR_ELSEWHERE] : []),
+    ...(holdsEngineProject(parts.identity.facts) && parts.isolation === WorkerIsolation.Copy
+      ? [WORKER_EDITOR_ELSEWHERE]
+      : []),
     ...(parts.inputs.length ? [`Start from these files: ${parts.inputs.join(", ")}.`] : []),
     parts.research
       ? "You may search and read the web for this task."
@@ -113,6 +100,7 @@ export const POOL_WORDS = {
   copyTooLarge: (host: string) =>
     `${host} Start it again with isolation lock (the one writer in place) or as a reader (isolation read).`,
   noCopy: (why: string) => `Not started: Genex could not make the worker's copy: ${why}`,
+  /** Kept for a `pool-start.ts` an agent kept from before: no step of a plugin holds a worker back. */
   startHeld: (why: string) => `Not started: ${why}`,
   unknown: (id: string) => `No worker ${id} in this chat.`,
   none: "No workers yet in this chat.",
@@ -162,14 +150,10 @@ export const POOL_WORDS = {
 
 /** What a run's lead hears of its pool's workers, beside the workers of its own method. */
 export const RUN_POOL_WORDS = {
-  /** A worker of the run's pool ended: the line that wakes the lead with the rest of its news. */
-  ended: (id: string, title: string, state: string) =>
-    `worker ${id}: ${title} ${state}; ${WorkerTool.Status} ${id} says what it found.`,
+  /** A worker of the run's pool ended: Genex's line that wakes the lead. */
+  ended: (id: string, title: string, state: string) => `worker ${id} "${title}" ended: ${state}.`,
   /** The web method builds in copies: no writer works in the game folder itself. */
   noLock: `Not started: this run builds in copies, never in the game folder itself. Start it with isolation copy (the default: a builder in its own worktree), or isolation read for a reader in place.`,
   /** The heading of the run pool's workers in a status that lists every worker. */
   readers: "Workers from the shared pool:",
-  /** One of the run's own workers waits on the person: the line that wakes the lead (`worker <id>` opens it). */
-  waiting: (id: string, question: string) =>
-    `worker ${id} is waiting for the person: ${question}. Only that call waits, and nobody answering is not a no; go on with the rest of the work, and the other workers keep going.`,
 } as const;

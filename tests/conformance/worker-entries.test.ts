@@ -11,7 +11,7 @@ import { transcriptEntries } from "../../src/renderer/chat/transcript.ts";
 import { buildChecklist, PartMark } from "../../src/renderer/chat/build-checklist.ts";
 import { buildRunGraph } from "../../src/renderer/run-graph.ts";
 import { partRows, StepState, stepWord } from "../../src/renderer/run-steps.ts";
-import { buildsLayout, LeadFace, leadFace } from "../../src/renderer/run-tree.ts";
+import { LeadFace, leadFace } from "../../src/renderer/run-tree.ts";
 import { summarizeRun } from "../../src/shared/run-summary.ts";
 import { CHAT_PAGE_SIZE, chatContext, mergeChatEvents } from "../../src/shared/chat-history.ts";
 import { planRewind, withoutRewound } from "../../src/shared/chat-rewind.ts";
@@ -387,22 +387,16 @@ it("a closed run's open workers read stopped on their rows, and draw no line in 
     const summary = summarizeRun(log, "valley", RUN);
     graph.summary = summary;
     const rows = partRows(graph, summary);
-    const layout = buildsLayout(graph, rows, summary);
     const rowSaid = rows.flatMap((row) =>
-      row.steps.map((step) => [
-        row.facet.title,
-        stepWord(step, graph.active),
-        step.state,
-        layout.ghosts.has(`session:${row.facet.facetId}`),
-      ]),
+      row.steps.map((step) => [row.facet.title, stepWord(step, graph.active), step.state]),
     );
     assert.deepEqual(
       rowSaid,
       [
-        ["Port the car", "Stopped", StepState.NotInBuild, true],
-        ["Check the physics", "Stopped", StepState.NotInBuild, true],
+        ["Port the car", "Stopped", StepState.NotInBuild],
+        ["Check the physics", "Stopped", StepState.NotInBuild],
       ],
-      `${name}: each row stopped, a ghost`,
+      `${name}: each row stopped`,
     );
     assert.notEqual(leadFace(graph, summary, rows), LeadFace.Waiting, `${name}: the lead waits for nobody`);
     // Flipped: the lines said what the rows say; a run's workers have no lines now.
@@ -516,8 +510,7 @@ it("work in the game reads added on its card's row once its worker is over, howe
       conflict: false,
     });
   const rowOf = (...events: EventEnvelope[]) =>
-    buildChecklist({ summary: summarizeRun(events, "valley", RUN), plan: [], finishing: false, now: Date.now() })
-      ?.rows[0];
+    buildChecklist(summarizeRun(events, "valley", RUN), Date.now())?.rows[0];
   const begun = [
     custom(1, CustomEvent.RunStarted, { runId: RUN, project: "valley", mode: "director" }),
     started(2, "land", "Raise the land", inRun),
@@ -531,4 +524,37 @@ it("work in the game reads added on its card's row once its worker is over, howe
     ["failed", { state: "failed", stopCode: "error" }],
   ] as const)
     assert.equal(rowOf(...begun, finished(4, "land", "Raise the land", inRun, end))?.mark, PartMark.Added, name);
+});
+
+it("a worker the lead redirects is a line of its own: the worker's task and what it was told, never a folded tool call", () => {
+  // The owner's live check: the person's message reached the lead mid-build and it redirected both
+  // workers in seconds, but the chat folded that into "Running a tool", so it read as ignored.
+  const steer = (id: number, worker: string, text: string) =>
+    custom(id, "delegated.claude-code", {
+      runId: RUN,
+      delegationId: "lead-1",
+      kind: "assistant",
+      data: {
+        parts: [{ type: "tool_use", id: `s${id}`, name: "mcp__studio__worker_steer", input: { id: worker, text } }],
+      },
+    });
+  const entries = toEntries([
+    started(1, "pool.w2", "Three levels and level flow", inRun),
+    steer(
+      2,
+      "w2",
+      "Change from the person: make the ball red. In drawBall use a red body gradient (#ffffff to #e0302f).",
+    ),
+    steer(3, "w9", "Stop and wait for the new street grid."),
+  ]);
+  const said = entries.flatMap((entry) =>
+    entry.kind === EntryKind.Action && entry.action === EntryAction.Told ? [entry.text] : [],
+  );
+  assert.deepEqual(said, [
+    "Told “Three levels and level flow”: Change from the person: make the ball red.",
+    "Told a worker: Stop and wait for the new street grid.",
+  ]);
+  const folded = entries.flatMap((entry) => (entry.kind === EntryKind.Tools ? entry.rows : []));
+  assert.deepEqual(folded, [], "no tool row beside the line");
+  assert.ok(!entries.some((entry) => entry.kind === EntryKind.Activity), "never folded into the activity row");
 });

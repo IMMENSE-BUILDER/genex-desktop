@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { seedBuildGraph } from "../../src/main/dev/fixture-build-graph.ts";
-import { seedLeadGraph } from "../../src/main/dev/fixture-lead-graph.ts";
 import {
   buildRunGraph,
   type FacetNode,
@@ -213,14 +212,6 @@ const LOOP_ROWS = [
   ],
 ];
 
-const LEAD_EARLIER_ROWS: unknown[] = [
-  ["lead", [["step:lead:1", "in-build", true, "Greybox"]]],
-  ["lead-atmosphere", [["step:lead-atmosphere:1", "in-build", true, "Fog and light"]]],
-  ["agent-blender_model-1", [["session:agent-blender_model-1", "in-build", true, "Blender: Katana"]]],
-  ["agent-texture-1", [["session:agent-texture-1", "delivered", false, "Texture: Wet concrete"]]],
-  ["agent-genex_cast-1", [["session:agent-genex_cast-1", "not-delivered", false, "Meshy: Goblin"]]],
-];
-
 const BUILD_DONE_KINDS = [
   ...["run", "base", "facet", "facet", "iteration", "iteration", "iteration", "iteration", "iteration"],
   ...["iteration", "iteration", "iteration", "iteration", "iteration", "iteration", "iteration", "facet"],
@@ -268,31 +259,6 @@ describe("old runs draw as they did", () => {
     assert.deepEqual(rowsOf(graph), LOOP_ROWS);
   });
 
-  it("the Unreal lead's dev fixture keeps its nodes and its rows", async () => {
-    const events = await seeded(seedLeadGraph);
-    const done = buildRunGraph(ofRun(events, "fixture-lead-done"));
-    const live = buildRunGraph(ofRun(events, "fixture-lead-live"));
-    assert.ok(done && live);
-    assert.deepEqual(kinds(done), [
-      ...["run", "base", "facet", "iteration", "facet", "iteration", "facet", "facet", "facet", "facet", "iteration"],
-      ...["integration", "final", "assets"],
-    ]);
-    assert.deepEqual(rowsOf(done), [
-      ...LEAD_EARLIER_ROWS,
-      ["lead-combat", [["step:lead-combat:1", "in-build", true, "Katana in hand"]]],
-    ]);
-    assert.deepEqual(kinds(live), [
-      ...["run", "base", "facet", "iteration", "facet", "iteration", "facet", "facet", "facet", "facet", "facet"],
-      ...["integration", "final", "assets"],
-    ]);
-    assert.deepEqual(rowsOf(live), [
-      ...LEAD_EARLIER_ROWS,
-      ["lead-combat", [["session:lead-combat", "building", false, "Lead · Katana combat"]]],
-      ["agent-sound-1", [["session:agent-sound-1", "building", false, "Sound: Blade swings"]]],
-    ]);
-    assert.equal(done.tree || live.tree, false);
-  });
-
   it("the build-graph dev fixture keeps its nodes and its rows", async () => {
     const events = await seeded(seedBuildGraph);
     const done = buildRunGraph(ofRun(events, "fixture-graph-run"));
@@ -314,15 +280,18 @@ describe("workers on the graph", () => {
   it("draws each worker of a run as one session node on its own row", () => {
     const physics = poolWorkerId("w1");
     const steering = poolWorkerId("w2");
-    const graph = buildRunGraph([
-      ...runOpened(),
-      started(runScope, physics, "Check the physics", { type: "researcher" }),
+    const physicsStarted = started(runScope, physics, "Check the physics", { type: "researcher" });
+    const physicsFinished = (opened: EventEnvelope[]) => [
+      ...opened,
+      physicsStarted,
       started(runScope, steering, "Center the steering", { isolation: WorkerIsolation.Copy }),
       finished(runScope, physics, "Check the physics", {
         state: WorkerEnd.Done,
         summary: "The physics holds up.",
       }),
-    ]);
+    ];
+    const events = physicsFinished(runOpened());
+    const graph = buildRunGraph(events);
     assert.ok(graph);
     assert.deepEqual(
       graph.facets.map((facet) => [facet.facetId, facet.title]),
@@ -353,6 +322,8 @@ describe("workers on the graph", () => {
       merged: false,
       startedSeq: 3,
       settledSeq: 5,
+      startedAt: physicsStarted.created_at,
+      settledAt: events.at(-1)?.created_at,
     });
     assert.equal(partOf(graph, steering)?.building, true);
     assert.equal(partRows(graph)[1]?.steps[0]?.state, StepState.Building);
@@ -578,7 +549,7 @@ describe("the lead and its background work", () => {
           why: null,
           claim: "Done.",
           stopped: false,
-          timeLeft: false,
+          // Flipped (no clock): a round said whether working time was left (`timeLeft: false`).
         },
       ],
       over: false,
@@ -896,6 +867,8 @@ it("a hostile field of a worker record reads as if it were absent, and the row k
     const { [field]: _dropped, ...absent } = payload;
     for (const prior of [[], [before]]) {
       const read = (end: Record<string, unknown>) => {
+        // Both reads write their records at the same clock times: only the hostile field differs.
+        seq = 0;
         const graph = buildRunGraph([
           ...runOpened(),
           started(runScope, car, "Port the car", { isolation: WorkerIsolation.Copy }),

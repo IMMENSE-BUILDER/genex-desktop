@@ -6,21 +6,29 @@
  * game's web row says it has none, and its rows for other systems say where they are packaged. A ready app goes with Publish once its web build is
  * public: the line under the rows says so, and its row then says it is being sent, is on Genex, or
  * was not sent (with why, under the rows). While Studio's Genex CLI cannot send apps, a built one
- * says "Coming soon" and its players get the web version. A web game with no app shows none of this.
+ * says "Coming soon" and its players get the web version. A game with no web build that Genex still
+ * plays one of (a page of mockups once sent as an Unreal game's) says so on its web row, with Remove,
+ * which takes it off Genex so the page shows the apps. A web game with no app shows none of this.
+ * An Unreal game's Windows app on a Mac, which Unreal can't package here, offers "Build on Genex" once
+ * the game has a page on Genex: Genex builds it on its own computers, and the row says how that goes.
  */
 import type { JSX } from "react";
 import { useState } from "react";
+import { SECOND_MS } from "../../../../shared/duration.ts";
+import { errorMessage } from "../../../../shared/errors.ts";
 import type { GenexNativeRecord } from "../../../../shared/genex.ts";
 import { t } from "../../../../shared/i18n.ts";
 import { type PublishPlatform, PublishTarget } from "../../../../shared/publish-platforms.ts";
+import { UiEvent } from "../../../../shared/ui-events.ts";
 import { composeInChat } from "../../../compose-in-chat.ts";
 import { hostPlatform } from "../../../platform.ts";
 import { useLibrary } from "../../../state/hooks.ts";
 import { Icon, type IconName } from "../../../ui/icons.tsx";
+import { Elapsed } from "../../../ui/LoadingState.tsx";
 import { useAsyncEffect } from "../../../use-async-effect.ts";
 import { PUBLISH_PLATFORM_WORDS } from "../../../words.ts";
 import {
-  appsMadeOnly,
+  appsMadeHere,
   failureLines,
   listingLine,
   listsPlatforms,
@@ -28,9 +36,13 @@ import {
   makesApps,
   makeWebAsk,
   rebuildAsk,
+  replacesAppsPage,
   PlatformEnd,
   type PlatformRow,
+  cloudErrors,
+  cloudFixAsk,
   platformRows,
+  shownRows,
   reachLine,
   webOfferFor,
 } from "./publish-platforms-view.ts";
@@ -45,20 +57,40 @@ const MARK: Readonly<Record<PublishTarget, IconName>> = {
   [PublishTarget.Linux]: "linux",
 };
 
-/** The game folder's platforms, read once as the dialog opens; null until read or when unreadable. */
-export function usePublishPlatforms(project: string): PublishPlatform[] | null {
+/** How often the folder is read again while the agent builds an app the Publish card asked for. */
+const BUILD_REREAD_MS = 10 * SECOND_MS;
+
+/**
+ * The game folder's platforms, read as the dialog opens; null until read or when unreadable. The
+ * folder is read again whenever an agent's turn ends (it may have built an app) and when the window
+ * comes back to the front, so an open dialog follows what lands in the folder without being reopened;
+ * while `watch` (the agent builds an app the card asked for) it is also read every few seconds.
+ */
+export function usePublishPlatforms(project: string, watch = false): PublishPlatform[] | null {
   const [platforms, setPlatforms] = useState<PublishPlatform[] | null>(null);
   useAsyncEffect(
     (alive) => {
-      void window.studio
-        .genexPublishPlatforms(project)
-        .then((read) => {
-          if (alive()) setPlatforms(read);
-        })
-        .catch(() => {});
-      return undefined;
+      const read = (): void => {
+        void window.studio
+          .genexPublishPlatforms(project)
+          .then((rows) => {
+            if (alive()) setPlatforms(rows);
+          })
+          .catch(() => {});
+      };
+      read();
+      const off = window.studio.onEvent((event) => {
+        if (event.type === UiEvent.ChatStreamEnded) read();
+      });
+      window.addEventListener("focus", read);
+      const timer = watch ? window.setInterval(read, BUILD_REREAD_MS) : undefined;
+      return () => {
+        off();
+        window.removeEventListener("focus", read);
+        if (timer !== undefined) window.clearInterval(timer);
+      };
     },
-    [project],
+    [project, watch],
   );
   return platforms;
 }
@@ -74,33 +106,82 @@ const NOTE: Partial<Record<PlatformEnd, { text: string; label: (name: string) =>
     label: (name) => t("{name}: {state}", { name, state: WORDS.notApproved }),
   },
   [PlatformEnd.Failed]: { text: WORDS.failed, label: (name) => t("{name}: {state}", { name, state: WORDS.failed }) },
+  [PlatformEnd.Building]: {
+    text: WORDS.building,
+    label: (name) => t("{name}: {state}", { name, state: WORDS.building }),
+  },
 };
 
-/** The agent's presses a row may end with: making an app, or building one again. */
+/** The presses a row may end with: the agent making an app or building one again, or Genex building one. */
 const ASK: Partial<Record<PlatformEnd, { text: string; label: (name: string) => string }>> = {
   [PlatformEnd.Make]: { text: WORDS.make, label: WORDS.makeLabel },
   [PlatformEnd.Rebuild]: { text: WORDS.rebuild, label: WORDS.rebuildLabel },
+  [PlatformEnd.CloudBuild]: { text: WORDS.cloudBuild, label: WORDS.cloudBuildLabel },
+  [PlatformEnd.CloudRebuild]: { text: WORDS.rebuild, label: WORDS.cloudRetryLabel },
+  [PlatformEnd.CloudRetry]: { text: WORDS.cloudRetry, label: WORDS.cloudRetryLabel },
 };
+
+/** How long a press of Build on Genex says it asked: past the publish record's slowest read. */
+const CLOUD_ASK_HOLD_MS = 12 * SECOND_MS;
+
+/** The notes of work going on now, which shimmer as the chat's current work does. */
+const WORKING_ENDS: ReadonlySet<PlatformEnd> = new Set([PlatformEnd.Sending, PlatformEnd.Building]);
+
+/** The presses Genex answers on its own computers, rather than the agent in the game's chat. */
+const CLOUD_ENDS: ReadonlySet<PlatformEnd> = new Set([
+  PlatformEnd.CloudBuild,
+  PlatformEnd.CloudRebuild,
+  PlatformEnd.CloudRetry,
+]);
 
 /** What a row's press says to a screen reader: the web row's names the web version. */
 const askLabel = (row: PlatformRow, label: (name: string) => string): string =>
   row.target === PublishTarget.Web ? WORDS.makeWebLabel : label(row.name);
 
-/** What a row ends with: a note ("Coming soon", "On Genex"…), an ask for the agent, or that the agent was asked. */
+/** The web row's Remove: takes the web version Genex still plays off it, once the native dialog confirms. */
+function RemoveWeb({ onRemove }: { onRemove: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="genex-publish-platform-make"
+      aria-label={WORDS.removeWebLabel}
+      data-publish-platform-remove-web
+      onClick={onRemove}
+    >
+      {WORDS.removeWeb}
+    </button>
+  );
+}
+
+/** What a row ends with: a note ("Coming soon", "On Genex"…), an ask for the agent, that the agent was asked, or Remove. */
 function End({
   row,
   asked,
   onMake,
+  onRemoveWeb,
 }: {
   row: PlatformRow;
   asked: boolean;
   onMake: (target: PublishTarget, end: PlatformEnd) => void;
+  onRemoveWeb: () => void;
 }): JSX.Element | null {
+  if (row.end === PlatformEnd.RemoveWeb) return <RemoveWeb onRemove={onRemoveWeb} />;
   const note = NOTE[row.end];
   if (note)
     return (
       <span className="genex-publish-platform-note" data-end={row.end} role="note" aria-label={note.label(row.name)}>
-        {note.text}
+        {WORKING_ENDS.has(row.end) ? (
+          <span data-shimmer className="chat-status-shimmer">
+            {note.text}
+          </span>
+        ) : (
+          note.text
+        )}
+        {row.since && (
+          <span className="genex-publish-platform-clock" data-publish-platform-clock={row.target}>
+            <Elapsed since={Date.parse(row.since)} />
+          </span>
+        )}
       </span>
     );
   const ask = ASK[row.end];
@@ -108,7 +189,7 @@ function End({
   if (asked)
     return (
       <span className="genex-publish-platform-note" role="status" data-publish-platform-asked={row.target}>
-        {WORDS.asked}
+        {CLOUD_ENDS.has(row.end) ? WORDS.cloudAsked : WORDS.asked}
       </span>
     );
   return (
@@ -131,10 +212,12 @@ function Row({
   row,
   asked,
   onMake,
+  onRemoveWeb,
 }: {
   row: PlatformRow;
   asked: boolean;
   onMake: (target: PublishTarget, end: PlatformEnd) => void;
+  onRemoveWeb: () => void;
 }): JSX.Element {
   return (
     <li className="genex-publish-platform" data-publish-platform={row.target} data-state={row.state}>
@@ -144,15 +227,68 @@ function Row({
         <span className="genex-publish-platform-detail">{row.detail}</span>
       </span>
       {row.size && <span className="genex-publish-platform-size">{row.size}</span>}
-      <End row={row} asked={asked} onMake={onMake} />
+      <End row={row} asked={asked} onMake={onMake} onRemoveWeb={onRemoveWeb} />
     </li>
   );
 }
+
+/** Whether Genex's answer to a row's press has come: the row says it is sending or building, not what it offered. */
+const isAnswered = (row: PlatformRow): boolean => row.end === PlatformEnd.Building || row.end === PlatformEnd.Sending;
 
 /** What a row's press sends through the game's chat: a web version, an app, or an app built again. */
 function askText(target: PublishTarget, end: PlatformEnd, title: string): string {
   if (target === PublishTarget.Web) return makeWebAsk(title);
   return end === PlatformEnd.Rebuild ? rebuildAsk(target, title) : makeAppAsk(target, title);
+}
+
+/** What went wrong in a build on Genex: the first error, how many more, and the agent to fix them all. */
+export function CloudErrors({
+  project,
+  title,
+  platforms,
+  native,
+}: {
+  project: string;
+  title: string;
+  platforms: readonly PublishPlatform[];
+  native: GenexNativeRecord | undefined;
+}): JSX.Element | null {
+  /** The errors last handed to the agent: new ones offer it again. */
+  const [askedFix, setAskedFix] = useState<string | null>(null);
+  const fix = cloudErrors(platforms, native);
+  if (!fix) return null;
+  const key = fix.errors.join("\n");
+  const askFix = (): void => {
+    composeInChat({ project, text: cloudFixAsk(fix, title), send: true });
+    setAskedFix(key);
+  };
+  return (
+    <div className="genex-publish-cloud-errors" data-publish-cloud-errors>
+      <div className="genex-publish-cloud-words">
+        <p className="genex-publish-platform-failure">
+          {fix.errors[0]}
+          {fix.errors.length > 1 && ` ${WORDS.cloudMoreErrors(fix.errors.length - 1)}`}
+        </p>
+        <p className="genex-publish-reach">{WORDS.cloudChangeFirst}</p>
+      </div>
+      {askedFix === key ? (
+        <span className="genex-publish-platform-note" role="status">
+          {WORDS.asked}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="genex-publish-platform-make"
+          aria-label={WORDS.cloudFixLabel}
+          data-publish-cloud-fix
+          onClick={askFix}
+        >
+          {WORDS.cloudFix}
+          <Icon name="chevron-right" size={12} />
+        </button>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -162,47 +298,101 @@ function askText(target: PublishTarget, end: PlatformEnd, title: string): string
 export function PublishPlatforms({
   project,
   platforms,
-  behind = false,
   shown,
   native,
+  onGenex = false,
+  hostedWeb,
+  onRemoveWeb,
+  reviewed = false,
 }: {
   project: string;
   /** The game folder's platforms as the Genex plugin can send them (`gateByPlugin`), null until read. */
   platforms: PublishPlatform[] | null;
-  /** The installed Genex plugin is from before apps: the line says to update it. */
-  behind?: boolean;
   shown: boolean;
   /** How the last Publish's apps went, from the publish record. */
   native?: GenexNativeRecord | undefined;
+  /** The game has a page on Genex, which an app Genex builds goes on. */
+  onGenex?: boolean;
+  /** Whether Genex's page for the game plays a web version, from the publish record (`hostedWeb`); absent while unknown. */
+  hostedWeb?: boolean | undefined;
+  /** The web row's Remove: the Genex plugin's `publish-remove-web`. */
+  onRemoveWeb: () => void;
+  /** Genex's review card or check says how the apps stand: no line under the rows says it again. */
+  reviewed?: boolean;
 }): JSX.Element | null {
   const facts = useLibrary((s) => s.games.find((g) => g.name === project)?.facts);
   const engineGame =
     useLibrary((s) => Boolean(s.games.find((g) => g.name === project)?.engine)) || makesApps(facts ?? []);
   const title = useLibrary((s) => s.games.find((g) => g.name === project)?.title) || project;
   const [asked, setAsked] = useState<ReadonlySet<PublishTarget>>(() => new Set());
+  /** The rows whose app was asked of Genex, by how many builds of it Genex had then: a new one answers. */
+  const [cloudAsked, setCloudAsked] = useState<ReadonlyMap<PublishTarget, number>>(() => new Map());
+  const [refused, setRefused] = useState<string | null>(null);
   if (!shown || !platforms || !listsPlatforms(platforms, engineGame)) return null;
   const webOffer = webOfferFor(facts ?? []);
-  const reach = reachLine(platforms, behind, webOffer);
-  const listing = listingLine(platforms, native);
+  const reach = reachLine(platforms, webOffer, hostedWeb === true);
+  const replaces = replacesAppsPage(platforms, native, hostedWeb);
+  const listing = reviewed ? null : listingLine(platforms, native);
+  const rows = platformRows(
+    platforms,
+    Date.now(),
+    native,
+    webOffer,
+    appsMadeHere(facts ?? [], hostPlatform()),
+    onGenex,
+    hostedWeb === true,
+  );
+  const builds = (target: PublishTarget): number =>
+    native?.cloud?.builds.filter((build) => build.platform === target).length ?? 0;
+  const askedOf = (target: PublishTarget): boolean => asked.has(target) || cloudAsked.get(target) === builds(target);
   const make = (target: PublishTarget, end: PlatformEnd): void => {
-    const text = askText(target, end, title);
-    composeInChat({ project, text, send: true });
-    setAsked((before) => new Set(before).add(target));
+    if (!CLOUD_ENDS.has(end)) {
+      composeInChat({ project, text: askText(target, end, title), send: true });
+      setAsked((before) => new Set(before).add(target));
+      return;
+    }
+    setRefused(null);
+    setCloudAsked((before) => new Map(before).set(target, builds(target)));
+    const name = rows.find((row) => row.target === target)?.name ?? "";
+    const forget = (): void => setCloudAsked((before) => new Map([...before].filter(([one]) => one !== target)));
+    // The row reads Genex's answer from the publish record as it comes; a refusal is said under the rows.
+    // The press lets go once the record has had time to say so: Genex may answer with the build it
+    // already has, and then no new build ever ends the note.
+    void window.studio
+      .genexCloudBuild(project, target)
+      .then(() => window.setTimeout(forget, CLOUD_ASK_HOLD_MS))
+      .catch((error: unknown) => {
+        setRefused(WORDS.cloudRefused(name, errorMessage(error)));
+        forget();
+      });
   };
   return (
     <div className="genex-publish-platforms" data-genex-publish-platforms>
       <ul aria-label={WORDS.label}>
-        {platformRows(platforms, Date.now(), native, webOffer, appsMadeOnly(facts ?? [], hostPlatform())).map((row) => (
-          <Row key={row.target} row={row} asked={asked.has(row.target)} onMake={make} />
+        {shownRows(rows).map((row) => (
+          <Row
+            key={row.target}
+            row={row}
+            asked={askedOf(row.target) && !isAnswered(row)}
+            onMake={make}
+            onRemoveWeb={onRemoveWeb}
+          />
         ))}
       </ul>
-      {failureLines(platforms, native).map((line) => (
+      <CloudErrors project={project} title={title} platforms={platforms} native={native} />
+      {failureLines(platforms, native, reviewed).map((line) => (
         <p key={line} className="genex-publish-platform-failure">
           {line}
         </p>
       ))}
       {listing && <p className="genex-publish-platform-failure">{listing}</p>}
+      {refused && <p className="genex-publish-platform-failure">{refused}</p>}
       {reach && <p className="genex-publish-reach">{reach}</p>}
+      {replaces && (
+        <p className="genex-publish-reach" data-publish-replaces-apps>
+          {WORDS.replacesApps}
+        </p>
+      )}
     </div>
   );
 }

@@ -34,13 +34,20 @@ export const isWorkerOfGraph = (workerKey: string, graphKey: string): boolean =>
   workerKey.startsWith(`${graphKey}\u0000`);
 
 /**
- * The queue records of the person's message a run answers: the last message the chat began
- * answering before the run's first record, as it was queued and then begun. They name no run, so a
- * run's own records leave them out; the start node reads its pictures from them.
+ * The queue records of the person's messages a run answers: the last message the chat began
+ * answering before the run's first record, as it was queued and then begun, and each message the
+ * chat went on with the run for (a `run_steering` of it names one), as it was queued. They name no
+ * run, so a run's own records leave them out; its start reads their pictures from them.
  */
 export function answeredRecords(events: readonly EventEnvelope[], runId: string): EventEnvelope[] {
   const first = events.findIndex((event) => customPayloadOf(event)?.runId === runId);
-  const before = first < 0 ? [] : events.slice(0, first);
+  if (first < 0) return [];
+  const asked = firstAsked(events.slice(0, first));
+  return [...asked, ...steeredMessages(events, runId).filter((queued) => !asked.includes(queued))];
+}
+
+/** The last message the chat began answering in `before`: its queue record, then its start. */
+function firstAsked(before: readonly EventEnvelope[]): EventEnvelope[] {
   const begun = before.findLast((event) => customTypeOf(event) === CustomEvent.CoordinatorMessageProcessing);
   const messageId = begun ? customPayloadOf(begun)?.messageId : undefined;
   if (!begun || typeof messageId !== "string") return [];
@@ -51,29 +58,56 @@ export function answeredRecords(events: readonly EventEnvelope[], runId: string)
   return queued ? [queued, begun] : [begun];
 }
 
+/** The queue record of each message a steer of the run names (`sourceMessageId`), in the log's order. */
+function steeredMessages(events: readonly EventEnvelope[], runId: string): EventEnvelope[] {
+  const named = new Set<string>();
+  for (const event of events) {
+    const payload = customTypeOf(event) === CustomEvent.RunSteering ? customPayloadOf(event) : null;
+    if (payload?.runId === runId && typeof payload.sourceMessageId === "string") named.add(payload.sourceMessageId);
+  }
+  if (named.size === 0) return [];
+  return events.filter((event) => {
+    const messageId = customPayloadOf(event)?.messageId;
+    return (
+      customTypeOf(event) === CustomEvent.CoordinatorMessageQueued &&
+      typeof messageId === "string" &&
+      named.has(messageId)
+    );
+  });
+}
+
 const customTypeOf = (event: EventEnvelope): string | null =>
   event.data.type === EventKind.Custom ? event.data.event_type : null;
 const customPayloadOf = (event: EventEnvelope): Record<string, unknown> | null =>
   event.data.type === EventKind.Custom ? (event.data.payload as Record<string, unknown>) : null;
 
 /** Graph-only transport offsets preserve chronology when bulky trace events are omitted. */
-export type RunGraphEvent = EventEnvelope & { graphSequence?: number; graphLastAt?: string };
+export type RunGraphEvent = EventEnvelope & { graphSequence?: number };
 
-/** Remove non-drawing traces while preserving the original custom-event positions and last timestamp. */
+/**
+ * A custom record the run graph never draws: a builder's mirrored trace, session activity, context
+ * use. They are most of a long run's records.
+ */
+export function isGraphTrace(eventType: string): boolean {
+  return (
+    eventType.startsWith(DELEGATED_PREFIX) ||
+    eventType === CustomEvent.SessionActivity ||
+    eventType === CustomEvent.ContextUsage
+  );
+}
+
+/**
+ * Remove non-drawing traces while preserving the original custom-event positions. Nothing is
+ * stamped with the latest trace's time: a summary whose drawn records did not change stays the
+ * same summary, so a builder's trace does not make every view of the run fold it again.
+ */
 export function compactGraphEvents(events: EventEnvelope[]): RunGraphEvent[] {
   const compact: RunGraphEvent[] = [];
   let sequence = 0;
-  let lastAt: string | undefined;
   for (const event of events) {
     if (event.data.type !== EventKind.Custom) continue;
     sequence++;
-    lastAt = event.created_at;
-    const kind = event.data.event_type;
-    const noise =
-      kind.startsWith(DELEGATED_PREFIX) || kind === CustomEvent.SessionActivity || kind === CustomEvent.ContextUsage;
-    if (!noise) compact.push({ ...event, graphSequence: sequence });
+    if (!isGraphTrace(event.data.event_type)) compact.push({ ...event, graphSequence: sequence });
   }
-  const last = compact.at(-1);
-  if (last && lastAt !== undefined) last.graphLastAt = lastAt;
   return compact;
 }

@@ -1,5 +1,7 @@
+import type { GenexReviewRequestAnswer, GenexReviewStatus, GenexSidebarEntry } from "./genex-review.ts";
 import type { AnalyticsConfig } from "./analytics.ts";
 import type {
+  GameLinkOpen,
   PlayControl,
   PlayFeedPage,
   PlayFeedRequest,
@@ -84,6 +86,8 @@ import type { BuildProblem, InstallResult } from "./build-problem.ts";
 import type { LoopRunReview } from "./run-review.ts";
 import type { CodexLoginState } from "./codex-login.ts";
 import type { ClaudeLoginState } from "./claude-login.ts";
+import type { DesignBoard } from "./design-board.ts";
+import type { DesignMarks } from "./design-marks.ts";
 import type { ProjectAsset, ProjectAssetRead, ProjectAssets } from "./game-assets.ts";
 import type { ModelRig } from "./model-rig.ts";
 import type { UiEvent } from "./ui-events.ts";
@@ -175,13 +179,31 @@ export interface LocalModelChoice {
   about: string;
   fits: boolean;
   needGb: number;
+  /** On a Mac, the smallest common Mac memory size that holds it; null when none does, and on a PC. */
   needsRamGb: number | null;
+  /** It fits only split between a PC's graphics card and RAM: it runs, slower. */
+  split: boolean;
   reason: string;
+}
+
+/** One graphics card a local model can run on (`HardwareReport.hardware.gpus`). */
+export interface GraphicsCard {
+  name: string;
+  memoryGb: number;
 }
 
 /** This Mac's hardware and the local models it can run (`StudioApi.hardware`, harness `engine.hardware`). */
 export interface HardwareReport {
-  hardware: { cpu: string; ramGb: number; usableModelGb: number };
+  hardware: {
+    cpu: string;
+    ramGb: number;
+    /** The model budget: RAM's share plus `gpuModelGb`. */
+    usableModelGb: number;
+    /** A PC's graphics cards a model can run on, largest first; empty on a Mac or without one. */
+    gpus: GraphicsCard[];
+    /** The part of `usableModelGb` on those cards: a model within it runs entirely there. */
+    gpuModelGb: number;
+  };
   recommendation: {
     tier: { label: string; expectation: string };
     defaultModel: string | null;
@@ -234,13 +256,67 @@ export interface StudioApi {
    * the files in `review`; `title` is the name players see; `remix` is its Allow remixing, whether the
    * game's project goes with it so others can remix it.
    */
-  genexPublish(project: string, review: ExportReview, title?: string, remix?: boolean): Promise<void>;
+  genexPublish(
+    project: string,
+    review: ExportReview,
+    title?: string,
+    remix?: boolean,
+    /** The dialog said the web build replaces a page that shows only the game's apps. */
+    replaceNativePage?: boolean,
+    /** The apps the Publish card's switches send (`mac`, `windows`, `linux`); absent: every ready app. */
+    platforms?: string[],
+  ): Promise<void>;
   /**
    * Publish a game that has only apps (no web build) from Studio's Publish dialog: its ready Mac and
    * Windows apps go to Genex and the game is listed under `title`. The press, under the rows it names,
    * is the consent; `remix` is its Allow remixing, whether the game's project goes once they are live.
+   * `release` names the platforms whose app Genex Cloud built and keeps, or still builds: players get
+   * each now, or as soon as it is built.
    */
-  genexPublishApps(project: string, title?: string, remix?: boolean): Promise<void>;
+  genexPublishApps(
+    project: string,
+    title?: string,
+    remix?: boolean,
+    platforms?: string[],
+    release?: string[],
+  ): Promise<void>;
+  /**
+   * Ask Genex to build the game's `platform` app on its own computers (an Unreal game's Windows app on
+   * a Mac). With `keep`, Genex keeps what it builds and players get nothing until a publish asks
+   * (`genexPublishApps`' `release`), so a game with no page on Genex yet can be built too.
+   */
+  genexCloudBuild(project: string, platform: string, keep?: boolean): Promise<void>;
+  /**
+   * Genex's review of a game's apps and its takedown, as the Genex plugin keeps it. With `refresh`
+   * (the Publish dialog while something is open) Genex is asked again, at most once a 30 s.
+   */
+  genexReviewStatus(project: string, refresh?: boolean): Promise<GenexReviewStatus>;
+  /**
+   * The sidebar's second line under each game on Genex (Public, In review, Not approved, Taken down,
+   * Fixing…), by game: from what Studio keeps, never a read of Genex. A game Genex does not know has none.
+   */
+  genexReviewLines(): Promise<Record<string, GenexSidebarEntry>>;
+  /**
+   * Fix with agent on a game's review card: Genex's things to fix go to the game's chat as a brief, and,
+   * with `autoPublish`, Studio sends the fixed app again (or asks a person to put a takedown back) once
+   * the agent is done. The press is the consent. With `fixId` and `autoPublish: false`, it takes that
+   * press's automatic step back ("Don't publish it automatically"). With `rebuild` (Build again, after a
+   * fix whose app was not built again), the agent is asked to build the fixed app, and Studio sends it
+   * once that is done.
+   */
+  genexFixReview(
+    project: string,
+    options: { autoPublish: boolean; fixId?: string; rebuild?: boolean },
+  ): Promise<{ fixId: string }>;
+  /**
+   * Request human review on a game's review card: a person at Genex reviews the turned-down app (`platform`,
+   * `arch`, or every one that allows it) or the takedown, with the person's `note`. An app Genex keeps no
+   * copy of is sent again in the same press, which is the consent.
+   */
+  genexRequestReview(
+    project: string,
+    args: { platform?: string; arch?: string; note?: string },
+  ): Promise<GenexReviewRequestAnswer>;
   pluginsIndex(refresh?: boolean): Promise<PluginIndexView>;
   pluginInstallGithub(spec: string): Promise<void>;
   /** What a pasted GitHub link leads to, pinned to one exact commit; nothing is installed. */
@@ -364,6 +440,11 @@ export interface StudioApi {
   renameThread(threadId: string, title: string): Promise<ConversationRecord>;
   compactThread(threadId: string, options?: { engine?: string; model?: string }): Promise<boolean>;
   archiveGame(project: string): Promise<boolean>;
+  /**
+   * Play for a game being made: its folder's newest app for this computer, started in the game
+   * sandbox or brought forward, or why not (none, older than the last change, being packaged).
+   */
+  playGameBuild(project: string): Promise<import("./play-native.ts").LocalPlayAnswer>;
   /** What freeing space deletes now, in one game or (none named) in all of them. */
   storageSpace(project?: string): Promise<import("./storage-space.ts").StorageSpace>;
   /** Free space in one game (refused while it works) or (none named) in every game not working. */
@@ -473,6 +554,8 @@ export interface StudioApi {
   cursorSignIn(): Promise<{ started: boolean; missingCli?: boolean }>;
   /** Sign Cursor's CLI out of the account Genex runs on; answers Cursor's status. */
   cursorSignOut(): Promise<import("./engine-descriptor.ts").EngineStatus>;
+  /** Antigravity's own Google sign-in (`agy acp --login`), in a terminal in its Settings row. */
+  antigravitySignIn(): Promise<{ started: boolean; missingCli?: boolean }>;
   /**
    * Check a pasted OpenRouter API key with OpenRouter and keep it in the OS secret store when it is
    * accepted. The answer is OpenRouter's status; the key never comes back.
@@ -480,6 +563,12 @@ export interface StudioApi {
   openRouterKeySave(key: string): Promise<import("./engine-descriptor.ts").EngineStatus>;
   /** Forget the saved OpenRouter key. */
   openRouterKeyClear(): Promise<import("./engine-descriptor.ts").EngineStatus>;
+  /** Whether a TypeSafe key is saved for pilots' fast decisions (optional: pilots choose by their own order without one). */
+  typeSafeKeyStatus(): Promise<import("./fast-decisions.ts").FastDecisionKeyStatus>;
+  /** Check a pasted TypeSafe key with TypeSafe and keep it in the OS secret store when it is taken; the key never comes back. */
+  typeSafeKeySave(key: string): Promise<import("./fast-decisions.ts").FastDecisionKeyStatus>;
+  /** Forget the saved TypeSafe key. */
+  typeSafeKeyClear(): Promise<import("./fast-decisions.ts").FastDecisionKeyStatus>;
   /**
    * Connect OpenRouter in the browser: OpenRouter's page opens, and the call settles once the
    * person approved Genex there (the key is then checked and saved, never sent back), cancelled,
@@ -565,8 +654,12 @@ export interface StudioApi {
   playLike(slug: string, liked: boolean): Promise<{ liked: boolean; likes: number }>;
   /** Play: close the viewer. */
   playClose(): Promise<void>;
-  /** Play: the game a `genex://game/<slug>` link asked to open, once; null when none waits. */
-  playTakeGameLink(): Promise<string | null>;
+  /**
+   * The game a `genex://` link asked to open, once; null when none waits. A `genex://game/<slug>` link
+   * opens its page in Play; a `genex://create/<slug>` link names this library's game with that link
+   * (`project`), opened with Publish, or only the slug when no game here has it.
+   */
+  playTakeGameLink(): Promise<GameLinkOpen | null>;
   /** Play: one of the viewer header's controls (Like, Share, Exit…); main answers with `UiEvent.PlayViewer`. */
   playControl(control: PlayControl, at?: PlayPoint): Promise<void>;
   /** Play: whether the viewer bar's Comments is open (main lays its layer over the whole window). */
@@ -683,6 +776,11 @@ export interface StudioApi {
   genexCancelSignIn(): Promise<GenexAccountView>;
   /** Sign out of Genex once the person confirms in Studio's question; the account as it is after. */
   genexSignOut(): Promise<GenexAccountView>;
+  /**
+   * Building with Genex: its page on genex.games in the browser, signing in there first while the
+   * app is not, then Pro or a credit pack; `idea` is the waiting message it shows back.
+   */
+  genexBuild(idea?: string): Promise<GenexAccountView>;
   /** A macOS notification; clicking it focuses Studio and sends `notification.open` with the id. */
   notify(note: { id?: string; title: string; subtitle?: string; body: string }): Promise<boolean>;
   /** The Dock badge: how much work waits on the person. Zero clears it. */
@@ -703,10 +801,6 @@ export interface StudioApi {
   /** Every window a worker is driving right now, with its last frame. */
   agentScreens(): Promise<import("./agent-screen.ts").AgentScreenFrame[]>;
   readRunStill(file: string, maxPx?: number): Promise<{ mimeType: string; data: string } | null>;
-  readReferenceStills(project: string): Promise<{
-    frames: Array<{ label: string; mimeType: string; data: string }>;
-    skipped: Array<{ file: string; why: string }>;
-  }>;
   /** Everything under the game's `assets/` and `public/assets/`, with where each file came from. */
   previewProjectAsset(p: {
     project: string;
@@ -717,7 +811,19 @@ export interface StudioApi {
   presentProjectAssets(p: { project: string; files: string[] }): Promise<string[]>;
   /** What these GLB and glTF files hold, read from their headers: meshes, clips and bones; other files are skipped. */
   projectModelRigs(p: { project: string; files: string[] }): Promise<ModelRig[]>;
+  /** A card's thumbnail Studio kept in an earlier session under the key the card made it for; null when none. */
+  readAssetThumbnail(p: { project: string; key: string }): Promise<{ mimeType: string; data: string } | null>;
+  /** Keep a card's thumbnail (base64 of a small picture) in Studio's own data for the next session; false when refused. */
+  keepAssetThumbnail(p: { project: string; key: string; data: string }): Promise<boolean>;
   projectAssets(project: string): Promise<ProjectAssets>;
+  /** The game's design board: the pages of its `docs/design/`, each with the address the Design tab loads. */
+  designBoard(project: string): Promise<DesignBoard>;
+  /** Keep a picture the person dropped on the Design canvas in the game's board (`docs/design/from-you/`): its file, or null when it is no picture or too large. */
+  dropOnDesign(project: string, name: string, data: Uint8Array): Promise<string | null>;
+  /** What the person did on the game's design board: where they put artboards, their notes and their picks. */
+  designMarks(project: string): Promise<DesignMarks>;
+  /** Keep what the person did on the game's design board, in the board's own folder; false when it could not be kept. */
+  saveDesignMarks(project: string, marks: DesignMarks): Promise<boolean>;
   /** The Genex account's asset library on genex.games, newest first; throws signed out. */
   assetLibrary(query: LibraryQuery): Promise<LibraryPage>;
   /** Where each of a game's files stands with the library: saved, shared, can be shared. */
@@ -757,21 +863,14 @@ export interface StudioApi {
   /** Merge a build into the live game folder and show it. */
   landBuild(project: string, commit: string): Promise<{ commit: string; how: "merged" | "already" }>;
   /**
-   * Where the native game view sits (zero while anything covers it), and whether the person is
-   * watching a game in Live under whatever briefly covers it (`stage.ts` `watchingLive`).
+   * Where the native game view sits (zero while anything covers it), and the window size it was
+   * measured in (main carries it through resizes).
    */
-  /** The stage slot's rectangle, and the window size it was measured in (main carries it through resizes). */
   previewBounds(bounds: {
     x: number;
     y: number;
     width: number;
     height: number;
-    watching: boolean;
-    /**
-     * The game open on the stage (absent under home, Play or Studio): a show the person asks for in
-     * its chat may load it even while Live holds another game out of sight.
-     */
-    project?: string | null;
     viewport?: { width: number; height: number };
   }): Promise<boolean>;
   /** The Live game's sound switch; main decides when Live is actually heard. */
@@ -812,22 +911,6 @@ export interface StudioApi {
    * `scripts`: the person trusts a remix's setup scripts, which then run (and from then on).
    */
   installPackages(project: string, options?: { scripts?: boolean }): Promise<InstallResult>;
-  startRun(spec: {
-    project: string;
-    goal: string;
-    reference: {
-      name: string;
-      shots: string[];
-      notes?: string;
-      kind?: "reference" | "direction";
-      frames?: Array<{ label: string; mimeType: string; data: string }>;
-    };
-    hours: number;
-    engine?: string;
-    model?: string;
-    judgeEngine?: string;
-    judgeModel?: string;
-  }): Promise<{ runId: string }>;
   stopRun(runId: string): Promise<boolean>;
   /** Wrap up: the builders finish what they are on, then the run integrates, checks and shows. */
   finishRun(runId: string, threadId: string): Promise<boolean>;
@@ -840,15 +923,23 @@ export interface StudioApi {
   cliInstallStatus(): Promise<import("./cli-install.ts").CliInstallJob[]>;
   pullModel(model: string): Promise<boolean>;
   /** Add from Ollama: an exact tag's download size and fit on this Mac, from the public registry. */
-  lookupModel(
-    model: string,
-  ): Promise<
-    | { ok: true; id: string; sizeGb: number; fits: boolean; needGb: number; needsRamGb: number | null }
+  lookupModel(model: string): Promise<
+    | {
+        ok: true;
+        id: string;
+        sizeGb: number;
+        fits: boolean;
+        needGb: number;
+        needsRamGb: number | null;
+        split: boolean;
+      }
     | { ok: false; reason: "invalid" | "not_found" | "unavailable"; id?: string; error?: string }
   >;
   cancelModelDownload(): Promise<boolean>;
   /** Delete a downloaded local model (Bonsai or Ollama) from this Mac. */
   removeModel(model: string): Promise<boolean>;
+  /** "Raise context to 16K": a copy of an Ollama model that runs with a 16K context; its model id. */
+  raiseModelContext(model: string): Promise<string>;
   revealProject(project: string, file?: string): Promise<boolean>;
   /** A file the chat names, from that chat's game folder or its run's unlanded build. */
   readGameFile(threadId: string, path: string): Promise<GameFile>;
@@ -907,7 +998,7 @@ export interface StudioSettingsView {
   blender?: boolean;
   /** Resume builds automatically after an engine limit resets or the loop restarts; on by default. */
   autoResume?: boolean;
-  /** Let agents control your computer (Settings → Permissions, macOS and Windows); off by default. */
+  /** Let agents control your computer (Settings → Permissions, macOS and Windows); on by default. */
   computerControl?: boolean;
   /** The app's language for main's menus, dialogs and notifications; System by default. */
   language?: LanguageChoice;

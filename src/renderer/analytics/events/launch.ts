@@ -16,12 +16,22 @@ import {
   type UpdateCheckResult,
   UpdateCheckStatus,
   UpdateFailure,
+  UpdateFeedState,
 } from "../../../shared/app-update.ts";
-import { BootFailure, type BootFailureCode, SandboxProblemCode, StartPassage } from "../../../shared/boot.ts";
+import {
+  BootFailure,
+  type BootFailureCode,
+  SandboxFolderKind,
+  SandboxLaunchCode,
+  SandboxProblemCode,
+  StartPassage,
+} from "../../../shared/boot.ts";
 import { DAY_MS, HOUR_MS, MINUTE_MS } from "../../../shared/duration.ts";
 import { EngineStatusCode } from "../../../shared/engine-descriptor.ts";
 import { isStudioErrorCode, type StudioErrorCode } from "../../../shared/error-codes.ts";
+import { isInvokeChannel, type StudioInvokeChannel } from "../../../shared/ipc-channels.ts";
 import { UiEvent } from "../../../shared/ui-events.ts";
+import { threadLog } from "../../state/event-log.ts";
 import { type SessionState, SessionStatus } from "../../state/session.ts";
 import type { Studio } from "../../state/studio.ts";
 import { ToastTone, type ToastsState } from "../../state/toasts.ts";
@@ -53,6 +63,7 @@ export const LaunchEvent = {
   PreviousSessionEnded: "previous_session_ended",
   UpdateBackgroundFailed: "update_background_failed",
   AgentsStartFailed: "agents_start_failed",
+  SandboxFolderLeftOut: "sandbox_folder_left_out",
   WindowUnresponsive: "window_unresponsive",
 } as const;
 
@@ -116,8 +127,9 @@ export type LaunchEventProperties = {
   [LaunchEvent.UpdateCheckFinished]: UpdateCheckProperties;
   [LaunchEvent.ErrorToastShown]: ErrorToastProperties;
   [LaunchEvent.PreviousSessionEnded]: PreviousSessionProperties;
-  [LaunchEvent.UpdateBackgroundFailed]: { stage: UpdateFailure | null };
+  [LaunchEvent.UpdateBackgroundFailed]: UpdateFailedProperties;
   [LaunchEvent.AgentsStartFailed]: { code: BootFailureCode | null };
+  [LaunchEvent.SandboxFolderLeftOut]: SandboxFolderLeftOutProperties;
   [LaunchEvent.WindowUnresponsive]: { duration_ms: number | null };
 };
 
@@ -181,7 +193,7 @@ export function previousSessionProperties(previous: unknown): PreviousSessionPro
 
 /** A held start's code, re-checked: the boot's own, or the sandbox's. */
 export const bootFailureCode = (value: unknown): BootFailureCode | null =>
-  oneOf(BootFailure, value) ?? oneOf(SandboxProblemCode, value);
+  oneOf(BootFailure, value) ?? oneOf(SandboxProblemCode, value) ?? oneOf(SandboxLaunchCode, value);
 
 /** `app_ready_measured`'s start facts. */
 export type StartProperties = {
@@ -202,14 +214,53 @@ export function startProperties(start: unknown): StartProperties | null {
   };
 }
 
-/** `update_background_failed`: the stage an update the app looked for on its own failed at. */
-export const updateFailedProperties = (payload: unknown): { stage: UpdateFailure | null } => ({
-  stage: isRecord(payload) ? oneOf(UpdateFailure, payload.stage) : null,
-});
+/** Chromium's network error names, the only text `net_error` carries. */
+const NET_ERROR_CODE = /^ERR_[A-Z0-9_]{1,60}$/;
+
+/** A network error as Chromium names it, or null for any other text. */
+export const netErrorCode = (value: unknown): string | null =>
+  typeof value === "string" && NET_ERROR_CODE.test(value) ? value : null;
+
+/** `update_background_failed`'s properties: where it failed, what the feed answered, and what Genex offered. */
+export type UpdateFailedProperties = {
+  stage: UpdateFailure | null;
+  feed: UpdateFeedState | null;
+  net_error: string | null;
+  http_status: number | null;
+  installer: boolean | null;
+  offered_download: boolean;
+};
+
+/** An HTTP status, or null for anything else. */
+export const httpStatus = (value: unknown): number | null =>
+  Number.isInteger(value) && Number(value) >= 100 && Number(value) <= 599 ? Number(value) : null;
+
+/** `update_background_failed`: an update the app looked for on its own failed, re-checked field by field. */
+export function updateFailedProperties(payload: unknown): UpdateFailedProperties {
+  const note = isRecord(payload) ? payload : {};
+  const netError = netErrorCode(note.netError);
+  return {
+    stage: oneOf(UpdateFailure, note.stage),
+    feed: oneOf(UpdateFeedState, note.feed),
+    net_error: netError,
+    http_status: httpStatus(note.httpStatus),
+    installer: typeof note.installer === "boolean" ? note.installer : null,
+    offered_download: note.offeredDownload === true,
+  };
+}
 
 /** `agents_start_failed`: why an open studio's agents would not start, as its code. */
 export const agentsStartFailedProperties = (payload: unknown): { code: BootFailureCode | null } => ({
   code: isRecord(payload) ? bootFailureCode(payload.failureCode) : null,
+});
+
+/** `sandbox_folder_left_out`: what the folder is and whether it is on another drive; never where. */
+export type SandboxFolderLeftOutProperties = { kind: SandboxFolderKind | null; other_drive: boolean | null };
+
+/** `sandbox_folder_left_out`'s properties from main's `UiEvent.SandboxFolderLeftOut`, each re-checked. */
+export const sandboxFolderLeftOutProperties = (payload: unknown): SandboxFolderLeftOutProperties => ({
+  kind: isRecord(payload) ? oneOf(SandboxFolderKind, payload.kind) : null,
+  other_drive: isRecord(payload) && typeof payload.otherDrive === "boolean" ? payload.otherDrive : null,
 });
 
 /** Main's own error kinds, as the window's error kinds name them. */
@@ -240,8 +291,15 @@ export function unresponsiveProperties(payload: unknown): { duration_ms: number 
   return { duration_ms: measured ? Math.round(ms) : null };
 }
 
-/** `error_toast_shown`'s properties: the failure's code (null when it had none) and the screen it showed on. */
-export type ErrorToastProperties = { code: StudioErrorCode | null; screen: string };
+/**
+ * `error_toast_shown`'s properties: the failure's code and the app call that failed (each null when
+ * the toast had none), and the screen it showed on.
+ */
+export type ErrorToastProperties = {
+  code: StudioErrorCode | null;
+  channel: StudioInvokeChannel | null;
+  screen: string;
+};
 
 /** The error toasts added since `before`, as `error_toast_shown`. */
 export function errorToastsShown(
@@ -251,7 +309,11 @@ export function errorToastsShown(
 ): ErrorToastProperties[] {
   return after.items
     .filter((toast) => toast.id > before.lastId && toast.tone === ToastTone.Error)
-    .map((toast) => ({ code: isStudioErrorCode(toast.code) ? toast.code : null, screen }));
+    .map((toast) => ({
+      code: isStudioErrorCode(toast.code) ? toast.code : null,
+      channel: isInvokeChannel(toast.channel) ? toast.channel : null,
+      screen,
+    }));
 }
 
 /** `workspace_load_retried`'s properties: which Retry of this launch, whether it loaded, and how long it took. */
@@ -345,8 +407,18 @@ function reportMainDiagnostic(payload: unknown): void {
   if (hang) track(LaunchEvent.WindowUnresponsive, hang);
 }
 
-/** `ui_stall_summarized`'s properties. */
-export type StallSummaryProperties = { screen: string; long_tasks: number; total_ms: number; max_ms: number };
+/**
+ * `ui_stall_summarized`'s properties. `chat_log_events` is how many records of the open chat's log
+ * the window holds when the summary is sent (null with no chat open): what each batch of a long
+ * Loop is read against.
+ */
+export type StallSummaryProperties = {
+  screen: string;
+  long_tasks: number;
+  total_ms: number;
+  max_ms: number;
+  chat_log_events: number | null;
+};
 
 /** The long tasks seen since the last summary. */
 export interface StallTally {
@@ -366,13 +438,29 @@ export const stallAdded = (tally: StallTally, duration: number): StallTally => (
 });
 
 /** The summary to send, or null when nothing was slow. */
-export function stallSummary(tally: StallTally, screen: string): StallSummaryProperties | null {
+export function stallSummary(
+  tally: StallTally,
+  screen: string,
+  chatLogEvents: number | null = null,
+): StallSummaryProperties | null {
   if (tally.count === 0) return null;
-  return { screen, long_tasks: tally.count, total_ms: Math.round(tally.total), max_ms: Math.round(tally.max) };
+  return {
+    screen,
+    long_tasks: tally.count,
+    total_ms: Math.round(tally.total),
+    max_ms: Math.round(tally.max),
+    chat_log_events: chatLogEvents,
+  };
+}
+
+/** How many records of the open chat's log the window holds, or null with no chat open. */
+function openChatLogEvents(app: Studio): number | null {
+  const threadId = app.threads.getState().activeThreadId;
+  return threadId ? threadLog(app.eventLog.getState(), threadId).length : null;
 }
 
 /** Sum the window's long tasks and send them every `STALL_SUMMARY_MS`; nothing where the page cannot see them. */
-function watchStalls(): () => void {
+function watchStalls(app: Studio): () => void {
   const supported =
     typeof PerformanceObserver !== "undefined" && PerformanceObserver.supportedEntryTypes?.includes("longtask");
   if (!supported) return () => undefined;
@@ -385,7 +473,7 @@ function watchStalls(): () => void {
   observer.observe({ type: "longtask", buffered: true });
   const timer = setInterval(
     guarded(() => {
-      const summary = stallSummary(tally, currentScreen());
+      const summary = stallSummary(tally, currentScreen(), openChatLogEvents(app));
       tally = NO_STALLS;
       if (summary) track(LaunchEvent.UiStallSummarized, summary);
     }),
@@ -618,8 +706,8 @@ function watchErrorToasts(app: Studio): () => void {
 }
 
 /**
- * What this area hears: main's update announcements and failures, its diagnostics and agents that
- * would not start, the session (with how the one before it ended), the window's errors, its long
+ * What this area hears: main's update announcements and failures, its diagnostics, agents that
+ * would not start and a folder their sandbox left out, the session (with how the one before it ended), the window's errors, its long
  * tasks and error toasts.
  */
 export function createLaunchObservers(
@@ -641,6 +729,9 @@ export function createLaunchObservers(
         case UiEvent.HarnessStartFailed:
           track(LaunchEvent.AgentsStartFailed, agentsStartFailedProperties(event.payload));
           return;
+        case UiEvent.SandboxFolderLeftOut:
+          track(LaunchEvent.SandboxFolderLeftOut, sandboxFolderLeftOutProperties(event.payload));
+          return;
         case UiEvent.AppDiagnostic:
           reportMainDiagnostic(event.payload);
       }
@@ -651,7 +742,7 @@ export function createLaunchObservers(
         followPreviousSession(app),
         followUpdate(app, announced, clock, later),
         watchErrors(),
-        watchStalls(),
+        watchStalls(app),
         watchErrorToasts(app),
       ];
       return () => {

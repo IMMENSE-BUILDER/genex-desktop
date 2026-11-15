@@ -8,7 +8,7 @@ import {
   installerSource,
   type InstallerRun,
 } from "../../src/substrate/cli-installer.ts";
-import { CliInstallProblem } from "../../src/shared/cli-install.ts";
+import { CliInstallProblem, installsInApp } from "../../src/shared/cli-install.ts";
 import type { CodingProvider, InstallableCodingProvider } from "../../src/shared/coding-cli.ts";
 import { tmpDir } from "../helpers/tmp.ts";
 
@@ -45,6 +45,7 @@ test("each CLI's installer is its vendor's own script: shell on macOS and Linux,
     opencode: ["https://opencode.ai/install", null],
     grok: ["https://x.ai/cli/install.sh", "https://x.ai/cli/install.ps1"],
     cursor: ["https://cursor.com/install", "https://cursor.com/install?win32=true"],
+    antigravity: ["https://antigravity.google/cli/install.sh", "https://antigravity.google/cli/install.ps1"],
   };
   for (const [provider, [unix, windows]] of Object.entries(expected) as [CodingProvider, [string, string | null]][]) {
     for (const platform of ["darwin", "linux"] as const)
@@ -65,7 +66,21 @@ test("a CLI with no installer for this system fails before anything is fetched o
     run: neverRuns,
   });
   assert.equal(outcome.ok, false);
-  assert.equal(!outcome.ok && outcome.problem, "download");
+  assert.equal(!outcome.ok && outcome.problem, "unsupported", "nothing failed to download: there is nothing to fetch");
+});
+
+test("the app offers an in-app install exactly where the main process has an installer to run", () => {
+  const providers: CodingProvider[] = ["claude-code", "codex", "opencode", "grok", "cursor"];
+  for (const provider of providers)
+    for (const platform of ["darwin", "linux", "win32"] as const)
+      assert.equal(
+        installsInApp(provider, platform),
+        installerSource(provider, platform) !== null,
+        `${provider} on ${platform}`,
+      );
+  assert.equal(installsInApp("opencode", "win32"), false, "OpenCode installs on Windows only by package manager");
+  for (const hostile of ["__proto__", "constructor", "toString", "", "gemini"])
+    assert.equal(installsInApp(hostile, "win32"), true, `${hostile} names no rule, so nothing is held back`);
 });
 
 test("an installer runs from its saved file under the shell it was written for, never through a command line", () => {
@@ -164,6 +179,47 @@ test("an installer that cannot be fetched whole over HTTPS is never run and leav
       name,
     );
     assert.deepEqual(readdirSync(tmpRoot), [], `${name}: nothing left behind`);
+  }
+});
+
+test("a download that failed says what answered: the status it was refused with, or the network error", async () => {
+  const cases: [string, typeof fetch, { httpStatus?: number; netError?: string }][] = [
+    ["refused for the region", serving("blocked", { status: 403 }), { httpStatus: 403 }],
+    [
+      "no DNS",
+      (async () => {
+        throw new TypeError("net::ERR_NAME_NOT_RESOLVED");
+      }) as typeof fetch,
+      { netError: "ERR_NAME_NOT_RESOLVED" },
+    ],
+    [
+      "words only",
+      (async () => {
+        throw new TypeError("fetch failed at C:\\Users\\alice\\AppData");
+      }) as typeof fetch,
+      {},
+    ],
+    ["redirected off HTTPS", serving("echo hi", { url: "http://claude.ai/install.sh" }), {}],
+  ];
+  for (const [name, fetch, answered] of cases) {
+    const outcome = await installCodingCli("codex", {
+      platform: "win32",
+      env: PARENT,
+      fetch,
+      tmpRoot: await tmpDir("cli-installer-"),
+      run: neverRuns,
+    });
+    assert.equal(outcome.ok, false, name);
+    if (outcome.ok) continue;
+    assert.equal(outcome.problem, CliInstallProblem.Download, name);
+    assert.deepEqual(
+      { httpStatus: outcome.httpStatus, netError: outcome.netError },
+      {
+        httpStatus: answered.httpStatus,
+        netError: answered.netError,
+      },
+      name,
+    );
   }
 });
 

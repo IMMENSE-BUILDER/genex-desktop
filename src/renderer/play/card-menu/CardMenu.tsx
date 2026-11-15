@@ -1,6 +1,6 @@
 /**
  * A Play card's ⋯ menu, genex.games' card menu in the app: the game's own items (Copy link,
- * remixing, Change cover), an admin's in its own block (Mobile support, Edit tags) and the two that
+ * remixing, Rename, Change link, Change cover), an admin's in its own block (Mobile support, Edit tags) and the two that
  * take the game down (Unpublish, Delete game). The ⋯ sits on the cover's corner and shows while the
  * card is hovered or focused; a right-click on the card opens the same menu. Items that need more
  * than a press open their dialog.
@@ -28,8 +28,10 @@ import type { InstalledGame } from "../../../shared/play-native.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import type { CardDialogProps } from "./DialogFoot.tsx";
 import { CoverDialog } from "./CoverDialog.tsx";
+import { LinkDialog } from "./LinkDialog.tsx";
 import { curationOf, MobileShown, mobileShown } from "./manage-model.ts";
 import { MobileDialog } from "./MobileDialog.tsx";
+import { RenameDialog } from "./RenameDialog.tsx";
 import { TagsDialog } from "./TagsDialog.tsx";
 
 const WORDS = PLAY_CARD_MENU_WORDS;
@@ -41,6 +43,8 @@ const AT_ONCE = new Set<PlayCardAction>([PlayCardAction.CopyLink, PlayCardAction
 const ICON: Record<PlayCardAction, IconName> = {
   [PlayCardAction.CopyLink]: "link",
   [PlayCardAction.Remixing]: "lock",
+  [PlayCardAction.Rename]: "rename",
+  [PlayCardAction.Link]: "globe",
   [PlayCardAction.Cover]: "image",
   [PlayCardAction.Mobile]: "computer",
   [PlayCardAction.Tags]: "tag",
@@ -97,6 +101,10 @@ function ActionDialog({ action, ...props }: CardDialogProps & { action: PlayCard
       return <TagsDialog {...props} />;
     case PlayCardAction.Cover:
       return <CoverDialog {...props} />;
+    case PlayCardAction.Rename:
+      return <RenameDialog {...props} />;
+    case PlayCardAction.Link:
+      return <LinkDialog {...props} />;
     case PlayCardAction.Unpublish:
     case PlayCardAction.Delete:
       return <ConfirmDialog action={action} {...props} />;
@@ -182,6 +190,7 @@ export function CardMenu({
   installed = null,
   open,
   onOpenChange,
+  triggerClassName = "play-card-menu",
 }: {
   game: PlayGame;
   /** The owner's and an admin's items; null for anyone else. */
@@ -190,6 +199,8 @@ export function CardMenu({
   installed?: InstalledGame | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The ⋯'s look: a card's corner button by default, or another surface's own. */
+  triggerClassName?: string;
 }): JSX.Element {
   const [dialog, setDialog] = useState<PlayCardAction | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -218,7 +229,7 @@ export function CardMenu({
           <button
             ref={trigger}
             type="button"
-            className="play-card-menu"
+            className={triggerClassName}
             aria-label={WORDS.trigger}
             title={WORDS.trigger}
             data-play-card-menu={game.slug}

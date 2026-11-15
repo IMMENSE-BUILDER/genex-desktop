@@ -1,6 +1,10 @@
+import type { GenexReviewFixPayload, GenexReviewPayload } from "../shared/genex-review.ts";
 import { t, tc } from "../shared/i18n.ts";
-import { providerInfo } from "../shared/providers.ts";
+import { EngineId, providerInfo } from "../shared/providers.ts";
+import { harnessTurnFailure, TurnFailureCode } from "../shared/engine-requests.ts";
+import { isRaisedContextName } from "../shared/ollama-context.ts";
 import type { ExportReview } from "../shared/plugins.ts";
+import { type DesignShownPayload, readDesignShown } from "../shared/design-board.ts";
 import type { PluginSuggestedPayload } from "../shared/project-tools.ts";
 import { type ListingRecord, listingDraftOf, listingKey } from "../shared/item-draft.ts";
 import { parseSuggestion } from "./chat/plugin-suggestion.ts";
@@ -30,9 +34,10 @@ import {
   delegatedPayload,
   type LoopRefusal,
   loopRefusalOf,
+  questionStepOf,
 } from "../shared/custom-events.ts";
 import { isHandoffNarration } from "../shared/chat-presentation.ts";
-import { isCoordinatorTool } from "../shared/coordinator.ts";
+import { isHostRunTool } from "../shared/chat-run.ts";
 import { SessionActivityRole } from "../shared/chat-activity.ts";
 import type { EventData, Message } from "../shared/event-log.ts";
 import { EventKind } from "../shared/event-log.ts";
@@ -44,6 +49,7 @@ import {
 } from "../shared/game-assets.ts";
 import { GENEX_COVER_TOOL, GENEX_PLUGIN_ID, GenexCoverOperation } from "../shared/genex.ts";
 import { SteerDelivery } from "../shared/message-queue.ts";
+import { poolWorkerId, WorkerTool } from "../shared/workers.ts";
 import { ExecutionStatus, RoundOutcome, roundOutcome } from "../shared/run-state.ts";
 import { skillUpdatedWords } from "../shared/skill-words.ts";
 import { MINUTE_MS } from "../shared/duration.ts";
@@ -63,6 +69,7 @@ import {
   A_PLUGIN,
   GAME_ENGINE_WORDS,
   appAccessMissing,
+  raiseContextOffer,
   autopilotStartWords,
   checkReplanWords,
   checkpointSkippedWords,
@@ -95,7 +102,9 @@ import {
   showWords,
   snapshotWords,
   soundsLikeTrouble,
+  firstSentence,
   TRANSCRIPT_WORDS,
+  WORKER_LINE_WORDS,
   toolActivityWords,
   toolWords,
   usingPluginWords,
@@ -127,6 +136,10 @@ export const EntryKind = {
   Mentions: "mentions",
   /** A store item the game's agent made: its Listing draft card, with Put on sale (`item_drafted`). */
   ListingDraft: "listing-draft",
+  /** Genex's review of the game's apps or its takedown, or a Fix with agent press (`genex_review`, `genex_review_fix`). */
+  GenexReview: "genex-review",
+  /** A page of the game's design board its agent showed (`design_shown`): the page's card, drawn from the board as it is now. */
+  DesignPage: "design-page",
 } as const;
 export type EntryKind = (typeof EntryKind)[keyof typeof EntryKind];
 
@@ -145,6 +158,8 @@ export const EntryAction = {
   Job: "job",
   /** A worker a lead started (`worker_started`): one line naming its task, rewritten as it ends. */
   Worker: "worker",
+  /** A session redirected a worker (`worker_steer`): one line, what it told it. */
+  Told: "told",
   /** Genex can't see app windows yet (`app_look_access`): one line, with Open Privacy settings per pane. */
   AppAccess: "app-access",
   /** A blind judge played the game for the chat's own session (`chat_judge_result`): one line, the question inside. */
@@ -153,6 +168,8 @@ export const EntryAction = {
   Rewound: "rewound",
   /** An agent went ahead of the person in an app a plugin's lock guards (`agent_went_ahead`): one line, with that plugin's settings. */
   WentAhead: "went-ahead",
+  /** Ollama's context refused a turn (`turn_ended`, `context_too_small`): one line, with Raise context to 16K. */
+  RaiseContext: "raise-context",
 } as const;
 export type EntryAction = (typeof EntryAction)[keyof typeof EntryAction];
 
@@ -193,6 +210,8 @@ export type Entry =
   | { kind: typeof EntryKind.Mentions; id: string; messageId?: string; tags: MentionOutcome[] }
   /** The turn-it-on card a session showed: its button is read from the live plugin list. */
   | { kind: typeof EntryKind.PluginSuggestion; id: string; suggestion: PluginSuggestedPayload }
+  /** A design page the agent showed: one card per page, where it was last shown. */
+  | { kind: typeof EntryKind.DesignPage; id: string; design: DesignShownPayload }
   /** One plain line about what Harness learned; `link` opens Activity. */
   | { kind: typeof EntryKind.Learning; id: string; text: string; link: string }
   | {
@@ -201,6 +220,9 @@ export type Entry =
       text: string;
       /** The agent's one line above its question: what it found or did. */
       recap?: string;
+      /** Which question of a short run of them this is (`step` of `of`), when its record names one. */
+      step?: number;
+      of?: number;
       choices: Array<{ id: string; label: string; description?: string }>;
       pending: boolean;
     }
@@ -216,6 +238,19 @@ export type Entry =
    * turn that made it has ended, the item's latest draft (an earlier card of the same item comes down).
    */
   | { kind: typeof EntryKind.ListingDraft; id: string; draft: ListingRecord }
+  /**
+   * A change in Genex's review of the game, or a Fix with agent press, placed at its time. The game's
+   * newest is its live card, drawn from Genex's word now; an older one settles into one line.
+   */
+  | {
+      kind: typeof EntryKind.GenexReview;
+      id: string;
+      project?: string;
+      at: string;
+      review: Partial<GenexReviewPayload> | null;
+      fix: Partial<GenexReviewFixPayload> | null;
+      latest: boolean;
+    }
   /** A card with one affordance: Resume a paused run, prefill a steering message, or Rewind. */
   | {
       kind: typeof EntryKind.Action;
@@ -265,6 +300,8 @@ export type Entry =
       judge?: ChatJudgeResultPayload;
       /** action "went-ahead": the plugin whose settings the line opens, and the app it names. */
       wentAhead?: { pluginId: string; label: string };
+      /** action "raise-context": the Ollama model Raise context to 16K copies. */
+      raiseContext?: string;
     }
   /**
    * The morning: what the run amounts to, in one card. It replaces the line that read
@@ -315,6 +352,8 @@ type ToolsEntry = Extract<Entry, { kind: typeof EntryKind.Tools }>;
 export type GenexCoverEntry = Extract<Entry, { kind: typeof EntryKind.GenexCover }>;
 /** A store item's Listing draft card. */
 export type ListingDraftEntry = Extract<Entry, { kind: typeof EntryKind.ListingDraft }>;
+export type DesignPageEntry = Extract<Entry, { kind: typeof EntryKind.DesignPage }>;
+export type GenexReviewEntry = Extract<Entry, { kind: typeof EntryKind.GenexReview }>;
 type ActionEntry = Extract<Entry, { kind: typeof EntryKind.Action }>;
 
 /** A plugin's permission card in the transcript. */
@@ -564,6 +603,13 @@ interface ChatDraft {
   /** What the run adds up to, gathered as the log is walked so the morning card can say it. */
   rounds: { kept: number; undone: number; firstShot: string | null; lastShot: string | null };
   rowByCall: Map<string, ToolChipRow>;
+  /**
+   * The `rowByCall` rows that may still be running, by the same key. A row that stops running
+   * never runs again, so the passes that settle running rows (a turn's end, a delegation's
+   * result, a run's close) read only these and drop the settled ones as they go: reading every
+   * row ever made at each of them made a long Loop's chat quadratic in its log.
+   */
+  openCalls: Map<string, ToolChipRow>;
   directTurns: Map<string, string | null>;
   runByCall: Map<string, string>;
   /** Rows a build's worker (a facet) called: never the chat's own session, whatever run it answers for. */
@@ -620,6 +666,8 @@ interface ChatDraft {
   endedJobs: Set<string>;
   /** Each worker's line by its graph and id (`workerKeyOf`), with what its records said, so later ones rewrite it. */
   workerLines: Map<string, { entry: ActionEntry; line: WorkerLine }>;
+  /** Each worker's task by the id its records name (`pool.w2`), a run's too: what a steer's line calls it. */
+  workerTitles: Map<string, string>;
   /** The chat's newest result card: only it offers Keep building. */
   latestResult: MorningEntry | null;
 }
@@ -635,6 +683,7 @@ export function toEntries(events: EventEnvelope[], queueIds?: ReadonlyMap<string
   keepOfferedRewind(chat, events);
   placeLastCoverCard(chat);
   placeLastListings(chat);
+  markLatestReviews(chat.entries);
   for (const [runId, deliveries] of chat.runAssets) {
     const result = chat.runResults.get(runId);
     if (result) result.assets = deliveries;
@@ -672,9 +721,11 @@ function newChatDraft(events: EventEnvelope[], queueIds: ReadonlyMap<string, str
     jobs: new Map(),
     endedJobs: new Set(),
     workerLines: new Map(),
+    workerTitles: new Map(),
     latestResult: null,
     rounds: { kept: 0, undone: 0, firstShot: null, lastShot: null },
     rowByCall: new Map(),
+    openCalls: new Map(),
     directTurns: new Map(),
     runByCall: new Map(),
     workerCalls: new Set(),
@@ -701,6 +752,7 @@ function readEvent(chat: ChatDraft, event: EventEnvelope): void {
   settleWaitingCards(chat, event.data);
   if (readToolTraffic(chat, event)) return;
   if (holdListing(chat, event)) return;
+  if (readGenexReview(chat, event)) return;
   if (readQuiet(chat, event.data)) return;
   closeGroup(chat);
   for (const narrate of NARRATORS) narrate(chat, event);
@@ -745,11 +797,10 @@ function trackTurn(chat: ChatDraft, event: EventEnvelope): void {
 function endTurn(chat: ChatDraft, event: EventEnvelope, status: string | undefined): void {
   chat.activeTurns.delete(event.thread_id);
   const ended: ToolState = status === "cancelled" ? ToolState.Stopped : ToolState.Unknown;
-  for (const [id, row] of chat.rowByCall) {
+  for (const [id, row] of runningCalls(chat)) {
     const ownTurn = chat.directTurns.get(id) === event.turn_id;
     const unowned = !chat.directTurns.has(id) && !chat.runByCall.has(id);
-    const endsWithTurn = ownTurn || unowned;
-    if (row.state === ToolState.Running && endsWithTurn) row.state = ended;
+    if (ownTurn || unowned) row.state = ended;
   }
   for (const [id, row] of chat.pluginCalls)
     if (row.state === ToolState.Running && !chat.runByCall.has(id)) row.state = ended;
@@ -790,6 +841,7 @@ function readConversation(chat: ChatDraft, event: EventEnvelope): boolean {
       id: event.id,
       text: asked.question,
       ...(asked.recap ? { recap: asked.recap } : {}),
+      ...(questionStepOf(asked) ?? {}),
       choices: asked.choices ?? [],
       pending: true,
     });
@@ -948,7 +1000,7 @@ function requestTool(
     ...(chip ? { chip } : {}),
   };
   group.rows.push(row);
-  chat.rowByCall.set(data.tool_call_id, row);
+  keepCallRow(chat, data.tool_call_id, row);
   chat.directTurns.set(data.tool_call_id, event.turn_id);
 }
 
@@ -971,13 +1023,30 @@ function settleTool(chat: ChatDraft, eventId: string, data: Extract<EventData, {
 function orphanResultRow(chat: ChatDraft, eventId: string, callId: string): ToolChipRow {
   const row: ToolChipRow = { key: callId, icon: "run", label: TRANSCRIPT_WORDS.toolResult };
   toolGroup(chat, eventId).rows.push(row);
-  chat.rowByCall.set(callId, row);
+  keepCallRow(chat, callId, row);
   return row;
 }
 
 function resultState(ok: boolean, stopped: boolean): ToolState {
   if (ok) return ToolState.Succeeded;
   return stopped ? ToolState.Stopped : ToolState.Failed;
+}
+
+/** File a tool call's row under its call id, among the open calls while it runs. */
+function keepCallRow(chat: ChatDraft, callId: string, row: ToolChipRow): void {
+  chat.rowByCall.set(callId, row);
+  if (row.state === ToolState.Running) chat.openCalls.set(callId, row);
+  else chat.openCalls.delete(callId);
+}
+
+/** The call rows still running, by call id; the ones that stopped since the last look are dropped first. */
+function runningCalls(chat: ChatDraft): Array<[string, ToolChipRow]> {
+  const running: Array<[string, ToolChipRow]> = [];
+  for (const [id, row] of chat.openCalls) {
+    if (row.state === ToolState.Running) running.push([id, row]);
+    else chat.openCalls.delete(id);
+  }
+  return running;
 }
 
 type Delegated = NonNullable<ReturnType<typeof delegatedPayload>>;
@@ -992,8 +1061,7 @@ function readDelegated(chat: ChatDraft, event: EventEnvelope, { engineId, payloa
   const scope = `${payload.delegationId ?? `${DELEGATED_PREFIX}${engineId}:${payload.runId ?? ""}:${payload.facetId ?? ""}`}:`;
   switch (payload.kind) {
     case "result":
-      for (const [id, row] of chat.rowByCall)
-        if (id.startsWith(scope) && row.state === ToolState.Running) row.state = ToolState.Unknown;
+      for (const [id, row] of runningCalls(chat)) if (id.startsWith(scope)) row.state = ToolState.Unknown;
       break;
     case "system":
       readDelegatedSystem(chat, event, engineId, payload);
@@ -1079,19 +1147,20 @@ function readDelegatedTurn(chat: ChatDraft, eventId: string, scope: string, payl
     // next tool call does not say better. Only what it *did* gets a row.
     if (part.type !== "tool_use" || !part.name) continue;
     if (recordedByHost(chat, part.name)) continue;
+    if (readSteer(chat, key, part)) continue;
     addDelegatedToolRow(chat, eventId, scope + (part.id ?? key), part, payload);
   }
 }
 
 /**
  * A call the host records itself, so its mirror would be a second row: a plugin's (`plugin_tool`),
- * a connector's (`connector_tool`), and a run control of the coordinator's or of the chat's own session after a run — the host
- * records its request and result when it runs it (conversation.ts `coordinatorTool`). A resume the
+ * a connector's (`connector_tool`), and a run control of the chat's own session after a run — the
+ * host records its request and result when it runs it (conversation.ts `runControl`). A resume the
  * session only recorded runs once its reply ends, and shows then.
  */
 function recordedByHost(chat: ChatDraft, name: string): boolean {
   if (chat.hostedTools.has(pluginToolKey(name))) return true;
-  return isCoordinatorTool(name.trim().replace(STUDIO_TOOL_PREFIX, ""));
+  return isHostRunTool(name.trim().replace(STUDIO_TOOL_PREFIX, ""));
 }
 
 /**
@@ -1137,8 +1206,25 @@ function addDelegatedToolRow(
     ...inputChip(part.name ?? "", part.input),
   };
   toolGroup(chat, eventId).rows.push(row);
-  chat.rowByCall.set(row.key, row);
+  keepCallRow(chat, row.key, row);
   trackCaller(chat, row.key, payload);
+}
+
+/**
+ * A session redirecting a worker it started (`worker_steer`): a line of its own with the worker's
+ * task and the first sentence it was told, as Claude Code shows the call. Folded among the turn's
+ * tool calls, a steer that acts on the person's message mid-build read as that message ignored.
+ */
+function readSteer(chat: ChatDraft, key: string, part: DelegatedPart): boolean {
+  if (part.name?.trim().replace(STUDIO_TOOL_PREFIX, "") !== WorkerTool.Steer) return false;
+  const input = typeof part.input === "object" && part.input ? (part.input as { id?: unknown; text?: unknown }) : {};
+  const said = typeof input.text === "string" ? firstSentence(input.text) : "";
+  if (!said) return false;
+  const title = typeof input.id === "string" ? (chat.workerTitles.get(poolWorkerId(input.id)) ?? null) : null;
+  closeGroup(chat);
+  const text = WORKER_LINE_WORDS.told(title, said);
+  chat.entries.push({ id: key, kind: EntryKind.Action, tag: SystemTag.TheLead, action: EntryAction.Told, text });
+  return true;
 }
 
 /** Who made a delegated call: the run it answers for, and whether a build's worker (a facet) made it. */
@@ -1175,13 +1261,13 @@ function readQuiet(chat: ChatDraft, data: EventData): boolean {
 
 /**
  * Steered in by interrupting the chat's session: the leg it cut off never sends the results that
- * would settle its tools, and the resumed session starts from the message. A run's coordinator
- * carries its runId too, so only a direct turn's calls and build workers' rows are left alone.
+ * would settle its tools, and the resumed session starts from the message. Only a direct turn's
+ * calls and build workers' rows are left alone.
  */
 function stopInterruptedLeg(chat: ChatDraft): void {
-  for (const [id, row] of chat.rowByCall) {
+  for (const [id, row] of runningCalls(chat)) {
     const chatLeg = !chat.directTurns.has(id) && !chat.workerCalls.has(id);
-    if (row.state === ToolState.Running && chatLeg) row.state = ToolState.Stopped;
+    if (chatLeg) row.state = ToolState.Stopped;
   }
 }
 
@@ -1227,7 +1313,7 @@ function narrateRebuild(chat: ChatDraft, event: EventEnvelope): void {
   say(chat, event.id, tag, `${restart.reason ?? TRANSCRIPT_WORDS.rebuiltItself}`);
 }
 
-/** Files too large to save, which Rewind cannot bring back: never folded away with routine lines. */
+/** Files too large to save that a rewind left as they were: never folded away with routine lines. */
 function narrateCheckpointSkipped(chat: ChatDraft, event: EventEnvelope): void {
   const skipped = customPayload(event.data, CustomEvent.CheckpointSkipped);
   const words = skipped ? checkpointSkippedWords(skipped) : null;
@@ -1382,6 +1468,7 @@ const ofRun = (payload: { runId?: unknown }): boolean => typeof payload.runId ==
  */
 function narrateWorkerStarted(chat: ChatDraft, event: EventEnvelope): void {
   const payload = customPayload(event.data, CustomEvent.WorkerStarted);
+  if (payload?.workerId && payload.title) chat.workerTitles.set(payload.workerId, payload.title);
   const key = payload && !ofRun(payload) ? workerKeyOf(payload) : null;
   if (!payload || !key) return;
   const known = chat.workerLines.get(key)?.line;
@@ -1446,6 +1533,31 @@ function narrateAppAccess(chat: ChatDraft, event: EventEnvelope): void {
   });
 }
 
+/** The Ollama model a turn ran on, when its context refused the turn and a 16K copy could help. */
+function raisableModel(chat: ChatDraft, event: EventEnvelope): string | null {
+  const { data } = event;
+  if (data.type !== EventKind.TurnEnded || !event.turn_id) return null;
+  const failure = harnessTurnFailure(data.metadata?.harnessFailure, () => false);
+  if (failure?.code !== TurnFailureCode.ContextTooSmall) return null;
+  const turn = chat.turnModels.get(event.turn_id);
+  if (turn?.engine !== EngineId.Ollama || !turn.model) return null;
+  return isRaisedContextName(turn.model) ? null : turn.model;
+}
+
+/** Ollama's default context refused a turn: one line under the error, with Raise context to 16K. */
+function narrateRaiseContext(chat: ChatDraft, event: EventEnvelope): void {
+  const model = raisableModel(chat, event);
+  if (!model) return;
+  chat.entries.push({
+    id: event.id,
+    kind: EntryKind.Action,
+    tag: SystemTag.Engine,
+    action: EntryAction.RaiseContext,
+    text: raiseContextOffer(model),
+    raiseContext: model,
+  });
+}
+
 /** An agent went ahead of the person: one line naming the app, with its plugin's settings; a partial record draws nothing. */
 function narrateWentAhead(chat: ChatDraft, event: EventEnvelope): void {
   const payload = customPayload(event.data, CustomEvent.AgentWentAhead);
@@ -1485,6 +1597,25 @@ function narratePluginSuggested(chat: ChatDraft, event: EventEnvelope): void {
   if (!suggestion) return;
   closeGroup(chat);
   chat.entries.push({ kind: EntryKind.PluginSuggestion, id: event.id, suggestion });
+}
+
+/**
+ * A page of the design board the agent showed: its card. A page shown again takes its earlier
+ * card's place, so a page worked on live has one card, at its latest; an old or partial record
+ * draws nothing.
+ */
+function narrateDesignShown(chat: ChatDraft, event: EventEnvelope): void {
+  const design = readDesignShown(customPayload(event.data, CustomEvent.DesignShown));
+  if (!design) return;
+  closeGroup(chat);
+  const earlier = chat.entries.findIndex(
+    (entry) =>
+      entry.kind === EntryKind.DesignPage &&
+      entry.design.file === design.file &&
+      entry.design.project === design.project,
+  );
+  if (earlier >= 0) chat.entries.splice(earlier, 1);
+  chat.entries.push({ kind: EntryKind.DesignPage, id: event.id, design });
 }
 
 /** Undo took a link back: its line says what the game builds in now, and offers Undo no more. */
@@ -1710,6 +1841,45 @@ function holdListing(chat: ChatDraft, event: EventEnvelope): boolean {
   chat.listings.push({ entry, thread: event.thread_id, placed: false });
   if (!chat.activeTurns.has(event.thread_id)) placeListings(chat, event.thread_id);
   return true;
+}
+
+/**
+ * A review record or a fix press (`genex_review`, `genex_review_fix`): its card goes up at its time,
+ * never held for the turn. A later record of the same press (Don't publish it automatically) changes
+ * no card: the live card reads the press from the log. True when the record was one.
+ */
+function readGenexReview(chat: ChatDraft, event: EventEnvelope): boolean {
+  const review = customPayload(event.data, CustomEvent.GenexReview);
+  const fix = review ? null : customPayload(event.data, CustomEvent.GenexReviewFix);
+  if (!review && !fix) return false;
+  const again =
+    fix !== null &&
+    chat.entries.some((entry) => entry.kind === EntryKind.GenexReview && entry.fix?.fixId === fix.fixId);
+  if (again) return true;
+  const project = review?.project ?? fix?.project;
+  chat.entries.push({
+    kind: EntryKind.GenexReview,
+    id: event.id,
+    ...(typeof project === "string" ? { project } : {}),
+    at: event.created_at,
+    review,
+    fix,
+    latest: false,
+  });
+  return true;
+}
+
+/** Each game's newest review card is its live one; the rest settle into lines. */
+function markLatestReviews(entries: Entry[]): void {
+  const seen = new Set<string>();
+  for (let at = entries.length - 1; at >= 0; at -= 1) {
+    const entry = entries[at];
+    if (entry?.kind !== EntryKind.GenexReview) continue;
+    const key = entry.project ?? "";
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entry.latest = true;
+  }
 }
 
 /** The thread's held Listing draft cards go up, in the order they were made. */
@@ -2086,7 +2256,7 @@ function narrateFinished(chat: ChatDraft, event: EventEnvelope): void {
 /** The run's own tool rows still out when it closed: stopped when the user stopped it, else unknown. */
 function settleRunTools(chat: ChatDraft, finished: FinishedPayload): void {
   const cancelled = finished.executionStatus === ExecutionStatus.Cancelled || wasCancelled(finished.stoppedBecause);
-  for (const [id, row] of [...chat.rowByCall, ...chat.pluginCalls]) {
+  for (const [id, row] of [...runningCalls(chat), ...chat.pluginCalls]) {
     const ownRow = Boolean(finished.runId) && chat.runByCall.get(id) === finished.runId;
     if (row.state === ToolState.Running && ownRow) row.state = cancelled ? ToolState.Stopped : ToolState.Unknown;
   }
@@ -2226,9 +2396,11 @@ const NARRATORS: readonly Narrator[] = [
   narrateWorkerStarted,
   narrateWorkerFinished,
   narrateAppAccess,
+  narrateRaiseContext,
   narrateWentAhead,
   narrateChatJudge,
   narratePluginSuggested,
+  narrateDesignShown,
   narrateImprovement,
   narrateSkillAccepted,
   narrateRunStart,

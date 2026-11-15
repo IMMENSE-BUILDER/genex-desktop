@@ -2,7 +2,9 @@
  * The Publish dialog's test link, in a disposable Electron profile with a fake `window.studio`: it
  * shows under "Publish to the web" before the first publish and under the public link once live
  * changes wait, never when the draft is the live build; its line names a second player only for a
- * multiplayer game; nothing overflows the dialog; and the main press still publishes once.
+ * multiplayer game; nothing overflows the dialog; and the main press still publishes once. The public
+ * link's Open closes the dialog onto the game's page in Play, and goes to the browser only for a game
+ * on another Genex.
  */
 import { build } from "esbuild";
 import { spawn } from "node:child_process";
@@ -64,8 +66,10 @@ app.whenReady().then(async()=>{
   report.fresh=await capture('fresh');
   // Before the first publish, a tested draft: the test link under the main press, one line under it.
   const draft=await step('draft','window.testLink.open("draft")');
-  assert.deepEqual(draft.order,['primary','test']);
-  assert.ok(draft.testText.startsWith('Test link:'),draft.testText);
+  // Flipped to match the dialog since links sit above the press (2026-10-23): it failed on dev before this.
+  assert.deepEqual(draft.order,['test','primary']);
+  // Flipped on purpose (Publish card round 4): the test link's one word is "Test".
+  assert.ok(draft.testText.startsWith('Test'),draft.testText);
   assert.ok(draft.testText.includes('preview--cathedral-chess.genex.technology'),draft.testText);
   assert.equal(draft.testCopyLabel,'Copy the test link');
   assert.equal(draft.note,'Friends can play it before you publish.','a single-player game is not told about a second player');
@@ -80,8 +84,9 @@ app.whenReady().then(async()=>{
   const newer=await step('newer','window.testLink.open("newer",{multiplayer:true})');
   assert.equal(newer.stage,'public');
   assert.equal(newer.primary,'Publish update');
-  assert.deepEqual(newer.order,['primary','public','test']);
-  assert.ok(newer.publicText.startsWith('Public:'),newer.publicText);
+  assert.deepEqual(newer.order,['public','test','primary']);
+  // Flipped on purpose (Publish card round 4): no word before the public link, its mark is inside the address.
+  assert.ok(newer.publicText.startsWith('genex.games/'),newer.publicText);
   assert.ok(newer.publicText.includes('genex.games/cathedral-chess'),newer.publicText);
   assert.equal(newer.note,'Try your changes before you update. Open it in a private window to join as another player.');
   assert.equal(newer.overflow,false);
@@ -89,7 +94,7 @@ app.whenReady().then(async()=>{
   // Live and the draft is the publish's own build: no test link.
   const same=await step('same','window.testLink.open("same",{multiplayer:true})');
   assert.equal(same.testText,null,'the live build is not offered as a test');
-  assert.deepEqual(same.order,['primary','public']);
+  assert.deepEqual(same.order,['public','primary']);
   report.same=await capture('live-same');
   // The main press publishes exactly as before: once, this game, its name.
   await step('beforeDraftPress','window.testLink.open("draft",{multiplayer:true})');
@@ -99,8 +104,19 @@ app.whenReady().then(async()=>{
   const pressedUpdate=await step('pressedUpdate','window.testLink.press()');
   assert.equal(pressedUpdate.publishes.length,2,'Publish update publishes too');
   assert.deepEqual(pressedUpdate.publishes[1],{game:'cathedral-chess',title:'Cathedral Chess'});
+  // The public link's Open: the game's page in Play, inside the app, and the dialog closes.
+  await step('beforeOpen','window.testLink.open("same")');
+  const opened=await step('opened','window.testLink.openPublic()');
+  assert.equal(opened.leaves,'chevron-right','no arrow out of the app');
+  assert.equal(opened.view.page+':'+opened.view.slug,'game:cathedral-chess');
+  assert.deepEqual([opened.closed,opened.playAsked,opened.toBrowser],[1,1,0],'the dialog closes, Play comes up, nothing goes to the browser');
+  // A game on another Genex has no page in this Play: its Open goes to the browser, and the dialog stays.
+  await step('beforeOpenElsewhere','window.testLink.open("elsewhere")');
+  const away=await step('openedElsewhere','window.testLink.openPublic()');
+  assert.equal(away.leaves,'arrow-up-right');
+  assert.deepEqual([away.closed,away.playAsked,away.toBrowser],[1,1,1]);
   assert.deepEqual(report.errors,[]);
-  console.log('PASS Publish dialog test link: shown only for builds players lack, labelled, fits, and Publish still publishes once');
+  console.log("PASS Publish dialog test link: shown only for builds players lack, labelled, fits, and Publish still publishes once; the public link's Open shows the game's page in Play, or the browser for a game on another Genex");
  } catch(error) { report.failure=error.stack; console.error(error); await capture('failure').catch(()=>{}); }
  fs.writeFileSync(path.join(evidence,'report.json'),JSON.stringify(report,null,2));
  app.exit(report.failure?1:0);

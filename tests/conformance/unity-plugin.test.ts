@@ -89,7 +89,11 @@ describe("the bundled Unity plugin", () => {
     assert.equal(tool(UnityTool.EngineStatus)?.audience, "harness");
     assert.deepEqual(tool(UnityTool.NewGame)?.makes, [CoreFact.UnityProject]);
     assert.equal(tool(UnityTool.NewGame)?.ready, UnityTool.EngineStatus);
-    assert.equal(tool(UnityTool.NewGame)?.facts, undefined, "any game may be made a Unity game");
+    assert.deepEqual(
+      tool(UnityTool.NewGame)?.facts,
+      [CoreFact.WebGame],
+      "a game with no kind yet or a web game may be made a Unity game",
+    );
     for (const name of [UnityTool.Setup, UnityTool.UndoSetup]) {
       assert.ok(tool(name)?.confirmation, `${name} changes the person's project, so they confirm it`);
       assert.deepEqual(tool(name)?.facts, [CoreFact.UnityProject]);
@@ -98,10 +102,11 @@ describe("the bundled Unity plugin", () => {
     assert.deepEqual(unity.scaffolds, [{ id: "game", label: "Unity game", tool: UnityTool.NewGame }]);
     assert.deepEqual(
       unity.hooks?.map((hook) => [hook.on, hook.tool]),
+      // Flipped: run.prepare opened Unity (open-for-run) and crash ended and reopened it
+      // (reopen-editor): Genex opens and restarts no app by itself; its lead opens Unity.
       [
         [HookEvent.TurnStart, UnityTool.FindProject],
         [HookEvent.RunPrepare, UnityTool.FindProject],
-        [HookEvent.RunPrepare, UnityTool.OpenForRun],
         [HookEvent.RunEnd, UnityTool.AfterRun],
         [HookEvent.CheckpointBefore, UnityTool.SaveAll],
         [HookEvent.CheckpointAfter, UnityTool.SceneShots],
@@ -109,10 +114,10 @@ describe("the bundled Unity plugin", () => {
         [HookEvent.RestoreBefore, UnityTool.EndEditor],
         [HookEvent.RestoreAfter, UnityTool.ReopenEditor],
         [HookEvent.Health, UnityTool.EditorState],
-        [HookEvent.Crash, UnityTool.ReopenEditor],
       ],
-      "a restore saves before it ends the editor, and the project is found before a run opens it",
+      "a restore saves before it ends the editor, and the project is found at a run's start",
     );
+    assert.equal(tool("open-for-run"), undefined, "the run's lead opens Unity with open-editor");
     for (const hook of unity.hooks ?? []) assert.deepEqual(hook.facts, [CoreFact.UnityProject], hook.tool);
     const needing = unity.tools
       .filter((declared) => declared.needs?.includes("editor"))
@@ -122,7 +127,6 @@ describe("the bundled Unity plugin", () => {
       [
         ...ENGINE_PLAY_TOOLS,
         UnityTool.EndEditor,
-        UnityTool.OpenForRun,
         UnityTool.QuitEditor,
         UnityTool.ReopenEditor,
         UnityTool.SaveAll,
@@ -175,7 +179,9 @@ describe("the bundled Unity plugin", () => {
         status: UnityAction.ToolbarStatus,
       },
     ]);
-    assert.deepEqual(unity.panels, [{ id: "editor", title: "Unity", file: "panel.html", placement: "settings" }]);
+    assert.deepEqual(unity.panels, [
+      { id: "editor", title: "Unity", file: "panel.html", placement: "settings", width: "narrow" },
+    ]);
     const action = (name: string) => unity.actions.find((declared) => declared.name === name);
     assert.deepEqual(unity.actions.map((declared) => declared.name).sort(), Object.values(UnityAction).sort());
     for (const looks of [UnityAction.Status, UnityAction.ToolbarStatus]) {
@@ -299,7 +305,6 @@ describe("the bundled Unity plugin", () => {
       assert.deepEqual(
         unityTools(UNITY_GAME),
         [
-          "unity__new-game",
           "unity__show-steps",
           "unity__multiplayer",
           "unity__setup",
@@ -321,9 +326,9 @@ describe("the bundled Unity plugin", () => {
       assert.deepEqual(unityTools(), ["unity__new-game", "unity__show-steps"], "and so can a game with no kind yet");
       const offered = registry.snapshot().kinds.filter((kind) => kind.plugin === "unity");
       assert.deepEqual(
-        offered.map((kind) => [kind.label, kind.tool, kind.makes, kind.asksReady]),
-        [["Unity game", "unity__new-game", [CoreFact.UnityProject], true]],
-        "the new game's question offers Unity by its scaffold's label, asking engine-status first",
+        offered.map((kind) => [kind.label, kind.tool, kind.makes]),
+        [["Unity game", "unity__new-game", [CoreFact.UnityProject]]],
+        "a game is offered Unity by its scaffold's label",
       );
     } finally {
       registry.cancel();

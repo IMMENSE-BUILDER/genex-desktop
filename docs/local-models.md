@@ -9,10 +9,22 @@ one-line `about` of at most 60 characters. Measurement evidence lives in `notes`
 displayed. Each RAM tier ranks model ids; `recommendModels` shows the ranked models that fit, and
 the first is Best fit. From 128 GB, Best fit is Qwen 3.5 122B (vision and tools); 192 GB adds
 Qwen 3.8 Flash Next. Every other model the architecture can run is under More models, smallest
-first, with "Needs a N GB Mac" when it does not fit. One build per model is shown: MLX on Apple
-Silicon, the portable GGUF elsewhere. The fit rule is weights + KV cache (0.5–3 GB) + 1.5 GB
-within 72% of unified memory on Apple Silicon (⅔ elsewhere). Recommendations are estimates; the
-large-Mac models have not been measured in Studio yet.
+first, with "Needs a N GB Mac" when it does not fit (on a PC, "Needs ~N GB to run"). Download is
+offered only for a model that fits. One build per model is shown: MLX on Apple Silicon, the
+portable GGUF elsewhere. The fit rule is weights + KV cache (0.5–3 GB) + 1.5 GB within 72% of
+unified memory on Apple Silicon (⅔ of RAM elsewhere).
+
+On Windows and Linux the graphics cards count too (`substrate/gpu-memory.ts`): each card's memory
+less 1 GB joins RAM's share, since Ollama runs a model on the card and splits a larger one between
+the card and RAM. NVIDIA's cards come from `nvidia-smi` (System32 on Windows) and add up. Without
+one, Windows reads each display adapter's `HardwareInformation.qwMemorySize` with `reg.exe` and
+counts only the largest, because the registry keeps the keys of cards swapped out; Linux reads
+amdgpu's `mem_info_vram_total`. Cards under 2 GB, and anything unreadable within 5 seconds, count
+as no card; found cards are kept for the session. A model larger than the cards that still fits
+says "slower" (the tooltip says why). A PC's tier is the larger of its RAM's and its graphics
+memory taken as RAM, and models that run on the card rank before split ones, so Best fit runs on
+the card when any ranked model does. The hardware line names the cards. Recommendations are
+estimates; the large-Mac models have not been measured in Studio yet.
 
 An installed model's row offers Delete (a trash button, then Cancel or Delete on the row). A Bonsai
 delete removes the receipt first, stops a server loaded with that model, then deletes its weights
@@ -83,7 +95,7 @@ Engine `kind` still distinguishes local inference from subscription transport. T
 and historical descriptors fall back to delegated kind. Bonsai implements both `complete`
 and `delegate`; it is not a subscription and does not use either vendor CLI.
 Studio's app-wide assistant uses `complete` without tools; game chats and builds keep their
-existing session/coordinator paths.
+existing session paths.
 
 The same director, worker, integration, preview and judging code runs for Bonsai sessions.
 Model roles accept Bonsai, Claude Code, Codex, OpenCode, Pi, OpenRouter and a local server (a model
@@ -103,14 +115,12 @@ at screenshots, so an Ollama model without vision is listed but disabled in thei
 that cannot see leaves reviewing to the first installed model that can (or to itself when none
 can). A
 build turn on a model that cannot see receives a note instead of the turn's pictures
-(`unseen-pictures-prompts.ts`). A send that crosses a job to or from Ollama needs the
-`local-roles` harness capability, which `main.ts` claims only when `model-roles.ts` exports
-`SERVES_LOCAL_ROLES` (`local-roles-served.ts`): an
-agent-edited older copy would put an Ollama model id on a subscription, so main refuses the send
-instead.
+(`unseen-pictures-prompts.ts`). A send carries its roles as they are: a role whose model is
+missing never blocks the chat's message. The chat's own workers take the Workers pick, and a
+Loop's workers and reviewers take both.
 
 `engines/local-session.ts` owns local session history under the engine home, separately for
-workers, directors and coordinators; its tools and path confinement live in
+workers, directors and chats; its tools and path confinement live in
 `local-session-tools.ts` and the words it gives the model in `local-session-prompts.ts`. A resume validates workspace and model identity.
 The system prompt holds only what stays the same across a session's requests; each request's turn
 and time budget rides its own message (`localBudgetNote`), so a resumed session keeps the runtime's
@@ -150,9 +160,9 @@ response for out-of-range offsets. Sessions receive their turn/time budget up fr
 Local file tools resolve real paths, respect host read grants and deny lists, restrict writes
 to the session workspace. Shell commands use
 ProcessSandbox, with workspace and Git metadata write roots, credential deny lists, no
-outbound domains, time/output ceilings and cancellation. Read-only and coordinator
-sessions have no file-write or shell tool; a Loop chat that may launch a build keeps them, and
-its idle-round nudge asks it to finish or launch rather than implement. The host remains authoritative for
+outbound domains, time/output ceilings and cancellation. Read-only
+sessions have no file-write or shell tool. A session that goes tool rounds without changing a
+file is nudged to go on, or to reply with what it found or needs (`progressCheckNote`). The host remains authoritative for
 which computer, capture, Blender, plugin, connector and director tools a role receives.
 
 Tool images are carried as actual image parts after every result in their tool round. A new
@@ -178,9 +188,11 @@ installed state, local worker selection under Codex and subscription roles under
 `bonsai.test.ts` and `engine-ollama.test.ts` also cover Delete: what goes, what another model
 keeps, and refusals that remove nothing.
 
-`model-catalog.test.ts` covers ranking, Best fit per tier, one build per architecture and
-"Needs a N GB Mac"; `ollama-registry.test.ts` covers name validation, manifest URLs and size sums
-without network.
+`model-catalog.test.ts` covers ranking, Best fit per tier, one build per architecture, graphics
+memory in a PC's budget, tier, split and Best fit on the card, and "Needs a N GB Mac";
+`gpu-memory.test.ts` covers the registry, `nvidia-smi` and amdgpu readings, every unreadable
+answer and a probe that never ends; `ollama-registry.test.ts` covers name validation, manifest
+URLs and size sums without network.
 
 `mcp-plumbing.test.ts` and `genex-plumbing.test.ts` include the direct Bonsai session provider
 in their host schema, asset inspection, event and consent matrices, using fixtures only.

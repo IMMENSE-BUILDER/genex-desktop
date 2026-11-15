@@ -7,6 +7,10 @@ export const API_REQUEST_TIMEOUT_MS = 20 * SECOND_MS;
 export const HTTP_UNAUTHORIZED = 401;
 export const HTTP_FORBIDDEN = 403;
 export const HTTP_NOT_FOUND = 404;
+/** The longest refusal code kept from a failed answer's `error`. */
+const ERROR_CODE_MAX_CHARS = 64;
+/** A refusal code as Genex spells one: lowercase words joined by `_`. */
+const ERROR_CODE = /^[a-z][a-z0-9_]*$/;
 
 const DASHBOARD_HOSTS = new Set(["genex.games", "dev.genex.games"]);
 const ASSET_HOSTS = new Set(["assets.genex.technology", "assets.genex.games"]);
@@ -90,22 +94,55 @@ export const GenexRoute = {
   /** The public price list: the cheapest price of each kind of generation. */
   Prices: "/api/credits/prices",
   Lanes: "/api/generations/lanes",
+  /** A game's own record on Genex: `PATCH { title }` renames it, moving no link. */
+  project: (id: string) => `/api/projects/${encodeURIComponent(id)}`,
+  /** Move a game to a new link (`POST { name }`): its old link keeps opening it. */
+  rename: (id: string) => `/api/projects/${encodeURIComponent(id)}/rename`,
   projectBySlug: (slug: string) => `/api/projects/by-slug/${encodeURIComponent(slug)}`,
   /** Whether a published game is open to remixers (`{ private }`), as its owner sets it on genex.games. */
   visibility: (id: string) => `/api/projects/${encodeURIComponent(id)}/visibility`,
   generation: (id: string) => `/api/generations/${encodeURIComponent(id)}`,
   generationRequest: (id: string) => `/api/generations/requests/${encodeURIComponent(id)}`,
+  /** Take a game's web version off Genex, keeping its apps (`DELETE`). */
+  web: (id: string) => `/api/games/${encodeURIComponent(id)}/web`,
+  /** A game's apps as their owner reads them: the live builds and the ones Genex holds or turned down. */
+  nativeBuilds: (id: string) => `/api/games/${encodeURIComponent(id)}/native-builds`,
+  /** One app of a game on Genex, by platform and processors: `DELETE` takes it off, keeping the game's other apps. */
+  nativeBuild: (id: string, platform: string, arch: string) =>
+    `/api/games/${encodeURIComponent(id)}/native-builds/${encodeURIComponent(platform)}/${encodeURIComponent(arch)}`,
+  /** Ask a person at Genex to review one app (`POST { note? }`). */
+  reviewRequest: (id: string, platform: string, arch: string) =>
+    `/api/games/${encodeURIComponent(id)}/native-builds/${encodeURIComponent(platform)}/${encodeURIComponent(arch)}/review-request`,
+  /** Ask a person at Genex to review a taken-down game (`POST { note? }`). */
+  appeal: (id: string) => `/api/projects/${encodeURIComponent(id)}/moderation/appeal`,
 } as const;
 
 /** Request options carrying `signal` only when there is one. */
 export const withSignal = (signal: AbortSignal | undefined): RequestInit => (signal ? { signal } : {});
 
-/** An HTTP failure that keeps its status, so callers can tell an expired sign-in from an outage. */
-export const httpError = (route: string, status: number) =>
-  Object.assign(new Error(`Genex ${route}: HTTP ${status}`), { status });
+/**
+ * An HTTP failure that keeps its status, so callers can tell an expired sign-in from an outage, and
+ * the refusal code Genex answered with (`{ error: "no_native_build" }`), when it gave one.
+ */
+export const httpError = (route: string, status: number, code?: string) =>
+  Object.assign(new Error(`Genex ${route}: HTTP ${status}`), { status, ...(code ? { code } : {}) });
 
 /** The HTTP status of a failed Genex call, when it had one. */
 export const statusOf = (error: unknown): number | undefined => (error as { status?: number } | null)?.status;
+
+/** Whether a Genex call failed for want of an answer within {@link API_REQUEST_TIMEOUT_MS} (`AbortSignal.timeout`'s error). */
+export const isTimeout = (error: unknown): boolean => (error as { name?: unknown } | null)?.name === "TimeoutError";
+
+/** The refusal code of a failed Genex call, when Genex answered one. */
+export const codeOf = (error: unknown): string | undefined => (error as { code?: string } | null)?.code;
+
+/** The refusal code a failed answer's JSON names in `error`, when it is one; never its words. */
+async function refusalCode(res: Response): Promise<string | undefined> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  const code = body?.error;
+  const isCode = typeof code === "string" && code.length <= ERROR_CODE_MAX_CHARS && ERROR_CODE.test(code);
+  return isCode ? code : undefined;
+}
 
 /** An authenticated Genex API call; any non-2xx answer throws {@link httpError}. */
 export async function genexFetch(api: string, route: string, token: string | null, init: RequestInit = {}) {
@@ -119,7 +156,7 @@ export async function genexFetch(api: string, route: string, token: string | nul
     },
     signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
   });
-  if (!res.ok) throw httpError(route, res.status);
+  if (!res.ok) throw httpError(route, res.status, await refusalCode(res));
   return res.json() as Promise<any>;
 }
 

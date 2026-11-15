@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { ModelCatalog, CatalogError, CATALOG_DEADLINE_MS } from "./model-catalog.ts";
 import { ModelCatalogSource, ModelCatalogProblemCode } from "../../shared/model-catalog.ts";
@@ -6,7 +6,12 @@ import { t } from "../../shared/i18n.ts";
 import { validateClaudeModels } from "./claude-telemetry.ts";
 import { supportedPreferences, type ModelPreferences } from "../../shared/model-preferences.ts";
 import type { ProviderUsage } from "../../shared/provider-usage.ts";
-import { readClaudeTelemetry, readClaudeUsage, withClaudeModelCapabilities } from "./claude-telemetry.ts";
+import {
+  readClaudeAppliedEffort,
+  readClaudeTelemetry,
+  readClaudeUsage,
+  withClaudeModelCapabilities,
+} from "./claude-telemetry.ts";
 import { cliVersion, requireCodingCli, resolveCodingCli, invalidateCodingCli } from "./external-cli.ts";
 /**
  * Delegated engine — Claude Code via the Agent SDK.
@@ -33,7 +38,14 @@ import { credentialHomes } from "../credential-homes.ts";
 import type { Usage } from "../types.ts";
 import type { ModelTokenUsage } from "../../shared/event-log.ts";
 import { claudeAuthStatus, type ClaudeAuthStatus } from "./claude-cli.ts";
-import { steerFeed, steerSession, userFrame, type SteerFeed, type SteerSession } from "./claude-steer.ts";
+import {
+  briefFrame,
+  type StallSchedule,
+  steerFeed,
+  steerSession,
+  type SteerFeed,
+  type SteerSession,
+} from "./claude-steer.ts";
 import { autoModeRules } from "./claude-auto-mode.ts";
 import {
   askingOptions,
@@ -58,7 +70,6 @@ import {
   type CompleteRequest,
   type CompleteResponse,
   type DelegateAsks,
-  type DelegateImage,
   type DelegateRequest,
   type DelegateResult,
   type Engine,
@@ -76,8 +87,8 @@ import {
   CHECKPOINT_TOOL,
   CLAUDE_CAPTURE_TOOL,
   intakeToolReply,
+  isInterview,
   RUN_COMMAND_TOOL,
-  SHELL_THIS_TURN,
   STUDIO_MCP_SERVER,
   STUDIO_SHELL_TOOL,
   STUDIO_TOOL_PREFIX,
@@ -115,11 +126,14 @@ import { CodingCliState } from "../../shared/coding-cli.ts";
 import { HOUR_MS, MINUTE_MS, SECOND_MS } from "../../shared/duration.ts";
 import { limitResetMs } from "./limit-reset.ts";
 import { EngineId } from "../../shared/providers.ts";
+import { GenexAccess } from "../../shared/genex-build.ts";
+import { genexStatus, type GenexLane } from "./genex.ts";
+import type { GenexLease } from "./genex-relay.ts";
 import { StudioPlatform } from "../../shared/boot.ts";
 import { EngineKind, EngineStatusCode, EngineStatusReason, LoginSource } from "../../shared/engine-descriptor.ts";
 import { ChatActivityPhase } from "../../shared/chat-activity.ts";
 import { ContextSource } from "../../shared/context.ts";
-import { EngineFailureKind, isInterview, StopReason } from "../../shared/engine-requests.ts";
+import { EngineFailureKind, StopReason } from "../../shared/engine-requests.ts";
 import { SessionCostLedger, sessionTotals, turnShare } from "./session-cost.ts";
 import { AccountId, accountsRoot, SubscriptionAccounts } from "./subscription-accounts.ts";
 
@@ -166,6 +180,8 @@ export interface ClaudeCodeEngineOptions {
   sessionCosts?: string;
   /** Injected in tests. Production asks the `claude` CLI, never a credential file. */
   authStatusFn?: (home: string | null) => Promise<ClaudeAuthStatus>;
+  /** The clock a session's input holds and stalls run on (claude-steer.ts); a test's own, or real timers. */
+  inputClock?: StallSchedule;
   /**
    * Where every judge session runs; defaults to the one stable `JUDGE_CWD` the app shares. A test
    * passes a directory it owns so a conformance run does not sit in the live judge's folder.
@@ -188,7 +204,28 @@ export interface ClaudeCodeEngineOptions {
    */
   skills?: { judge?: string[]; delegate?: string[] };
   maxTurns?: number;
+  /**
+   * Run on genex.games instead of the person's plan (`genex.ts`): the engine takes the gateway's
+   * id, label, status, models and usage, and each session runs through a relay lease of its own,
+   * in `engineHome` with no Claude sign-in at all.
+   */
+  gateway?: ClaudeGateway;
 }
+
+/** What a gateway engine runs on: the Genex lane's side of the engine. */
+export type ClaudeGateway = Pick<
+  GenexLane,
+  "id" | "label" | "status" | "models" | "defaultModel" | "open" | "readUsage" | "forget" | "close"
+>;
+
+/** The chat every judge's calls are kept under on a gateway. */
+const JUDGE_CHAT = "judge";
+/** The hex digits of a session folder's hash that name its chat on a gateway. */
+const CHAT_HASH_CHARS = 32;
+/** A person's own setting for the CLI that a gateway session keeps (`gatewayEnv`). */
+const GATEWAY_KEPT_SETTINGS: ReadonlySet<string> = new Set(["CLAUDE_CODE_GIT_BASH_PATH"]);
+/** Claude's own variables, every one of which a gateway session starts without. */
+const CLAUDE_VARIABLE = /^(?:ANTHROPIC|CLAUDE)_/i;
 
 /** The model id that means "whatever Claude Code is configured to use": never passed on. */
 const DEFAULT_MODEL = "default";
@@ -252,6 +289,8 @@ const SdkSystemSubtype = {
   PermissionDenied: "permission_denied",
   /** A status report; one that carries `permissionMode` says the session's mode changed. */
   Status: "status",
+  /** The tasks the session runs in the background now: its shells and subagents. */
+  BackgroundTasksChanged: "background_tasks_changed",
 } as const;
 
 /** The only `result` subtype that means the turn ended well. */
@@ -471,6 +510,7 @@ export class ClaudeCodeEngine implements Engine {
   readonly #toolless: { enabled: boolean };
   /** The OS the CLI runs on: where Claude Code's own sandbox cannot start, Genex's runs the commands. */
   readonly #platform: NodeJS.Platform;
+  readonly #inputClock: StallSchedule | undefined;
   /** What a studio-shell session's command sandbox is made with. */
   readonly #shells: Pick<ClaudeCodeEngineOptions, "scratchRoot" | "toolPath" | "commandSandbox">;
   /** Finds Git Bash for a Windows CLI; null off Windows, where the CLI's shell is the system's. */
@@ -496,7 +536,8 @@ export class ClaudeCodeEngine implements Engine {
         try {
           this.#catalog.publish(
             {
-              models: withClaudeModelCapabilities([], validateClaudeModels(data.models)),
+              // The rows keep the default efforts the catalog read: a running session reports none.
+              models: withClaudeModelCapabilities(this.#catalog.models(), validateClaudeModels(data.models)),
               source: ModelCatalogSource.Provider,
             },
             catalogEpoch,
@@ -522,14 +563,14 @@ export class ClaudeCodeEngine implements Engine {
     this.#telemetryAt.delete(stream);
   }
 
-  readonly id = EngineId.ClaudeCode;
-  readonly label = "Claude Code";
+  readonly id: string;
+  readonly label: string;
   readonly kind = EngineKind.Delegated;
   /** A CLI that reports message lifecycles folds a pushed message in at its next tool result (claude-steer.ts). */
   readonly steersMidTurn = true;
   /**
-   * A game chat's own session asks the person mid-turn (`DelegateRequest.permissions`), and so do a
-   * build's lead and the run's coordinator, in the chat's mode (`leadAsks`).
+   * A game chat's own session asks the person mid-turn (`DelegateRequest.permissions`), and so does
+   * a build's lead, in the chat's mode (`leadAsks`).
    */
   readonly permissionPrompts = true;
   /** Compact Now sends the resumed session Claude Code's own `/compact`. */
@@ -545,6 +586,8 @@ export class ClaudeCodeEngine implements Engine {
   readonly #executable: string | undefined;
   readonly judgeCwd: string;
   readonly #skills: { judge?: string[]; delegate?: string[] };
+  /** Genex: what this engine runs on instead of the person's plan. */
+  readonly #gateway: ClaudeGateway | undefined;
   #queryFn: ClaudeCodeEngineOptions["queryFn"];
   #authStatusFn: ClaudeCodeEngineOptions["authStatusFn"];
   /** Set when a call failed on auth: credential *files* can exist while the session is stale. */
@@ -557,6 +600,9 @@ export class ClaudeCodeEngine implements Engine {
   readonly swept: Promise<string[]>;
 
   constructor(options: ClaudeCodeEngineOptions) {
+    this.#gateway = options.gateway;
+    this.id = options.gateway?.id ?? EngineId.ClaudeCode;
+    this.label = options.gateway?.label ?? "Claude Code";
     this.#catalog = new ModelCatalog(options.onModelsChanged);
     this.engineHome = options.engineHome;
     this.systemHome = options.systemHome ?? path.join(os.homedir(), ".claude");
@@ -579,6 +625,7 @@ export class ClaudeCodeEngine implements Engine {
     this.#queryFn = options.queryFn;
     this.#toolless = toollessSandbox(options.platform);
     this.#platform = options.platform ?? process.platform;
+    this.#inputClock = options.inputClock;
     this.#shells = {
       scratchRoot: options.scratchRoot,
       toolPath: options.toolPath,
@@ -615,9 +662,15 @@ export class ClaudeCodeEngine implements Engine {
     return removed;
   }
 
+  /** Stop what this engine started for its sessions: a gateway's relay. */
+  async dispose(): Promise<void> {
+    await this.#gateway?.close();
+  }
+
   /** Settings' summary: which login Studio uses and whether the CLI is usable. Never reads a credential. */
   async account(): Promise<EngineAccount> {
     const cli = await this.#cliSummary();
+    if (this.#gateway) return { source: LoginSource.None, afterSignOut: "signed-out", cli };
     const variable = loginVariable();
     const login = await this.resolveLogin();
     // Forgetting Studio's login deletes only its own home; resolveLogin then finds the Terminal one.
@@ -655,6 +708,8 @@ export class ClaudeCodeEngine implements Engine {
    * failing all three does it ask for a sign-in.
    */
   async resolveLogin(): Promise<{ source: LoginSource; home: string | null }> {
+    // Genex: the studio's own home, which never holds a Claude sign-in; the relay is the account.
+    if (this.#gateway) return { source: LoginSource.Isolated, home: this.engineHome };
     if (process.env.CLAUDE_CONFIG_DIR) return { source: LoginSource.Env, home: process.env.CLAUDE_CONFIG_DIR };
     // An account the person chose in Settings runs, signed in or not: never another one silently.
     const chosen = await this.accounts.chosen();
@@ -744,6 +799,7 @@ export class ClaudeCodeEngine implements Engine {
     } catch {
       return { code: EngineStatusCode.NotInstalled, detail: MESSAGE.SdkMissing(), remedy: MESSAGE.SdkRemedy() };
     }
+    if (this.#gateway) return this.#gateway.status();
     // An ambient ANTHROPIC_API_KEY does NOT count as configured: D8 says subscription only, and
     // the key is stripped from every child environment anyway (subscriptionEnv).
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
@@ -797,8 +853,10 @@ export class ClaudeCodeEngine implements Engine {
   }
 
   async #readAuth(): Promise<EngineStatus> {
+    // Genex has no CLI sign-in to ask about: genex.games is asked again instead.
+    this.#gateway?.forget();
     const cheap = await this.#status(false);
-    if (cheap.code !== EngineStatusCode.Ready) return cheap;
+    if (cheap.code !== EngineStatusCode.Ready || this.#gateway) return cheap;
 
     const login = await this.resolveLogin();
     const cliHome = login.source === LoginSource.System || login.source === LoginSource.None ? null : login.home;
@@ -868,6 +926,7 @@ export class ClaudeCodeEngine implements Engine {
    * recheck overtook is dropped, and its callers wait for a read of the account signed in now.
    */
   async readUsage(): Promise<ProviderUsage | null> {
+    if (this.#gateway) return this.#gateway.readUsage();
     if (this.#usage && Date.now() - Date.parse(this.#usage.measuredAt) < USAGE_FRESH_MS) return this.#usage;
     if (this.#usageRead) return this.#usageRead;
     const generation = this.#loginGeneration;
@@ -933,9 +992,12 @@ export class ClaudeCodeEngine implements Engine {
     }
   }
 
-  catalogSnapshot = () => this.#catalog.snapshot();
+  // On Genex the gateway's own list is the answer (`models()`); the CLI's catalog never reads, so
+  // it would stay loading and a pick the gateway no longer lists would never be replaced.
+  catalogSnapshot = () => (this.#gateway ? undefined : this.#catalog.snapshot());
 
   async models(): Promise<EngineModel[]> {
+    if (this.#gateway) return this.#gateway.models();
     void this.refreshModels().catch(() => {});
     const models = this.#catalog.models();
     const reportedDefault = models.find((model) => model.id === DEFAULT_MODEL);
@@ -955,6 +1017,11 @@ export class ClaudeCodeEngine implements Engine {
   }
 
   async refreshModels(force = false): Promise<void> {
+    // genex.games lists its models with every status answer.
+    if (this.#gateway) {
+      await this.#gateway.status(force);
+      return;
+    }
     const generation = this.#catalog.epoch();
     const installation = await this.#resolveCli(EngineId.ClaudeCode, this.#executable, undefined, false);
     const login = await this.resolveLogin();
@@ -1008,8 +1075,11 @@ export class ClaudeCodeEngine implements Engine {
               );
             }),
           ]);
+          const listed = validateClaudeModels(models);
+          // No effort was asked of this session, so the one it applies is its model's default.
+          const applied = await readClaudeAppliedEffort(stream);
           return {
-            models: withClaudeModelCapabilities([], validateClaudeModels(models)),
+            models: withClaudeModelCapabilities([], listed, applied),
             source: ModelCatalogSource.Provider,
           };
         } finally {
@@ -1032,7 +1102,7 @@ export class ClaudeCodeEngine implements Engine {
   }
 
   async defaultModel(): Promise<string | null> {
-    return this.#model ?? null;
+    return this.#model ?? this.#gateway?.defaultModel() ?? null;
   }
 
   /**
@@ -1092,6 +1162,20 @@ export class ClaudeCodeEngine implements Engine {
    * as image blocks so this is the same "look at the pictures" path the local judge uses.
    */
   async complete(request: CompleteRequest): Promise<CompleteResponse> {
+    const gateway = this.#gateway;
+    if (!gateway) return this.#complete(request, undefined);
+    const lease = await gateway.open(JUDGE_CHAT);
+    try {
+      return await this.#complete(request, lease);
+    } catch (error) {
+      throw this.#refusedBy(lease) ?? error;
+    } finally {
+      lease.close();
+    }
+  }
+
+  /** One verdict, on `lease` when this engine runs on a gateway. */
+  async #complete(request: CompleteRequest, lease: GenexLease | undefined): Promise<CompleteResponse> {
     if (request.tools?.length) {
       throw new EngineError(EngineFailureKind.Other, this.id, MESSAGE.NoToolLoop);
     }
@@ -1100,7 +1184,7 @@ export class ClaudeCodeEngine implements Engine {
     const cliInstallation = await this.#installation(request.signal, ceilingMs);
     request.signal?.throwIfAborted();
     const query = await this.#query();
-    const login = await this.resolveLogin();
+    const login = withLease(await this.resolveLogin(), lease);
     // One stable, empty directory for every verdict (JUDGE_CWD) — remade if the OS swept it.
     await mkdir(this.judgeCwd, { recursive: true });
     const judge: JudgeState = { text: "", modelUsed: undefined, usage: { engine: this.id }, apiError: null };
@@ -1255,6 +1339,43 @@ export class ClaudeCodeEngine implements Engine {
   }
 
   async #delegate(request: DelegateRequest, steer: SteerSession | null): Promise<DelegateResult> {
+    const gateway = this.#gateway;
+    if (!gateway) return this.#session(request, steer, undefined);
+    // One chat per session folder, so genex.games keeps a game's calls together.
+    const lease = await gateway.open(gatewayChat(request.cwd));
+    try {
+      const result = await this.#session(request, steer, lease);
+      const refused = result.ok ? null : this.#refusedBy(lease);
+      if (refused) throw refused;
+      return result;
+    } catch (error) {
+      throw this.#refusedBy(lease) ?? error;
+    } finally {
+      lease.close();
+    }
+  }
+
+  /**
+   * genex.games's refusal of one of a lease's calls, as the engine error it is: a sign-in to make,
+   * or credits, a plan or a pause no wait inside the run will change. Null when it refused none.
+   */
+  #refusedBy(lease: GenexLease): EngineError | null {
+    const reason = lease.refusal();
+    if (!reason) return null;
+    const signIn = reason === GenexAccess.SignIn || reason === GenexAccess.VerifyEmail;
+    return new EngineError(
+      signIn ? EngineFailureKind.Auth : EngineFailureKind.UsageLimit,
+      this.id,
+      genexStatus(reason).detail,
+    );
+  }
+
+  /** One session, on `lease` when this engine runs on a gateway. */
+  async #session(
+    request: DelegateRequest,
+    steer: SteerSession | null,
+    lease: GenexLease | undefined,
+  ): Promise<DelegateResult> {
     const startedAt = Date.now();
     const usage: Usage = { engine: this.id };
     const nothingYet: PartialDelegateState = { summary: "", usage, turns: 0, startedAt };
@@ -1272,7 +1393,7 @@ export class ClaudeCodeEngine implements Engine {
     }
     const query = await this.#query();
     const run = newRunState(usage, cliInstallation);
-    const login = await this.resolveLogin();
+    const login = withLease(await this.resolveLogin(), lease);
     // One controller, two triggers: the user's stop and the wall-clock deadline. The flag
     // (`run.deadlineHit`) is what tells them apart afterwards — the abort itself looks identical
     // to the SDK.
@@ -1284,12 +1405,14 @@ export class ClaudeCodeEngine implements Engine {
     // The running session, for what an answer asks of it after the answer (claude-permissions.ts).
     const running: RunningSession = { stream: null };
     const options = await this.#delegateOptions(request, { cliInstallation, login, controller, running, run });
-    const told = withShellLine(request, Boolean(run.shell), this.#platform);
-    const stream = query({ prompt: sessionPrompt(told, steer, run, controller.signal), options } as never);
+    const stream = query({
+      prompt: sessionPrompt(request, steer, run, controller.signal, this.#inputClock),
+      options,
+    } as never);
     this.#catalogEpoch.set(stream, this.#catalog.epoch());
     running.stream = stream as RunningSession["stream"];
-    // The mode picker reaches a running turn of a session that asks (the chat's own, a lead's, the
-    // coordinator's, a worker's): the host holds this until the session takes no more control
+    // The mode picker reaches a running turn of a session that asks (the chat's own, a lead's, a
+    // worker's): the host holds this until the session takes no more control
     // requests (its input ended at a result) or its end, whichever comes first.
     run.control = liveControl(rulesAsks(request), stream);
     // Started after the stream exists: a throw during setup must not leave a live timer whose
@@ -1398,8 +1521,8 @@ export class ClaudeCodeEngine implements Engine {
     const outsideCwd = (dir: string): boolean => !isInside(cwd, dir);
     const additional = (request.extraReads ?? []).map((dir) => path.resolve(dir)).filter(outsideCwd);
     // The folders the person granted this chat ("Yes, and allow access to …") join the reads, and
-    // a worker's write roots and the build a lead leads its folders.
-    const granted = [...(rulesAsks(request)?.directories ?? []), ...workerWrites(request), ...leadBuilds(request)]
+    // a worker's write roots its folders.
+    const granted = [...(rulesAsks(request)?.directories ?? []), ...workerWrites(request)]
       .map((dir) => path.resolve(dir))
       .filter(outsideCwd);
     // The config home this session's CLI uses: the studio's, the one the environment names, or
@@ -1441,7 +1564,7 @@ export class ClaudeCodeEngine implements Engine {
         ...(request.preferences ? await this.preferenceSettings(request.model, request.preferences) : {}),
         ...(Object.keys(rules).length ? { permissions: rules } : {}),
         // The chat's own session works in its game folder (the host checked), checkpointed before
-        // each message; a lead or the coordinator answers for a build.
+        // each message; a lead answers for a build.
         ...(rulesAsks(request)
           ? {
               autoMode: autoModeRules({
@@ -1479,6 +1602,7 @@ export class ClaudeCodeEngine implements Engine {
     login: ClaudeLogin,
     extra: Record<string, string> = {},
   ): Record<string, string> {
+    if (login.lease) return gatewayEnv(installationEnv, { ...extra, ...login.lease.env }, login.home);
     return subscriptionEnv({
       ...installationEnv,
       ...extra,
@@ -1508,13 +1632,9 @@ export class ClaudeCodeEngine implements Engine {
     if (type !== SdkMessage.Result) return;
     readResult(message as SdkResult, run);
     run.feed?.answered();
-    // A string brief's input closes at the first result, a steered session's once it has answered
-    // everything it read: a mode picked after that reaches nothing, and is for the next message.
-    if (!run.feed || run.feed.ended) {
-      run.inputClosed = true;
-      run.closedSummary ??= run.summary;
-      run.control.release();
-    }
+    // A string prompt's input (Compact now) closes at the first result; a fed one once the session
+    // owes nothing (claude-steer.ts), which its feed says. A mode picked after that reaches nothing.
+    if (!run.feed) closeInput(run);
   }
 
   /** An assistant or user message: one more turn, the interview's calls, the activity line. */
@@ -1524,12 +1644,15 @@ export class ClaudeCodeEngine implements Engine {
     if (fromAssistant) run.replied = true;
     if (fromAssistant && request.interviewTools?.length) recordStudioToolCalls(message, run, request.interviewTools);
     this.#reportActivity(message, run, request);
+    // A tool's answer on the session's own thread: a background task's notice owed joins its next request.
+    if (!fromAssistant && !message.parent_tool_use_id) run.feed?.toolAnswered();
     if (!fromAssistant) return;
     this.#observeTelemetry(stream, request.onEvent, run.sessionId);
     // A subagent's request is its own context, not the one the session's next turn starts from.
     if (message.parent_tool_use_id) return;
+    run.feed?.working();
     // A reply after the input ended: a background task woke the CLI, and no tool call it makes now
-    // can be answered (the host's permission answers go over the input).
+    // can be answered (Genex's tools and the host's permission answers go over the input).
     if (run.inputClosed) {
       run.wokeAfterEnd = true;
       recordCutAfterTurn(message, run);
@@ -1544,11 +1667,14 @@ export class ClaudeCodeEngine implements Engine {
     if (message.subtype === SdkSystemSubtype.Init) {
       readInit(message, run);
       run.feed?.initialized(message, isInterview(request.interviewTools));
+      // Each turn opens with one: a turn a task's notice woke is under way before its first word.
+      run.feed?.working();
     }
     // The mode the session really runs in: Auto falls back to Manual where the plan or the model
     // cannot use it, and a plan approval or a picker change moves it mid-turn.
     const onMode = request.permissions?.onMode;
     if (onMode && reportsMode(message)) quietly(() => onMode(reportedMode(message)));
+    if (message.subtype === SdkSystemSubtype.BackgroundTasksChanged) run.feed?.background(message);
     if (message.subtype === SdkSystemSubtype.CompactBoundary) this.#reportCompaction(stream as object, run, request);
     if (message.subtype === SdkSystemSubtype.Status && message.compact_result === CompactOutcome.Failed) {
       run.compactError = String(message.compact_error ?? "") || MESSAGE.NotCompacted;
@@ -1627,6 +1753,15 @@ export class ClaudeCodeEngine implements Engine {
     throw classified;
   }
 
+  /**
+   * Who pays for a run. D8: the subscription — subscriptionEnv strips any ambient API key from the
+   * child, so cost_usd is prepaid quota, never a metered bill nobody agreed to. Genex: genex.games
+   * bills the account's credits per call, as an API would.
+   */
+  get #billing(): DelegateResult["billing"] {
+    return this.#gateway ? "api" : "subscription";
+  }
+
   /** How a build whose stream ended on its own is reported, or the limit it hit thrown. */
   #finish(run: RunState, request: DelegateRequest, startedAt: number): DelegateResult {
     const signedOut = this.#signedOut({
@@ -1650,9 +1785,7 @@ export class ClaudeCodeEngine implements Engine {
       summary: run.summary,
       usage: run.usage,
       turns: run.turns,
-      // D8: always the subscription — subscriptionEnv strips any ambient API key from the child,
-      // so cost_usd is prepaid quota, never a metered bill nobody agreed to.
-      billing: "subscription",
+      billing: this.#billing,
       engine: this.id,
       durationMs: Date.now() - startedAt,
       ...(run.modelUsed ? { model: run.modelUsed } : {}),
@@ -1789,6 +1922,18 @@ type ClaudeInstallation = Awaited<ReturnType<typeof requireCodingCli>>;
 interface ClaudeLogin {
   source: LoginSource;
   home: string | null;
+  /** Genex: the relay lease the session's calls run through. */
+  lease?: GenexLease;
+}
+
+/** `login`, running through `lease` when there is one. */
+function withLease(login: ClaudeLogin, lease: GenexLease | undefined): ClaudeLogin {
+  return lease ? { ...login, lease } : login;
+}
+
+/** The chat a gateway keeps a session folder's calls under: a hash, so no path leaves the Mac. */
+function gatewayChat(cwd: string): string {
+  return createHash("sha256").update(path.resolve(cwd)).digest("hex").slice(0, CHAT_HASH_CHARS);
 }
 
 /** What a delegation's session is started with, besides the request. */
@@ -2036,6 +2181,17 @@ function readInit(message: Record<string, unknown>, run: RunState): void {
 }
 
 /**
+ * The session's input has ended: from here on no answer of Genex's reaches it (its tools, a
+ * permission, a mode picked), and what it said by then is what it said as its turn ended.
+ */
+function closeInput(run: RunState): void {
+  if (run.inputClosed) return;
+  run.inputClosed = true;
+  run.closedSummary ??= run.summary;
+  run.control.release();
+}
+
+/**
  * A worker's turn is its whole job: what its session did after a background task woke it, past its
  * input's end, is not its delivery, and the turn ends not ok, handing back what it said as its turn
  * ended. A lead or the chat is resumed by its own loop, and keeps its last result's verdict.
@@ -2220,48 +2376,27 @@ function sessionPrompt(
   steer: SteerSession | null,
   run: RunState,
   signal: AbortSignal,
+  clock?: StallSchedule,
 ): unknown {
   if (request.compact) return COMPACT_COMMAND;
-  // A resumed session may first answer what it had queued: its input waits for the brief's answer.
-  if (!steer && !request.resume) return delegatePrompt(request);
+  // Every session is fed through an input Genex holds (claude-steer.ts `steerFeed`): a resumed one
+  // may first answer what it had queued, and any may leave work in the background whose calls of
+  // Genex's tools need it open.
   const session = steer ?? steerSession(() => {});
-  run.feed = steerFeed(session, userFrame(request.prompt, briefImages(request)), signal, () => run.sessionId);
+  run.feed = steerFeed(
+    session,
+    briefFrame(request),
+    signal,
+    () => run.sessionId,
+    clock,
+    () => closeInput(run),
+  );
   return run.feed.prompt;
 }
 
 /**
- * The brief of a resumed Windows session with the line naming this turn's shell after it: its turns
- * may run commands in Genex's sandbox or in Bash (`studioShell`), and it remembers the other. A new
- * session's tools say it, a Mac's never changes, and a session with no shell has none to name.
- */
-function withShellLine(request: DelegateRequest, genexShell: boolean, platform: NodeJS.Platform): DelegateRequest {
-  if (platform !== "win32" || !request.resume) return request;
-  const bash = !disallowedToolsFor(request, genexShell).includes(SHELL_TOOL);
-  if (!genexShell && !bash) return request;
-  const line = genexShell ? SHELL_THIS_TURN.Studio : SHELL_THIS_TURN.Bash;
-  return { ...request, prompt: `${request.prompt}\n\n${line}` };
-}
-
-/** The stills a brief carries. */
-function briefImages(request: DelegateRequest): DelegateImage[] {
-  return (request.images ?? []).filter((image) => image?.data);
-}
-
-/**
- * The builder's prompt. Stills go in as image blocks, the same content-block shape the judge uses
- * — a builder that never saw the reference read it nine times in 2,245 turns.
- */
-function delegatePrompt(request: DelegateRequest): unknown {
-  const images = briefImages(request);
-  if (!images.length) return request.prompt;
-  return (async function* () {
-    yield userFrame(request.prompt, images);
-  })();
-}
-
-/**
  * The session's PreToolUse hooks: a worker's never-touch screen first (`neverTouchHook`, every
- * call, reads included, in every mode), and a lead's, coordinator's or asking worker's screen
+ * call, reads included, in every mode), and a lead's or asking worker's screen
  * (`leadScreenHook`), which sees every tool call before Claude Code's own rules do.
  */
 function sessionHooks(request: DelegateRequest, cwd: string, run: RunState): { hooks?: unknown } {
@@ -2345,22 +2480,20 @@ function shellAllows(request: DelegateRequest, genexShell: boolean): string[] {
 
 /**
  * Research is part of the work: the chat, a director and its builders may search and read the
- * web, and so may a read-only lead or coordinator the person may talk to (`leadAsks`), the chat's
- * main agent. Another read-only session answers from what it was handed. A worker researches when it writes, or when its lead asked for research
- * (`WorkerSeat.research`); a reader or a worker in Plan otherwise does not.
+ * web. A read-only session answers from what it was handed. A worker researches when it writes, or
+ * when its lead asked for research (`WorkerSeat.research`); a reader or a worker in Plan otherwise
+ * does not.
  */
 function researches(request: DelegateRequest): boolean {
   if (request.worker) return request.worker.research || !workerReadOnly(request.worker, Boolean(request.readOnly));
-  return !request.readOnly || Boolean(request.leadAsks);
+  return !request.readOnly;
 }
 
 /**
  * The tools the session never gets. No session gets Claude Code's own sub-agents (Agent, Task):
  * Genex runs the workers, under the person's ceiling and the chat's mode. A chat that may launch a
  * build is still a full contractor: it answers, researches or edits itself and launches only when
- * the ask needs a build. A read-only session (a reviewer, a reader) may not even run a command. A
- * read-only lead or coordinator the person may talk to (`leadAsks`), the chat's main agent, keeps
- * what the chat's own session keeps; the chat's mode decides each call.
+ * the ask needs a build. A read-only session (a reviewer, a reader) may not even run a command.
  */
 function disallowedToolsFor(request: DelegateRequest, genexShell = false): string[] {
   const refused = refusedTools(request);
@@ -2371,8 +2504,7 @@ function disallowedToolsFor(request: DelegateRequest, genexShell = false): strin
 /** The tools a session never gets, whoever runs its commands (`disallowedToolsFor`). */
 function refusedTools(request: DelegateRequest): string[] {
   if (request.worker) return workerDisallowedTools(request);
-  if (request.readOnly && !request.leadAsks)
-    return [...MESSAGING_TOOLS, ...EDIT_TOOLS, SHELL_TOOL, ...SUBAGENT_TOOLS, ...WEB_TOOLS];
+  if (request.readOnly) return [...MESSAGING_TOOLS, ...EDIT_TOOLS, SHELL_TOOL, ...SUBAGENT_TOOLS, ...WEB_TOOLS];
   return [...MESSAGING_TOOLS, ...SUBAGENT_TOOLS, ...(asksOf(request) ? ASKING_TOOLS : [])];
 }
 
@@ -2493,8 +2625,7 @@ export function claudeCodeSystemPrompt(system: string | undefined): Record<strin
 /**
  * How the session is permitted. An unattended contractor edits inside a git-snapshotted
  * workspace, where every edit is recoverable, which is what makes acceptEdits defensible there. A
- * game chat's own session asks the person instead, in the mode they chose; a build's lead or the
- * run's coordinator asks from its chat's Auto, Accept edits or Bypass, or from Manual, and the host
+ * game chat's own session asks the person instead, in the mode they chose; a build's lead asks from its chat's Auto, Accept edits or Bypass, or from Manual, and the host
  * answers (claude-permissions.ts). The picker switches either mid-turn.
  */
 function permissionOptions(request: DelegateRequest, running: RunningSession): Record<string, unknown> {
@@ -2515,25 +2646,17 @@ export function toollessSandbox(platform: NodeJS.Platform = process.platform): {
   return { enabled: platform !== "win32" };
 }
 
-/** The build a lead leads outside its folder (`leadBuilds`), which it writes as its own; none for any other session. */
-function leadBuilds(request: DelegateRequest): string[] {
-  return request.leadBuilds ? [path.resolve(request.leadBuilds)] : [];
-}
-
 /**
  * An unattended session's shell: sandboxed, auto-allowed only because it cannot step outside
  * (allowUnsandboxedCommands: false makes the CLI ignore dangerouslyDisableSandbox entirely), and
- * never writing the studio's protected folders. It writes its
- * folder, and a lead the build it leads.
+ * never writing the studio's protected folders. It writes its folder.
  */
 function unattendedSandbox(request: DelegateRequest, protectedPaths: string[]): Record<string, unknown> {
-  const builds = leadBuilds(request);
   return {
     enabled: true,
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
     filesystem: {
-      ...(builds.length ? { allowWrite: builds } : {}),
       denyWrite: [...protectedPaths],
       denyRead: [...baseDenyRead(), ...(request.denyReads ?? []), ...protectedPaths],
     },
@@ -2632,7 +2755,7 @@ async function shellBox(
 ): Promise<Pick<CommandBox, "cwd" | "writableRoots" | "secretPaths" | "denyWrite">> {
   const seat = request.worker;
   const fence = seat ? await neverTouchFence(seat.neverTouch) : { reads: [], writes: [] };
-  const roots = [...workerWrites(request), ...leadBuilds(request)];
+  const roots = workerWrites(request);
   const home = seat ? workerBox(seat, Boolean(request.readOnly)).home : false;
   const signIns = credentialHomes();
   return {
@@ -2694,6 +2817,26 @@ function subscriptionEnv(extra: Record<string, string | undefined> = {}): Record
   );
 }
 
+/**
+ * A Genex session's environment: the toolchain's, without any of Claude's own variables from this
+ * Mac (a person's API key, base URL, model or OAuth token would take the session off the relay or
+ * onto their plan), in the studio's own config `home`, with the relay's variables and `set`.
+ */
+export function gatewayEnv(
+  installationEnv: NodeJS.ProcessEnv,
+  set: Record<string, string>,
+  home: string | null,
+): Record<string, string> {
+  const parent = Object.entries({ ...process.env, ...installationEnv }).filter(
+    ([name]) => !CLAUDE_VARIABLE.test(name) || GATEWAY_KEPT_SETTINGS.has(name),
+  );
+  return childEnv(Object.fromEntries(parent), {
+    base: "contractor",
+    vendor: "claude",
+    set: { ...set, ...(home ? { CLAUDE_CONFIG_DIR: home } : {}) },
+  });
+}
+
 // ── the studio's MCP tools ─────────────────────────────────────────────────────────────────
 
 type ZodType = import("zod").ZodTypeAny;
@@ -2705,9 +2848,10 @@ interface McpKit {
 /**
  * Loads a tool with the prompt. Claude Code (2.1.304 on) defers MCP tools behind its tool search,
  * offering their names but not their schemas, and a session that cannot see a tool its prompt
- * relies on does not reliably look for it: the checkpoint where the game has checkpoint hooks,
- * capture, a chat's interview tools and the studio's shell load from the first turn. Live and
- * connector tools, a large and varied set, stay deferred, and so does a checkpoint with no hooks.
+ * relies on does not reliably look for it: the checkpoint, capture, a chat's interview tools, the
+ * studio's shell and Genex's own live tools the host marks (`LiveToolSpec.alwaysLoad`: its project
+ * and worker tools) load from the first turn. Other live and connector tools, a large and varied
+ * set, stay deferred.
  */
 const LOAD_WITH_PROMPT = { alwaysLoad: true } as const;
 
@@ -2719,9 +2863,9 @@ type ToolAnswer = {
 
 /**
  * `checkpoint`: the session saves the game with a note; the chat shows the note, and the studio's
- * own checkpoint, when the delegation has one (a game with checkpoint hooks), answers what it did
- * and loads the tool with the prompt; with none the tool waits for tool search. A checkpoint that
- * failed reports as failed, never ending the build.
+ * own checkpoint, when the delegation has one (a game with checkpoint hooks), answers what it did.
+ * It loads with the prompt: its description is the only place that says it lights the Reload. A
+ * checkpoint that failed reports as failed, never ending the build.
  */
 function checkpointTool(kit: McpKit, request: Pick<DelegateRequest, "onEvent" | "onCheckpoint">) {
   const { tool, z } = kit;
@@ -2739,7 +2883,7 @@ function checkpointTool(kit: McpKit, request: Pick<DelegateRequest, "onEvent" | 
         return { content: [{ type: "text", text: CHECKPOINT_TOOL.failed(errorMessage(err)) }], isError: true };
       }
     },
-    request.onCheckpoint ? LOAD_WITH_PROMPT : undefined,
+    LOAD_WITH_PROMPT,
   );
 }
 
@@ -2810,13 +2954,14 @@ function liveTool(kit: McpKit, spec: LiveToolSpec, onLiveTool: NonNullable<Deleg
   // the shape the model must be shown. Every other live tool is still flat.
   const shape = spec.inputSchema ? zodShapeFromJsonSchema(spec.inputSchema, kit.z) : flatLiveShape(kit.z, spec);
   const description = spec.inputSchema ? describeWithSchema(spec.description, spec.inputSchema) : spec.description;
-  return kit.tool(spec.name, description, shape, async (args: Record<string, unknown>) => {
+  const answer = async (args: Record<string, unknown>) => {
     try {
       return liveToolAnswer(await onLiveTool(spec.name, args ?? {}));
     } catch (err) {
       return liveToolAnswer({ text: `${spec.name} failed: ${errorMessage(err)}`, isError: true });
     }
-  });
+  };
+  return kit.tool(spec.name, description, shape, answer, spec.alwaysLoad ? LOAD_WITH_PROMPT : undefined);
 }
 
 /** A live tool's result as the MCP answer the contractor reads. */

@@ -42,6 +42,8 @@ export const ENGINE_LABELS: Readonly<Record<string, string>> = {
   [EngineId.ClaudeCode]: "Claude Code",
   [EngineId.Codex]: "Codex",
   [EngineId.Cursor]: "Cursor",
+  [EngineId.Antigravity]: "Antigravity",
+  [EngineId.Genex]: "Genex",
 };
 
 /** The three jobs, in the order the roles page shows them. */
@@ -75,6 +77,8 @@ const SESSION_ENGINES: readonly string[] = [
   EngineId.LocalServer,
   EngineId.Grok,
   EngineId.Cursor,
+  EngineId.Antigravity,
+  EngineId.Genex,
 ];
 
 /** Session engines: the delegated ones, and the others that hold a session (`SESSION_ENGINES`). */
@@ -172,15 +176,6 @@ function namedModels(given: Record<string, unknown>, engines: CrossedEngines): R
     out[key] = id && id !== "default" ? id : undefined;
   }
   return any ? out : null;
-}
-
-/**
- * Does a run on `engine` with these roles send a job to or from a completion-only local engine?
- * Only a harness whose every part serves that may run it (`HarnessCapability.LocalRoles`).
- */
-export function crossesCompletionEngine(engine: string, roles: unknown): boolean {
-  const crossed = Object.values(normalizeRoles(engine, roles)?.engines ?? {});
-  return crossed.some((other) => !hasSessionRoles(engine) || !hasSessionRoles(other));
 }
 
 /** The efforts the composer named per role, as strings; null when it named none. */
