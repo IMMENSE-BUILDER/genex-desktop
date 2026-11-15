@@ -239,9 +239,9 @@ folder's own `.pi` settings and `.agents/skills` stay untrusted, so Pi never loc
 is a read exemption, not a write grant: `~/.pi` stays read-only except `agent/sessions` and
 `agent/auth.json.lock`, so `agent/bin`, `agent/tools`, `agent/prompts` and `AGENTS.md` — which a
 sign-in runs outside the sandbox — are never a session's to write. A provider status is read at the
-head of Pi's error (`401: {...}`), never a number inside the body it quotes, and an expired sign-in
-or a refresh the credential store cannot write (a 401, or `EPERM` naming `auth.json`) says to sign
-in again. An unknown provider reaches only its `models.json` host. No in-app installer; Account can
+head of Pi's error (`401: {...}`), never a number inside the body it quotes, and an expired sign-in,
+a refresh the provider refuses (OAuth's `invalid_grant`) or one the credential store cannot write (a
+401, or `EPERM` naming `auth.json`) says to sign in again. An unknown provider reaches only its `models.json` host. No in-app installer; Account can
 run `pi update`. Streams: `tests/fixtures/transcripts/pi-*`.
 
 ## Grok Build

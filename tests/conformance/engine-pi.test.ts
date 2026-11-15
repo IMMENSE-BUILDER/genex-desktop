@@ -444,6 +444,64 @@ describe("Pi's JSON stream", () => {
     );
   });
 
+  it("a refresh the provider refuses with OAuth's invalid_grant says to sign in to Pi again", async () => {
+    const cwd = await game();
+    const refused = [
+      // The live run's shape: Pi names no status at the head, only inside its own words.
+      'OAuth refresh failed for openai-codex (400): {"error":"invalid_grant","error_description":"expired"}',
+      // A provider status at the head is read first, and a 400 would otherwise read as a refused model.
+      '400: {"error":"invalid_grant","error_description":"Refresh token revoked"}',
+    ];
+    for (const errorMessage of refused) {
+      const { engine } = await engineWith(async function* () {
+        yield { type: "session", id: "sess-grant" };
+        yield { type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage } };
+        yield { type: "agent_end", willRetry: false };
+      });
+      await assert.rejects(
+        engine.delegate({ cwd, prompt: "Hi", model: "openai-codex/gpt-5", onEvent: () => {} }),
+        (err: unknown) => err instanceof EngineError && err.kind === "auth" && /sign in to Pi again/i.test(err.message),
+        errorMessage,
+      );
+    }
+  });
+
+  it("Pi dying on a refused refresh (invalid_grant) says to sign in again, not the raw error", async () => {
+    const cwd = await game();
+    const { engine } = await engineWith(async function* () {
+      yield { type: "session", id: "sess-grant-exit" };
+      throw stderrFailure('Error: OAuth refresh failed (400): {"error":"invalid_grant"}', 1);
+    });
+    await assert.rejects(
+      engine.delegate({ cwd, prompt: "Hi", onEvent: () => {} }),
+      (err: unknown) =>
+        err instanceof EngineError &&
+        err.kind === "auth" &&
+        /sign in to Pi again/i.test(err.message) &&
+        !/invalid_grant/.test(err.message),
+    );
+  });
+
+  it("a word that only contains invalid_grant is not OAuth's code", async () => {
+    const cwd = await game();
+    const { engine } = await engineWith(async function* () {
+      yield { type: "session", id: "sess-grant-word" };
+      yield {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "tool said invalid_granted_scope",
+        },
+      };
+      yield { type: "agent_end", willRetry: false };
+    });
+    const result = await engine.delegate({ cwd, prompt: "Hi", onEvent: () => {} });
+    assert.equal(result.stopReason, "error");
+    assert.match(result.errorText ?? "", /invalid_granted_scope/);
+  });
+
   it("reads a provider status only where Pi puts it, at the head of the error", () => {
     const failure = (errorMessage: string) =>
       translatePiEvent({

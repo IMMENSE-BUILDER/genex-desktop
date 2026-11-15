@@ -64,6 +64,11 @@ const STDERR_TAIL_CHARS = 4_000;
  * sentence — a sandboxed session can fail on any other file too.
  */
 const CREDENTIAL_STORE_DENIED = /\bEPERM\b[^\n]*[/\\]auth\.json/;
+/**
+ * OAuth's own error code for a refresh token that expired or was revoked (RFC 6749 §5.2): the
+ * provider's code, never a sentence, and only as a whole word.
+ */
+const OAUTH_GRANT_REFUSED = /\binvalid_grant\b/;
 /** Plan/read-only: look, and keep `bash` so the studio tools bridge can run. */
 const PLAN_TOOLS = "read,grep,find,ls,bash";
 /** The provider statuses that refuse the request itself: pick another model. */
@@ -517,7 +522,7 @@ function refusedModelText(
 
 function needsPiSignIn(failure: { message: string; status: number | null }): boolean {
   if (failure.status === 401) return true;
-  return CREDENTIAL_STORE_DENIED.test(failure.message);
+  return CREDENTIAL_STORE_DENIED.test(failure.message) || OAUTH_GRANT_REFUSED.test(failure.message);
 }
 
 function failureError(engine: string, failure: { message: string; status: number | null }): EngineError {
