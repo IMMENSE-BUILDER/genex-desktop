@@ -799,6 +799,7 @@ const { codexLogin, claudeLogin, openCodeLogin, piLogin, grokLogin, cursorLogin,
       if (core?.engines.has(EngineId.Cursor)) await core.engines.get(EngineId.Cursor).refreshModels?.(true);
       pushUiEvent({ type: UiEvent.EnginesChanged, payload: { engine: EngineId.Cursor } });
     },
+    antigravityScratch: () => (core ? path.join(core.layout.scratch, EngineId.Antigravity) : undefined),
     onAntigravitySignedIn: async () => {
       // A check that fails (offline, a CLI that hangs) still tells the row to read the engine again.
       if (core?.engines.has(EngineId.Antigravity))
