@@ -303,12 +303,19 @@ stopped for 30 minutes, atomically (renamed aside, then checked again).
   server's own origin, `data:`/`blob:` and https reads of the preview's CDN hosts
   (`PREVIEW_CDN_HOSTS`, the product preview's rule). Every other request is aborted and recorded
   as `blocked-by-policy`, WebSockets are closed and service workers blocked. The policy's digest
-  is part of `PROBER_VERSION` (`genex-prober/6+desktop.3+cdn.<digest>`), so changing the CDN list
+  is part of `PROBER_VERSION` (`genex-prober/6+desktop.4+cdn.<digest>`), so changing the CDN list
   asks for a new calibration and regrades.
+- **Pointer lock**: the page instrument never passes a game's `requestPointerLock()` to the
+  browser, because on macOS even headless Chromium then takes the real cursor of whoever is at
+  the Mac. The game gets a synthetic lock instead (`pointerLockElement`, `pointerlockchange`,
+  movement deltas), and the snapshot says so (`pointerLock.shimmed`).
 - **Quick probe** (`grade/quick-probe.ts`, `PROBER_VERSION` in `scripts/evals/prober/types.ts`):
   boot within the first-draw timeout, a 3 s idle baseline, the entrance judged by witnesses (never
   a pixel diff), a 4 s gameplay baseline and seven input bursts. It answers the eight quick rows
-  with a 20 s error window. Headless Chromium uses ANGLE Metal, falling back to SwiftShader; the
+  with a 20 s error window. An input response must clear three times the no-input baseline's p95
+  and an absolute floor: 0.4% of the frame, or a quarter of one cell of the instrument's 64×36
+  frame mirror when the baseline never changed at all (`STILL_CHANGE_DIFF`), so one small thing
+  moving on a still board counts. The soak's stillness floor uses the same absolute floor. Headless Chromium uses ANGLE Metal, falling back to SwiftShader; the
   renderer is read back and frame-rate rows never gate on software.
 - **Full prober** (`prober/full-probe.ts`, phases in `prober/phases/`): the quick phases, then
   directions, acknowledgement, interaction, a look sweep, a seeded 300 s soak and a 390×844 phone
