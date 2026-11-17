@@ -247,6 +247,69 @@ describe("Antigravity's sign-in, plan and models", () => {
     await assert.rejects(stat(agents[1]?.invocation.cwd ?? ""), "the check's folder is removed");
   });
 
+  it("stays signed in while one of its own sessions runs: no check starts beside a build, whatever one would say", async () => {
+    let now = 0;
+    let refuse = false;
+    let finish: (answer: Json) => void = () => {};
+    const { engine, agents } = await engineWith(
+      {
+        // A check is a session that is never prompted; the build's own session opened before any refusal.
+        session: async () => (refuse ? refusal() : {}),
+        prompt: () =>
+          new Promise<Json>((resolve) => {
+            finish = resolve;
+          }),
+      },
+      { now: () => now },
+    );
+    assert.equal((await engine.status()).code, EngineStatusCode.Ready);
+    const prompted = () => agents.some((agent) => methods(agent).includes(AcpMethod.SessionPrompt));
+    const build = engine.delegate({ cwd: await game(), prompt: "Build the loot tables" });
+    while (!prompted()) await setImmediate();
+
+    // The incident: a check beside a long build was refused, and the chat asked for a sign-in
+    // while the build went on working.
+    refuse = true;
+    now += 23 * 60_000;
+    assert.equal((await engine.status()).code, EngineStatusCode.Ready, "the open session is the sign-in's proof");
+    assert.equal((await engine.account()).source, LoginSource.System);
+    assert.equal((await engine.models()).length, 6);
+    assert.equal(agents.length, 2, "the first check and the build: no check ran beside the build");
+
+    finish({ stopReason: "end_turn" });
+    assert.equal((await build).ok, true);
+    // With no session left to vouch for it, the account is asked again, and a real sign-out shows.
+    assert.equal((await engine.status()).code, EngineStatusCode.NeedsLogin);
+  });
+
+  it("asks a signed-in account twice before it reads as signed out", async () => {
+    let now = 0;
+    let refusals = 0;
+    const { engine, agents } = await engineWith(
+      { session: async () => (refusals-- > 0 ? refusal() : {}) },
+      { now: () => now },
+    );
+    assert.equal((await engine.status()).code, EngineStatusCode.Ready);
+
+    // The CLI answers "sign in" whenever it could not renew the sign-in, a dropped connection included.
+    refusals = 1;
+    now += 2 * 60_000;
+    assert.equal((await engine.status()).code, EngineStatusCode.Ready, "one refusal is asked again");
+    assert.equal((await engine.models()).length, 6, "the models stay listed through it");
+    assert.equal(agents.length, 3);
+
+    refusals = 2;
+    now += 2 * 60_000;
+    assert.equal((await engine.status()).code, EngineStatusCode.NeedsLogin, "two in a row are a sign-out");
+    assert.equal(agents.length, 5);
+
+    // Signed out is believed at once: nothing is asked twice to say so again.
+    refusals = 1;
+    now += 2 * 60_000;
+    assert.equal((await engine.status()).code, EngineStatusCode.NeedsLogin);
+    assert.equal(agents.length, 6);
+  });
+
   it("is a provider the person picks: Beta, its own sign-in, Auto and Plan, never the app's own choice", () => {
     assert.equal(isBeta(EngineId.Antigravity), true);
     assert.equal(isMetered(EngineId.Antigravity), true);
