@@ -46,6 +46,7 @@ import {
   type AntigravitySession,
   type AntigravityTier,
   type Json,
+  antigravityModelId,
   parseAntigravitySession,
   record,
   text,
@@ -267,6 +268,10 @@ export interface AntigravityTurnPlan {
   cwd: string;
   resume?: string | undefined;
   model?: string | undefined;
+  /** The effort picked for `model`, for a model with a dial (`antigravityModelId`). */
+  effort?: string | undefined;
+  /** The account's models as last listed: a loaded session need not list them again. */
+  models?: readonly EngineModel[] | undefined;
   /** The prompt's content blocks; none for a sign-in check, which only opens a session. */
   prompt: Json[];
   signal: AbortSignal;
@@ -314,6 +319,8 @@ export class AntigravityEngine implements Engine {
   /** Counts the sign-ins and sign-outs Genex knows of: a check answers for the count it started at. */
   #asked = 0;
   #probeFailed: { at: number; error: unknown } | null = null;
+  /** The boxed sessions open now, each one proof that the account is signed in. */
+  #open = 0;
 
   constructor(options: AntigravityEngineOptions = {}) {
     this.#scratchRoot = options.scratchRoot ?? path.join(os.tmpdir(), `studio-${EngineId.Antigravity}`);
@@ -386,11 +393,15 @@ export class AntigravityEngine implements Engine {
 
   /**
    * The account as the CLI knows it, asked again once the last answer is stale: a session opened
-   * in an empty folder says the models and the plan, or refuses with ACP's sign-in code.
+   * in an empty folder says the models and the plan, or refuses with ACP's sign-in code. While a
+   * session of the account's own is open nothing is asked: it is the proof, and a check started
+   * beside a long build has been refused and asked a building chat for a sign-in.
    */
   async #account(cli: AntigravityCli): Promise<SignIn> {
     const known = this.#signIn;
     if (known && this.#now() - known.at < SIGN_IN_FRESH_MS) return known;
+    const vouched = this.#vouched();
+    if (vouched && this.#catalog.models().length) return vouched;
     const failed = this.#probeFailed;
     if (failed && this.#now() - failed.at < PROBE_RETRY_MS) throw failed.error;
     // A check that started before a sign-in or a sign-out answers for the account as it was: it
@@ -420,7 +431,31 @@ export class AntigravityEngine implements Engine {
     return signIn;
   }
 
+  /** What the open sessions say of the account: signed in, while one runs and none has been refused. */
+  #vouched(): SignIn | null {
+    const known = this.#signIn;
+    return this.#open > 0 && known?.signedIn ? known : null;
+  }
+
+  /**
+   * One check. The CLI answers "sign in" whenever it could not renew the sign-in, a dropped
+   * connection included, so an account that was signed in is asked a second time before it reads
+   * as signed out; a refusal beside an open session is left to that session to report.
+   */
   async #probe(cli: AntigravityCli): Promise<SignIn> {
+    // As it was when the check started: a sign-in that lands meanwhile has a check of its own.
+    const wasSignedIn = this.#signIn?.signedIn === true;
+    let opened = await this.#ask();
+    if (!opened && wasSignedIn) opened = await this.#ask();
+    const vouched = opened ? null : this.#vouched();
+    if (vouched) return { ...vouched, at: this.#now() };
+    if (opened) await this.#list(cli, opened);
+    else this.#catalog.invalidate();
+    return { at: this.#now(), signedIn: opened !== null, ...(opened?.tier ? { tier: opened.tier } : {}) };
+  }
+
+  /** Open a session in an empty folder and prompt nothing: the session, or null when the CLI asks for a sign-in. */
+  async #ask(): Promise<AntigravitySession | null> {
     const scratch = await this.#scratch("probe-");
     const controller = new AbortController();
     const untimed = this.#schedule(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -440,16 +475,32 @@ export class AntigravityEngine implements Engine {
       untimed();
       await rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
-    const opened = session as AntigravitySession | null;
-    const identity = `${cli.path ?? ""}\0${cli.version ?? ""}\0${opened?.tier?.id ?? ""}`;
-    if (opened)
-      await this.#catalog.refresh(
-        identity,
-        async () => ({ models: opened.models, source: ModelCatalogSource.Provider }),
-        true,
-      );
-    else this.#catalog.invalidate();
-    return { at: this.#now(), signedIn: opened !== null, ...(opened?.tier ? { tier: opened.tier } : {}) };
+    return session;
+  }
+
+  /** The models a session lists become the account's. */
+  async #list(cli: AntigravityCli, session: AntigravitySession): Promise<void> {
+    const identity = `${cli.path ?? ""}\0${cli.version ?? ""}\0${session.tier?.id ?? ""}`;
+    await this.#catalog.refresh(
+      identity,
+      async () => ({ models: session.models, source: ModelCatalogSource.Provider }),
+      true,
+    );
+  }
+
+  /**
+   * A boxed session opened for a turn: the account is signed in as of now, on the plan the session
+   * names (a loaded session may name none: the last one known stands), and its models are listed
+   * when none are.
+   */
+  #sessionOpened(session: AntigravitySession): void {
+    this.#open += 1;
+    const tier = session.tier ?? this.#signIn?.tier;
+    this.#signIn = { at: this.#now(), signedIn: true, ...(tier ? { tier } : {}) };
+    if (this.#catalog.models().length || !session.models.length) return;
+    void this.#resolveCli()
+      .then((cli) => this.#list(cli, session))
+      .catch(() => {});
   }
 
   /** A sign-in or a sign-out happened outside a check: the next status asks the CLI again. */
@@ -488,6 +539,8 @@ export class AntigravityEngine implements Engine {
         cwd: runDir,
         resume: request.resume,
         model: request.model,
+        effort: request.effort,
+        models: this.#catalog.models(),
         prompt: promptBlocks(this.#brief(request, { cwd, scratch, bridge }), request.images ?? []),
         signal: controller.signal,
         neverTouch: request.worker?.neverTouch,
@@ -564,6 +617,8 @@ export class AntigravityEngine implements Engine {
       const plan: AntigravityTurnPlan = {
         cwd: scratch,
         model: request.model,
+        effort: request.effort,
+        models: this.#catalog.models(),
         prompt: promptBlocks(answerPrompt(request), images),
         signal,
       };
@@ -661,9 +716,21 @@ export class AntigravityEngine implements Engine {
   ): Promise<Json | null> {
     plan.signal.throwIfAborted();
     const agent = await this.#startFn(invocation);
+    // A Bypass session runs on the person's own sign-in, and a check is the question itself:
+    // only a boxed session that takes a turn says the box's sign-in works.
+    const vouches = invocation.sandbox !== null && plan.prompt.length > 0;
+    let open = false;
+    const opened = (session: AntigravitySession) => {
+      if (vouches) {
+        open = true;
+        this.#sessionOpened(session);
+      }
+      onSession(session);
+    };
     try {
-      return await runTurn(agent, plan, { onSession, onUpdate, schedule: this.#schedule });
+      return await runTurn(agent, plan, { onSession: opened, onUpdate, schedule: this.#schedule });
     } finally {
+      if (open) this.#open -= 1;
       agent.stop();
     }
   }
@@ -754,7 +821,11 @@ export async function runTurn(
     sessionId = session.sessionId;
     hooks.onSession(session);
     if (!plan.prompt.length) return null;
-    if (plan.model) await connection.request(AcpMethod.SessionSetModel, { sessionId, modelId: plan.model });
+    if (plan.model) {
+      const listed = session.models.length ? session.models : (plan.models ?? []);
+      const modelId = antigravityModelId(listed, plan.model, plan.effort);
+      await connection.request(AcpMethod.SessionSetModel, { sessionId, modelId });
+    }
     live = true;
     return record(await connection.request(AcpMethod.SessionPrompt, { sessionId, prompt: plan.prompt }));
   } catch (err) {

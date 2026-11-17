@@ -16,6 +16,7 @@ import { CatalogError } from "./model-catalog.ts";
 import type { EngineModel } from "./types.ts";
 import { ModelContextSource } from "./types.ts";
 import { ModelCatalogProblemCode } from "../../shared/model-catalog.ts";
+import { ReasoningEffort } from "../../shared/model-preferences.ts";
 import { t } from "../../shared/i18n.ts";
 
 /** A model whose context the session does not give (it gives none) is assumed to have this much. */
@@ -100,16 +101,89 @@ export function parseAntigravitySession(result: unknown, loaded = ""): Antigravi
   const models = record(body.models);
   const current = text(models.currentModelId);
   const listed = Array.isArray(models.availableModels) ? models.availableModels : [];
-  const rows = listed
-    .map((entry) => record(entry))
-    .filter((entry) => text(entry.modelId))
-    .map((entry) => modelRow(text(entry.modelId), text(entry.name), text(entry.modelId) === current));
+  const rows = byThinkingLevel(
+    listed
+      .map((entry) => record(entry))
+      .filter((entry) => text(entry.modelId))
+      .map((entry) => modelRow(text(entry.modelId), text(entry.name), text(entry.modelId) === current)),
+  );
   const tier = record(record(record(body._meta).antigravity).tier);
   return {
     sessionId,
     models: rows,
     ...(text(tier.id) ? { tier: { id: text(tier.id), name: text(tier.name) || text(tier.id) } } : {}),
   };
+}
+
+/** How hard a model thinks, fastest first: the levels an id may end in (`gemini-3.8-flash-high`). */
+const LEVELS: readonly string[] = Object.values(ReasoningEffort);
+/** A name's closing bracket, where Antigravity says the level: "Gemini 3.8 Flash (High)". */
+const NAME_LEVEL = /\s*\([^()]*\)\s*$/;
+
+/** A listed id as a model and the level it thinks at, or null for an id that names no level. */
+function leveled(id: string): { base: string; level: string } | null {
+  const cut = id.lastIndexOf("-");
+  const level = id.slice(cut + 1);
+  return cut > 0 && LEVELS.includes(level) ? { base: id.slice(0, cut), level } : null;
+}
+
+/**
+ * Antigravity lists each thinking level of a model as a model of its own (`gemini-3.8-flash-high`,
+ * `-medium`, `-low`). A model listed at two levels or more becomes one row with an effort dial:
+ * its id is the listed ids' common start, its name the listed name less the level, and it starts
+ * at the level the session starts on, else the one Google lists first. A model listed at one
+ * level stays as listed: there is nothing to dial.
+ */
+function byThinkingLevel(rows: EngineModel[]): EngineModel[] {
+  const families = new Map<string, EngineModel[]>();
+  for (const row of rows) {
+    const base = leveled(row.id)?.base;
+    if (base) families.set(base, [...(families.get(base) ?? []), row]);
+  }
+  const taken = new Set(rows.map((row) => row.id));
+  const grouped = (row: EngineModel): EngineModel[] | undefined => {
+    const base = leveled(row.id)?.base;
+    const family = base ? families.get(base) : undefined;
+    return base && family && family.length > 1 && !taken.has(base) ? family : undefined;
+  };
+  return rows.flatMap((row) => {
+    const family = grouped(row);
+    if (!family) return [row];
+    return family[0] === row ? [familyRow(family)] : [];
+  });
+}
+
+/** One row for a model's listed levels (`byThinkingLevel`). */
+function familyRow(family: EngineModel[]): EngineModel {
+  const [first] = family;
+  if (!first) throw new CatalogError(ModelCatalogProblemCode.Malformed, MESSAGE.Malformed());
+  const level = (row: EngineModel) => leveled(row.id)?.level ?? "";
+  const starts = family.find((row) => row.providerDefault) ?? first;
+  const { providerDefault: _listed, ...row } = first;
+  return {
+    ...row,
+    id: leveled(first.id)?.base ?? first.id,
+    label: first.label.replace(NAME_LEVEL, "") || first.label,
+    supportsThinking: true,
+    efforts: family.map(level).sort((a, b) => LEVELS.indexOf(a) - LEVELS.indexOf(b)),
+    defaultEffort: level(starts),
+    ...(family.some((member) => member.providerDefault) ? { providerDefault: true } : {}),
+  };
+}
+
+/**
+ * The id `session/set_model` takes for a picked model at an effort: a model with a dial
+ * (`byThinkingLevel`) at the effort when it offers it, else at the level it starts at. Any other
+ * id is the listed one already, a level's own id saved before the dial included.
+ */
+export function antigravityModelId(models: readonly EngineModel[], model: string, effort?: string): string {
+  // Nothing listed yet (a loaded session need not list): an effort is only ever sent for a model
+  // with a dial, so the pair names the level's id, unless the id is a level's own already.
+  if (!models.length) return effort && !leveled(model) ? `${model}-${effort}` : model;
+  const row = models.find((candidate) => candidate.id === model);
+  if (!row?.efforts?.length) return model;
+  const level = effort && row.efforts.includes(effort) ? effort : (row.defaultEffort ?? row.efforts[0]);
+  return `${model}-${level}`;
 }
 
 /**

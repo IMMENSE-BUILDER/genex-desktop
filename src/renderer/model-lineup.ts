@@ -117,7 +117,10 @@ function newestFirst(listed: readonly LineupModel[], runnable: ReadonlySet<strin
   return [...ranked, ...listed.filter((model) => !ranked.includes(model))];
 }
 
-/** A Gemini id as Antigravity lists it: `gemini-3.8-flash-high`, `gemini-4-hydrogen-xhigh`. */
+/**
+ * A Gemini id as the Antigravity engine lists it: `gemini-3.8-flash` for a model with an effort
+ * dial, the CLI's own `gemini-4-hydrogen-xhigh` for one it lists at a single level.
+ */
 const GEMINI_ID = /^gemini-(\d+)(?:\.(\d+))?-([a-z]+)(?:-[a-z]+)?$/;
 /** Any Gemini id, read or not. */
 const GEMINI_PREFIX = "gemini-";
@@ -130,8 +133,7 @@ function geminiLineage(model: LineupModel): Lineage | undefined {
 
 /**
  * Antigravity's picker by default: Google's own models, the newest Gemini generation the account
- * lists, each family at its newest version with every thinking level it comes in (3.8 Flash High,
- * Medium and Low). The other vendors' models Google's plan runs (Claude, GPT-OSS) and older Gemini
+ * lists, each family at its newest version (its thinking levels are the row's effort dial). The other vendors' models Google's plan runs (Claude, GPT-OSS) and older Gemini
  * wait, switched off, in Settings; a Gemini id that cannot be read stays in the picker.
  */
 function googleLatest(listed: readonly LineupModel[]): Set<string> {
