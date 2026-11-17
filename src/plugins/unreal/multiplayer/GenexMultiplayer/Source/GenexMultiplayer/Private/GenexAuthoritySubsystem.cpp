@@ -489,6 +489,7 @@ bool UGenexAuthoritySubsystem::IsConnected() const { return Session && Session->
 FString UGenexAuthoritySubsystem::GetSessionId() const { return Session ? GenexAuthorityDetail::Str(Session->SessionId()) : FString(); }
 int32 UGenexAuthoritySubsystem::GetTick() const { return Session ? static_cast<int32>(Session->Tick()) : 0; }
 double UGenexAuthoritySubsystem::GetRtt() const { return Session && Session->Rtt() > 0 ? Session->Rtt() : -1.0; }
+double UGenexAuthoritySubsystem::GetPingMs() const { return Session ? Session->PingMs() : -1.0; }
 double UGenexAuthoritySubsystem::GetRenderDelayMs() const { return Session ? Session->RenderDelayMs() : -1.0; }
 
 FString UGenexAuthoritySubsystem::GetRegion() const { return Session ? GenexAuthorityDetail::Str(Session->Region()) : FString(); }

@@ -18,6 +18,7 @@
 #include "GenexCore/GenexMsgpack.h"
 #include "GenexCore/GenexNoDelay.h"
 #include "GenexCore/GenexOwnPredict.h"
+#include "GenexCore/GenexPing.h"
 #include "GenexCore/GenexProtocol.h"
 #include "GenexCore/GenexRenderDelay.h"
 #include "GenexCore/GenexTickDrawing.h"
@@ -385,6 +386,7 @@ struct Impl {
     const int applied = fastSeat != nullptr ? fastSeat->Status().snapshots : snapshotsPassed;
     passLanded = applied != snapshotsPassed;
     snapshotsPassed = applied;
+    NotePing();
     NotePatches();
     NoteBodies();
     NotePhysicsKeyframe();
@@ -540,6 +542,13 @@ struct Impl {
   std::deque<std::pair<int, double>> sentAt;
   int sentAtEpoch = -1;
   int sentAtAck = 0;
+  /** §17.3 *Ping*: the link's round trip, without the wait in the room's input buffer that `roundTrip` counts. Fed
+   *  by every input sent (NoteSentAt) and every state applied on either channel (NotePing), each state timed by
+   *  the arrival `roundTrip` timed it by; started over with the round trips (ForgetRoundTrips). */
+  ping::Ping linkPing;
+  /** When the state being applied is taken to have arrived (`arrival`, on Clock::NowMs's clock), from
+   *  NoteClockSample until NotePing reads it; no number: that state was not timed. */
+  double stateArrived = NaN();
   /** The upstream throttle (§17.11 *Input pacing*) and the frame instant it last paid at. */
   input_repeat::InputThrottle throttle;
   /** The room's input repeat setting (§17.11 *Input pacing*), cached per preset text (RoomRepeat). */
@@ -1387,12 +1396,24 @@ struct Impl {
     MirrorShadow();
   }
 
+  /** Your seat's player in the state (null before the state lists it). */
+  const aw::AuthorityPlayer* OwnPlayer() const {
+    aw::AuthorityRoomState* st = State();
+    if (st == nullptr || st->players == nullptr || sid.empty()) return nullptr;
+    return static_cast<const aw::AuthorityPlayer*>(colyseus_map_schema_get(st->players, sid.c_str()));
+  }
+
   /** The repeats the state says your seat owes (`inRep`, 0 when the room writes none). */
   double OwnInRep() const {
-    aw::AuthorityRoomState* st = State();
-    if (st == nullptr || st->players == nullptr || sid.empty()) return 0.0;
-    const aw::AuthorityPlayer* p = static_cast<const aw::AuthorityPlayer*>(colyseus_map_schema_get(st->players, sid.c_str()));
+    const aw::AuthorityPlayer* p = OwnPlayer();
     return p != nullptr ? p->inRep : 0.0;
+  }
+
+  /** The inputs the state says the room holds for your seat, received and not yet stepped (`inBuf`, 0 when the
+   *  room writes none). */
+  double OwnInBuf() const {
+    const aw::AuthorityPlayer* p = OwnPlayer();
+    return p != nullptr ? p->inBuf : 0.0;
   }
 
   /** The room's input repeat setting as its preset text publishes it (session.ts roomRepeat). */
@@ -2137,6 +2158,8 @@ struct Impl {
     arrival.Reset();
     sentAt.clear();
     sentAtAck = 0;
+    linkPing.Reset();
+    stateArrived = NaN();
   }
 
   /** A new socket's inputs count from 1 again and the C core starts its clock afresh: so does the estimate. */
@@ -2150,9 +2173,23 @@ struct Impl {
   /** Input `seq` went out on `handle` now; at most the handle's ring of them is kept, as the handle keeps its own. */
   void NoteSentAt(int seq) {
     FollowHandleEpoch();
-    sentAt.emplace_back(seq, Clock::NowMs());
+    const double at = Clock::NowMs();
+    sentAt.emplace_back(seq, at);
     const auto ring = static_cast<std::size_t>((std::max)(1, colyseus_input_handle_replay_buffer_size(handle)));
     while (sentAt.size() > ring) sentAt.pop_front();
+    linkPing.Sent(seq, at);
+  }
+
+  /** §17.3 *Ping*: the state just applied, on either channel, names the newest of your inputs the room has
+   *  received: your inputs' ack plus the ones it holds for your seat. It is timed by the arrival the round trip
+   *  timed it by (NoteClockSample), never by the frame that read it: the two then measure one link, and the ping
+   *  is the round trip wherever the room holds nothing. Send times are Clock::NowMs's, the clock that arrival is
+   *  on. A state the round trip did not time (before the room's first stamp) is timed by its read. */
+  void NotePing() {
+    const double arrived = std::isfinite(stateArrived) ? stateArrived : Clock::NowMs();
+    stateArrived = NaN();
+    if (handle == nullptr) return;
+    linkPing.State(arrived, static_cast<double>(OwnAck()), OwnInBuf(), colyseus_input_handle_sent_count(handle));
   }
 
   /** A state stamped `stamp` on the room's clock was read at `readAt` (Clock::NowMs), acknowledging an input that
@@ -2161,6 +2198,7 @@ struct Impl {
    *  Returns the round trip the pacer handed over (kNoRoundTrip: none). */
   double NoteClockSample(double stamp, double inputAt, double readAt) {
     const double arrived = arrival.Note(stamp, Pump::PolledSinceMs(), readAt, inputAt);
+    stateArrived = arrived;
     return roundTrip.Note(arrived, stamp, std::isfinite(inputAt) ? arrived - inputAt : clock_samples::kNoRoundTrip);
   }
 
@@ -2168,6 +2206,8 @@ struct Impl {
    *  it newly acknowledges went out (none when it acknowledges nothing new or that input's send time is gone). A
    *  state before the room's first stamp times nothing. */
   void NoteStateRoundTrip() {
+    // Whatever an earlier state left: this one's arrival, or none.
+    stateArrived = NaN();
     if (handle == nullptr) return;
     FollowHandleEpoch();
     const double stamp = colyseus_room_clock_last_server_time(colyseus_room_get_clock(room));
@@ -4162,6 +4202,7 @@ void CbState(void* ud) {
   if (impl->resyncFirstState) impl->DropEarlierSockets();
   // §17.3 *The clock's samples*: this state's round trip, paced, before anything is placed by the render time.
   impl->NoteStateRoundTrip();
+  impl->NotePing();
   impl->passLanded = true;
   impl->NotePatches();
   impl->NoteBodies();
@@ -4782,6 +4823,11 @@ const std::string& AuthoritySession::Preset() const {
 double AuthoritySession::Rtt() const {
   if (impl_->room == nullptr) return 0.0;
   return impl_->roundTrip.SmoothedMs();
+}
+
+double AuthoritySession::PingMs() const {
+  if (impl_->room == nullptr) return ping::kNoPing;
+  return impl_->linkPing.Ms();
 }
 
 double AuthoritySession::RenderDelayMs() const { return impl_->renderDelay; }

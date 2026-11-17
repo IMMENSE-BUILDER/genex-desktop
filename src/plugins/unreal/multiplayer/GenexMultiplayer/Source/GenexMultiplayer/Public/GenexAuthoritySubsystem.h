@@ -218,8 +218,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Genex|Authority") double GetServerTick() const;
 	UFUNCTION(BlueprintPure, Category = "Genex|Authority") TArray<FGenexAuthorityPlayer> GetPlayers() const;
 	UFUNCTION(BlueprintPure, Category = "Genex|Authority") FGenexAuthorityTelemetry GetTelemetry() const;
-	/** Smoothed round trip (ms), or -1 before the first. */
+	/** Smoothed round trip of an input to the state that acknowledges it (ms), or -1 before the first. In a paced
+	 *  room (PROTOCOL.md §17.11 *Input pacing*) it holds the time the room kept the input in the seat's buffer, so it
+	 *  is not what a game shows as ping: that is Get Ping Ms. */
 	UFUNCTION(BlueprintPure, Category = "Genex|Authority") double GetRtt() const;
+	/** The link's smoothed round trip to the room's server (ms, PROTOCOL.md §17.3 *Ping*), without the wait in the
+	 *  room's buffer: what a game shows as ping, with Get Region. -1 without a session, before the first sample and
+	 *  from a new socket until its first. */
+	UFUNCTION(BlueprintPure, Category = "Genex|Authority") double GetPingMs() const;
 	/** The render delay in use (ms, PROTOCOL.md §17.3 *The render delay*): how far behind the server this frame
 	 *  drew other entities, and what its inputs' render-time stamps carried. Options.RenderDelayMs in a room that
 	 *  publishes no ceiling; between it and the room's ceiling otherwise. -1 without a session. */

@@ -1,6 +1,6 @@
 # Room templates
 
-Four complete server-authoritative games to start from. Each passes `npx genex-authority-dev
+Five complete server-authoritative games to start from. Each passes `npx genex-authority-dev
 validate` as written; the fourth uses server physics ([physics.md](physics.md)), which needs a
 validator with the physics core.
 
@@ -11,6 +11,13 @@ validator with the physics core.
    (a projectile the module re-launches, see [presets.md](presets.md)).
 4. **A physics car arena**: the car arena with a real physics ball and four crate stacks the server
    simulates (see [physics.md](physics.md)). It reuses the third template's world and client.
+5. **A first-person arena**: the `firstperson` preset through a level of boxes and ramps, an instant
+   shot from the eye that walls stop and that hits bodies (not balls at the feet), the hit marker the
+   frame the player fires, health, kills and respawns. Start a shooter from this one.
+
+Every client shows the region and the ping (`session.region`, `session.pingMs`) and keeps playing
+through a dropped socket and a server deploy (`reconnecting`, `rejoining`, `rejoined`): keep both
+when you change one.
 
 ## Template 1: a top-down arena
 
@@ -163,7 +170,10 @@ floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
 const hud = document.createElement("div");
 hud.style.cssText = "position:fixed;left:12px;top:12px;color:#fff;font:14px system-ui";
-document.body.append(hud);
+/** The region and the ping, under the HUD. */
+const link = document.createElement("div");
+link.style.cssText = "position:fixed;left:12px;top:34px;color:#9fb0c4;font:12px system-ui";
+document.body.append(hud, link);
 
 const keys = new Set<string>();
 addEventListener("keydown", (e) => keys.add(e.code));
@@ -188,10 +198,23 @@ const session = await connectAuthority({
   hud.textContent = REFUSED[err.code ?? 0] ?? "Couldn't join the game.";
   throw err;
 });
+/** Every mesh drawn for the room the session is in, by entity id. */
+const drawn = new Map<string, THREE.Object3D>();
+session.on("reconnecting", () => (hud.textContent = "Reconnecting…")); // the socket dropped: the SDK restores it
+session.on("reconnected", () => (hud.textContent = ""));
+session.on("rejoining", () => (hud.textContent = "Reconnecting…")); // the room is gone (a deploy): the SDK finds the next
+session.on("rejoined", (info) => {
+  // A new seat in a new room: session.id is new and every entity is that room's. Draw it afresh.
+  for (const mesh of drawn.values()) scene.remove(mesh);
+  drawn.clear();
+  hud.textContent = info.moved ? "Found players, joining their room" : "";
+});
 session.on("disconnect", (code) => {
   hud.textContent = code === 4500 ? "The game was stopped." : "Disconnected from the game.";
 });
 session.on("kill", () => (hud.textContent = `score ${JSON.parse(session.me()?.data || "{}").score ?? 0}`));
+/** What the player reads about the link: the region and pingMs. Never rttMs, which holds the room's input buffer. */
+const linkLine = (): string => (session.pingMs < 0 ? "" : `${session.region || "local"} · ${Math.round(session.pingMs)} ms`);
 
 /** A body: a capsule with a nose along +x, so its aim shows. */
 function makeBody(mine: boolean): THREE.Group {
@@ -203,22 +226,21 @@ function makeBody(mine: boolean): THREE.Group {
   return body;
 }
 
-const bodies = new Map<string, THREE.Group>();
 function draw(entities: Map<string, AuthorityEntityView>): void {
   for (const [id, e] of entities) {
-    let body = bodies.get(id);
+    let body = drawn.get(id);
     if (!body) {
       body = makeBody(e.owner === session.id);
       scene.add(body);
-      bodies.set(id, body);
+      drawn.set(id, body);
     }
     body.position.set(e.x, 0.8, e.y); // the server's y is three's z
     body.rotation.y = -e.yaw;
   }
-  for (const [id, body] of bodies) {
+  for (const [id, body] of drawn) {
     if (entities.has(id)) continue;
     scene.remove(body);
-    bodies.delete(id);
+    drawn.delete(id);
   }
 }
 
@@ -231,6 +253,7 @@ function loop(now: number): void {
   session.input.buttons = firing ? FIRE : 0;
   session.frame(now);
   draw(session.entities());
+  link.textContent = linkLine();
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
@@ -253,6 +276,13 @@ What it shows, and what to keep when you change it:
   `hp` on a hit, which is what confirms it.
 - **A respawn snaps** because the module bumps `epoch`; nothing in the client needs to know.
 - **A refused join is said in the player's words** and never retried in a loop.
+- **The link line is `session.region` and `session.pingMs`.** `pingMs` is the link's round trip, the
+  number a player calls ping. `session.rttMs` also holds the time the room kept the input in its
+  buffer: never show it as ping.
+- **A drop and a deploy are survived, and said.** `reconnecting` / `reconnected` is the same seat on a
+  restored socket. `rejoining` / `rejoined` is a new seat in a new room on the same `session` object:
+  `session.id` is new and so is every entity, so the handler removes every mesh and `draw` builds the
+  room again. `disconnect` is the only end.
 
 A game whose identity setup is not done yet loads `$genex-threejs-embed-auth` first: `initEmbed` runs
 before anything here.
@@ -442,8 +472,9 @@ mirror image inside the wall.
 ### The client, with three.js
 
 Start from template 1's client, in the same file: keep its imports, everything above `makeBody`
-(the renderer, camera, floor, HUD, keys, pointer, `FIRE`, `REFUSED` and the join) and `makeBody`
-itself, drop its `kill` handler, and replace its `bodies`, `draw` and `loop` with this:
+(the renderer, camera, floor, HUD, link line, keys, pointer, `FIRE`, `REFUSED`, the join, `drawn` and
+the `reconnecting`, `reconnected`, `rejoining`, `rejoined` and `disconnect` handlers) and `makeBody`
+itself, drop its `kill` handler, and replace its `draw` and `loop` with this:
 
 ```ts
 // src/arena.ts, template 2: bolts drawn from their flight; your own predicted the frame you fire.
@@ -461,17 +492,16 @@ const boltGeometry = new THREE.SphereGeometry(0.2);
 const mineMaterial = new THREE.MeshBasicMaterial({ color: 0x9be7ff });
 const theirsMaterial = new THREE.MeshBasicMaterial({ color: 0xffb347 });
 
-/** Every drawn entity by id. A predicted bolt keeps its id when the server's confirms it, so one
- *  mesh flies from the click to the hit. */
-const meshes = new Map<string, THREE.Object3D>();
+/** `drawn` holds every entity's mesh by id. A predicted bolt keeps its id when the server's confirms
+ *  it, so one mesh flies from the click to the hit. */
 function draw(entities: Map<string, AuthorityEntityView>): void {
   for (const [id, e] of entities) {
     const bolt = e.t0 > 0; // a projectile
-    let mesh = meshes.get(id);
+    let mesh = drawn.get(id);
     if (!mesh) {
       mesh = bolt ? new THREE.Mesh(boltGeometry, e.src === session.id ? mineMaterial : theirsMaterial) : makeBody(e.owner === session.id);
       scene.add(mesh);
-      meshes.set(id, mesh);
+      drawn.set(id, mesh);
     }
     if (bolt) {
       mesh.position.set(e.x, BOLT_HEIGHT + e.z, e.y); // where its flight is now: never smooth it
@@ -480,10 +510,10 @@ function draw(entities: Map<string, AuthorityEntityView>): void {
       mesh.rotation.y = -e.yaw;
     }
   }
-  for (const [id, mesh] of meshes) {
+  for (const [id, mesh] of drawn) {
     if (entities.has(id)) continue; // gone: a hit, a wall after the last bounce, or a refused shot
     scene.remove(mesh);
-    meshes.delete(id);
+    drawn.delete(id);
   }
 }
 
@@ -503,6 +533,11 @@ session.on("hit", (data) => {
 /** A fire input is staged and not sent yet, and inputsSent when the last one went. */
 let armed = false;
 let lastShot = -Infinity;
+// A new seat counts its inputs from 0 again: without this no shot fires until the old count is passed.
+session.on("rejoined", () => {
+  armed = false;
+  lastShot = -Infinity;
+});
 
 function loop(now: number): void {
   const me = session.me();
@@ -525,6 +560,7 @@ function loop(now: number): void {
     lastShot = session.telemetry.inputsSent;
   }
   draw(session.entities());
+  link.textContent = linkLine();
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
@@ -548,6 +584,9 @@ What it shows, on top of template 1:
   states that follow do not show the body hurt. What confirms it is the module's own `hp`: `strike`
   lowers it, and a takedown bumps `epoch`. Nothing in the module changes.
 - **Damage, takedowns and score still come only from the server**: the `hit` event, `hp` and `data`.
+- **A rejoin resets the fire count.** `session.telemetry` starts over with the new seat, so the
+  `rejoined` handler clears `armed` and `lastShot`; a predicted hit still pending is cancelled by the
+  session, and `onPredictedHit` / `onHitSettled` keep hearing on the new seat.
 
 ## Template 3: a car arena (`vehicle`, and a ball)
 
@@ -821,6 +860,9 @@ export default defineRoom({
     // Every other parameter at its default (maxSpeed 1410, boost 2300, substeps 2); the sandbox
     // writes the world's hash into params.world.
     preset: { name: "vehicle", params: { radius: CAR_R, height: CAR_H } },
+    // The car genre (settings.md): cars shove each other and bounce, slide off roofs, and a starved
+    // seat is held, not stepped again under its last input.
+    contacts: { preset: "vehicle-arena" },
   },
   world: WORLD,
   init() {
@@ -949,10 +991,24 @@ const session = await connectAuthority({
   hud.textContent = REFUSED[err.code ?? 0] ?? "Couldn't join the game.";
   throw err;
 });
-session.on("disconnect", (code) => {
-  hud.textContent = code === 4500 ? "The game was stopped." : "Disconnected from the game.";
-});
+/** Every mesh drawn for the room the session is in, by entity id. */
+const meshes = new Map<string, THREE.Object3D>();
+/** A goal, or what the link is doing, shown in the HUD until it is over. */
 let banner = "";
+/** The session ended for good: the HUD says why and nothing more is drawn over it. */
+let over = "";
+session.on("reconnecting", () => (banner = "Reconnecting…")); // the socket dropped: the SDK restores it
+session.on("reconnected", () => (banner = ""));
+session.on("rejoining", () => (banner = "Reconnecting…")); // the room is gone (a deploy): the SDK finds the next
+session.on("rejoined", (info) => {
+  // A new seat in a new room: session.id is new and every entity is that room's. Draw it afresh.
+  for (const mesh of meshes.values()) scene.remove(mesh);
+  meshes.clear();
+  banner = info.moved ? "Found players, joining their room" : "";
+});
+session.on("disconnect", (code) => {
+  over = code === 4500 ? "The game was stopped." : "Disconnected from the game.";
+});
 session.on("goal", (data) => {
   const goal = data as { team: string; scorer: string };
   banner = goal.scorer === session.id ? "You scored!" : `${goal.team} scores`;
@@ -970,7 +1026,6 @@ function makeCar(team: string): THREE.Group {
   return car;
 }
 
-const meshes = new Map<string, THREE.Object3D>();
 function draw(entities: Map<string, AuthorityEntityView>): void {
   for (const [id, e] of entities) {
     let mesh = meshes.get(id);
@@ -981,7 +1036,7 @@ function draw(entities: Map<string, AuthorityEntityView>): void {
       scene.add(mesh);
       meshes.set(id, mesh);
     }
-    toThree(mesh.position, e.x, e.y, e.z); // the ball from its flight; your car predicted; the others a render delay behind
+    toThree(mesh.position, e.x, e.y, e.z); // the ball from its flight; your car predicted; the other cars on your car's clock
     mesh.rotation.y = e.yaw; // the heading, about three's up axis
   }
   for (const [id, mesh] of meshes) {
@@ -1008,7 +1063,9 @@ function loop(now: number): void {
   }
   const score = JSON.parse(session.entity("ball")?.data || '{"blue":0,"orange":0}');
   const why = session.prediction.reason === "world_mismatch" ? " · world mismatch: not predicted" : "";
-  hud.textContent = `blue ${score.blue} : ${score.orange} orange · boost ${Math.round((me?.fuel ?? 0) * 100)}${banner ? ` · ${banner}` : ""}${why}`;
+  // The region and pingMs: the link's round trip. Never rttMs, which holds the room's input buffer.
+  const ping = session.pingMs < 0 ? "" : ` · ${session.region || "local"} ${Math.round(session.pingMs)} ms`;
+  hud.textContent = over || `blue ${score.blue} : ${score.orange} orange · boost ${Math.round((me?.fuel ?? 0) * 100)}${ping}${banner ? ` · ${banner}` : ""}${why}`;
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
@@ -1027,14 +1084,23 @@ What it shows, and what to keep when you change it:
   `data`, and the `goal` and `touch` events.
 - **A touch looks a little early or late**, by about the one-way latency (presets.md says why).
   Test at `--latency 75` and judge whether it plays well there, not at zero.
+- **Cars are solid to each other by the room's genre**: `contacts: { preset: "vehicle-arena" }`
+  ([settings.md](settings.md)). The server runs the contact pass and the session runs the same pass in
+  its prediction, so a bump shows as it happens; neither side has contact code. The genre also holds a
+  starved seat instead of repeating its input, and draws the other cars on your own car's clock.
+- **The HUD shows `session.region` and `session.pingMs`**, and says when the SDK is restoring a
+  dropped socket (`reconnecting`) or moving the seat to a new room after a deploy (`rejoining`). On
+  `rejoined` the seat and every entity are new: the handler removes every mesh and `draw` builds the
+  room again.
 
 ## Template 4: a physics car arena (server physics)
 
 The car arena of template 3 with the ball and four crate stacks simulated by the server's physics
 core ([physics.md](physics.md)). Each car's hull pushes the ball and topples the crates; the module
 only spawns the bodies, watches the ball for goals and puts everything back at a kickoff. Clients
-draw the ball and the crates from the server, at its present. It needs the physics core
-([physics.md](physics.md) says when Genex's servers run it).
+draw the ball and the crates from the server, at its present. At `tickHz: 120` the genre sends 120
+updates a second and the room counts twice toward a server's capacity
+([settings.md](settings.md#tick-rate)); this template runs at 60.
 
 ### The world, shared by both sides
 
@@ -1117,6 +1183,8 @@ export default defineRoom({
     preset: { name: "vehicle", params: { radius: CAR_R, height: CAR_H } },
     // lengthUnit 100 and gravity 650 come from the vehicle preset.
     physics: { subscribe: ["ball"], player: { events: true } },
+    // The car genre (settings.md): cars shove each other and bounce, slide off roofs.
+    contacts: { preset: "vehicle-arena" },
   },
   world: WORLD,
   init(ctx) {
@@ -1196,7 +1264,7 @@ function draw(entities: Map<string, AuthorityEntityView>): void {
       scene.add(mesh);
       meshes.set(id, mesh);
     }
-    toThree(mesh.position, e.x, e.y, e.z); // a body at the server's present; your car predicted; other cars a render delay behind
+    toThree(mesh.position, e.x, e.y, e.z); // a body at the server's present; your car predicted; the other cars on your car's clock
     if (e.body) mesh.quaternion.set(e.qx, e.qz, -e.qy, e.qw);
     else mesh.rotation.set(0, e.yaw, 0);
   }
@@ -1215,3 +1283,584 @@ What to keep when you change it:
   ball and the crates back across the arena.
 - **The client never moves a body.** It draws what `session.entities()` says, already extrapolated
   to the server's present.
+
+## Template 5: a first-person arena (`firstperson`, hitscan on bodies)
+
+Up to eight players run, jump and duck through a walled arena of pillars, crates and a platform with
+two ramps, on the `firstperson` preset. The fire button is an instant shot from the eye along the aim:
+the world stops it at the first wall, and it is judged against the other players' bodies (upright
+capsules, lower when ducked) where the shooter saw them. Four hits take a player down; they start a
+new life at the spawn point farthest from everyone, shielded for a moment, and the shooter scores.
+The shooter's client shows the hit marker the frame it fires. The rules behind each line are in
+[presets.md](presets.md) (`firstperson`, "A shot and the world", "Axes and three.js") and
+[settings.md](settings.md) (the `shooter` genre).
+
+### The world and the numbers, shared by both sides
+
+```ts
+// src/fps-world.ts: imported by server/room.js AND by the client, so both move and aim through one world.
+
+/** Button bits in input.buttons. Fire is bit 1, the bit the local bots and the validation fuzz press
+ *  most; the room's config moves the preset's jump, duck and walk onto the other three. */
+export const FIRE = 1;
+export const DUCK = 2;
+export const WALK = 4;
+export const JUMP = 8;
+
+/** A body as a target: the preset's radius, standHeight and crouchHeight. The module's hitscan and
+ *  the client's predicted hit are given this same object. */
+export const BODY = { kinds: ["player"], radius: 16, height: 72, duckHeight: 54 };
+/** The eye above the feet, standing, and how much lower it is fully ducked. */
+export const EYE = 64;
+export const DUCK_DROP = 18;
+/** How far a shot reaches, units (about an inch each). */
+export const RANGE = 4096;
+/** Health at a spawn, and what one hit takes. */
+export const MAX_HP = 100;
+export const DAMAGE = 25;
+/** Ticks between two shots of one player: 5 shots a second at 60 Hz. */
+export const COOLDOWN_TICKS = 12;
+/** The entity.flags bit of a freshly spawned body, which no shot hurts. */
+export const SHIELDED = 1;
+
+/** Half the arena's side, and its walls' thickness and height. */
+const HALF = 768;
+const WALL = 32;
+const TOP = 256;
+
+/** The collision world: boxes [minX, minY, minZ, maxX, maxY, maxZ] and ramps
+ *  [minX, minY, minZ, maxX, maxY, maxZ, axis, lo, hi], z up. Every value an integer, so a float32.
+ *  The module exports it and the client hands it to its session: one world, one hash. */
+export const WORLD = {
+  boxes: [
+    [-HALF - WALL, -HALF - WALL, -64, HALF + WALL, HALF + WALL, 0], // 0: the floor
+    [-HALF - WALL, -HALF - WALL, 0, -HALF, HALF + WALL, TOP], // 1 to 4: the walls
+    [HALF, -HALF - WALL, 0, HALF + WALL, HALF + WALL, TOP],
+    [-HALF, -HALF - WALL, 0, HALF, -HALF, TOP],
+    [-HALF, HALF, 0, HALF, HALF + WALL, TOP],
+    [-128, -128, 0, 128, 128, 96], // the platform in the middle, reached by the two ramps
+    [-416, -416, 0, -352, -352, 160], // four pillars
+    [352, -416, 0, 416, -352, 160],
+    [-416, 352, 0, -352, 416, 160],
+    [352, 352, 0, 416, 416, 160],
+    [-48, -400, 0, 48, -336, 48], // two crates, low enough to jump onto
+    [-48, 336, 0, 48, 400, 48],
+  ],
+  ramps: [
+    [-320, -64, 0, -128, 64, 96, 0, 0, 96], // rises along +x onto the platform
+    [128, -64, 0, 320, 64, 96, 0, 96, 0], // rises along -x onto the platform
+  ],
+};
+
+/** Where a life starts, [x, y] on the floor: the corners and the middle of each side, clear of cover. */
+export const SPAWNS = [
+  [-608, -608], [608, 608], [-608, 608], [608, -608],
+  [-608, 0], [608, 0], [0, -608], [0, 608],
+];
+```
+
+### The room module
+
+```js
+// server/room.js (first-person arena): runs on Genex's servers (and the local authority server), never in a browser.
+import { BODY, COOLDOWN_TICKS, DAMAGE, DUCK, DUCK_DROP, EYE, FIRE, JUMP, MAX_HP, RANGE, SHIELDED, SPAWNS, WALK, WORLD } from "../src/fps-world";
+
+/** Ticks a fresh spawn cannot be hurt: 1.5 s at 60 Hz. Its own first shot ends it. */
+const SHIELD_TICKS = 90;
+
+/** Marks the room module, as defineRoom from @genex-ai/multiplayer/authority/module does. */
+const defineRoom = (room) => room;
+
+/** The spawn point farthest from every other player, by squared distance; a seeded draw breaks ties. */
+function pickSpawn(ctx, seat) {
+  let best = SPAWNS[0];
+  let bestScore = -1;
+  for (const spot of SPAWNS) {
+    let near = 1e12;
+    for (const body of ctx.entities.all()) {
+      if (body.kind !== "player" || body.owner === seat) continue;
+      const dx = body.x - spot[0];
+      const dy = body.y - spot[1];
+      near = Math.min(near, dx * dx + dy * dy);
+    }
+    const score = near + ctx.random();
+    if (score > bestScore) {
+      bestScore = score;
+      best = spot;
+    }
+  }
+  return best;
+}
+
+/** A new life: full health at a spawn point, at rest, standing and shielded. The epoch bump makes
+ *  every client snap there instead of sliding across the arena. */
+function respawn(ctx, body) {
+  const [x, y] = pickSpawn(ctx, body.owner);
+  ctx.entities.update(body.id, {
+    x, y, z: 0, vx: 0, vy: 0, vz: 0, duck: 0, mstate: 0, hp: MAX_HP, flags: SHIELDED, epoch: body.epoch + 1,
+  });
+  ctx.state.shield[body.owner] = SHIELD_TICKS;
+}
+
+/** The shield is over: the body can be hurt, and every client stops drawing it faded. */
+function unshield(ctx, seat) {
+  ctx.state.shield[seat] = 0;
+  const body = ctx.entities.ownedBy(seat);
+  if (body) ctx.entities.update(body.id, { flags: 0 });
+}
+
+/** A seat's kills and deaths into its body's data, where every client reads the score. */
+function showScore(ctx, seat) {
+  const body = ctx.entities.ownedBy(seat);
+  const score = ctx.state.score[seat];
+  if (body) ctx.entities.update(body.id, { data: { k: score.k, d: score.d } });
+}
+
+/** A hit: damage, and on the last of the health a kill for the shooter and a new life for the target.
+ *  The lower hp (or the new epoch) is what confirms the shooter's predicted hit. */
+function strike(ctx, seat, target) {
+  if (target.hp > DAMAGE) {
+    ctx.entities.update(target.id, { hp: target.hp - DAMAGE });
+    return;
+  }
+  const victim = target.owner;
+  ctx.state.score[seat].k += 1;
+  ctx.state.score[victim].d += 1;
+  showScore(ctx, seat);
+  showScore(ctx, victim);
+  ctx.emit("kill", { by: seat, victim });
+  respawn(ctx, target);
+}
+
+/** One shot from the eye along the aim. The world says how far it flies; the rewind says which body
+ *  it enters first on the way, where this shooter saw the bodies. */
+function fire(ctx, seat) {
+  const me = ctx.entities.ownedBy(seat);
+  if (!me) return;
+  const eye = { x: me.x, y: me.y, z: me.z + EYE - DUCK_DROP * me.duck };
+  const c = Math.cos(me.pitch);
+  const dir = { x: c * Math.cos(me.yaw), y: c * Math.sin(me.yaw), z: Math.sin(me.pitch) };
+  const wall = ctx.world.ray(eye, dir, { range: RANGE });
+  const reach = wall ? wall.dist : RANGE;
+  const hit = ctx.rewind.hitscan(eye, dir, { ...BODY, range: reach });
+  const target = hit ? ctx.entities.get(hit.id) : undefined;
+  // A shielded body stops the shot and takes nothing.
+  const hurt = target !== undefined && !(ctx.state.shield[target.owner] > 0);
+  const dist = hit ? hit.dist : reach;
+  ctx.emit("shot", {
+    shooter: seat,
+    victim: hurt ? target.owner : "",
+    from: [Math.fround(eye.x), Math.fround(eye.y), Math.fround(eye.z)],
+    to: [Math.fround(eye.x + dir.x * dist), Math.fround(eye.y + dir.y * dist), Math.fround(eye.z + dir.z * dist)],
+  });
+  if (hurt) strike(ctx, seat, target);
+}
+
+/** The scores the room before this one handed on at a deploy (onDrain), by uid. Read as written by
+ *  an older version of this module: anything that is not a score is dropped. */
+function keptScores(handoff) {
+  const kept = {};
+  const score = handoff && typeof handoff === "object" && !Array.isArray(handoff) ? handoff.score : null;
+  if (!score || typeof score !== "object" || Array.isArray(score)) return kept;
+  for (const uid of Object.keys(score)) {
+    const s = score[uid];
+    if (s && Number.isInteger(s.k) && Number.isInteger(s.d)) kept[uid] = { k: s.k, d: s.d };
+  }
+  return kept;
+}
+
+export default defineRoom({
+  contract: 1,
+  config: {
+    tickHz: 60,
+    maxPlayers: 8,
+    // Every other parameter at its default (run 250, gravity 800, a hull 32 wide and 72 tall); the
+    // sandbox writes the world's hash into params.world.
+    preset: { name: "firstperson", params: { jumpBit: JUMP, duckBit: DUCK, walkBit: WALK } },
+    // A shot fired with this button is judged where its shooter saw the bodies.
+    lagComp: { buttons: FIRE },
+    // The shooter genre (settings.md): players are solid, stand on each other's heads and are never
+    // shoved; 60 updates a second; a starved seat is stepped again under its last input.
+    contacts: { preset: "shooter" },
+  },
+  world: WORLD,
+  init(ctx) {
+    // score, uid, cooldown, shield: by seat. kept: the last room's scores, by uid.
+    return { score: {}, uid: {}, cooldown: {}, shield: {}, kept: keptScores(ctx.handoff) };
+  },
+  onJoin(ctx, player) {
+    const kept = ctx.state.kept[player.uid];
+    ctx.state.score[player.id] = kept ? { k: kept.k, d: kept.d } : { k: 0, d: 0 };
+    ctx.state.uid[player.id] = player.uid;
+    ctx.state.cooldown[player.id] = 0;
+    const id = ctx.entities.spawn({ kind: "player", owner: player.id, hp: MAX_HP });
+    respawn(ctx, ctx.entities.get(id));
+    showScore(ctx, player.id);
+  },
+  onLeave(ctx, player) {
+    const body = ctx.entities.ownedBy(player.id);
+    if (body) ctx.entities.remove(body.id);
+    delete ctx.state.score[player.id];
+    delete ctx.state.uid[player.id];
+    delete ctx.state.cooldown[player.id];
+    delete ctx.state.shield[player.id];
+  },
+  onInput(ctx, seat, input) {
+    // The preset has already moved and turned this player's body by this input.
+    if ((input.buttons & FIRE) === 0 || ctx.state.cooldown[seat] > 0) return;
+    ctx.state.cooldown[seat] = COOLDOWN_TICKS;
+    if (ctx.state.shield[seat] > 0) unshield(ctx, seat);
+    fire(ctx, seat);
+  },
+  step(ctx) {
+    for (const seat of Object.keys(ctx.state.cooldown)) {
+      if (ctx.state.cooldown[seat] > 0) ctx.state.cooldown[seat] -= 1;
+      if (ctx.state.shield[seat] > 0) {
+        ctx.state.shield[seat] -= 1;
+        if (ctx.state.shield[seat] === 0) unshield(ctx, seat);
+      }
+    }
+  },
+  onDrain(ctx) {
+    // A deploy closes this room. Its players are moved to the next one with new seat ids, so the
+    // scores go on by uid; that room's init reads them as ctx.handoff.
+    const score = {};
+    for (const seat of Object.keys(ctx.state.score)) score[ctx.state.uid[seat]] = ctx.state.score[seat];
+    return { score };
+  },
+});
+```
+
+package.json:
+
+```json
+{ "genex": { "authority": { "module": "server/room.js", "maxPlayers": 8 } } }
+```
+
+Validate it with `--root .`: the module imports `src/fps-world.ts`, which is outside `server/`. Grow
+from here: a weapon is its own button bit in `lagComp.buttons` with its own `DAMAGE`, `RANGE` and
+cooldown; a headshot compares the hit's height over `ctx.rewind.pose(hit.id)` with the body's height
+there; a rocket or a grenade is a projectile swept with `{ ...BODY, rewind: true }`, with
+`projectiles: true` beside `buttons` in `lagComp` ([projectiles.md](projectiles.md)); a level made in
+an editor replaces `WORLD` through `genex world fit` ([levels.md](levels.md)); rounds and teams are
+`ctx.state` plus events, with teammates skipped in `fire` and marked by a `flags` bit the client can
+read.
+
+### The client, with three.js
+
+```ts
+// src/shooter.ts: joins the first-person arena, sends the stick, the aim and the buttons, draws what the server says.
+import * as THREE from "three";
+import { connectAuthority, type AuthorityEntityView } from "@genex-ai/multiplayer/authority";
+import { getAuthorityHome, getAuthorityRegions, getAuthorityUrls, getColyseusAuth, waitForPlayer } from "@genex-ai/embed-sdk";
+import { GENEX } from "./genex.config";
+import { BODY, COOLDOWN_TICKS, DUCK, DUCK_DROP, EYE, FIRE, JUMP, RANGE, SHIELDED, WALK, WORLD } from "./fps-world";
+
+/** Inputs between two shots: the module's COOLDOWN_TICKS plus slack for jitter, so the server never
+ *  refuses a shot this client already showed. */
+const FIRE_EVERY_INPUTS = COOLDOWN_TICKS + 3;
+/** Radians the view turns per pixel of mouse travel. */
+const SENSITIVITY = 0.0022;
+/** The most the view looks up or down, radians: inside the preset's pitchLimit. */
+const PITCH_MAX = 1.5;
+/** How long the hit marker, a tracer and a notice stay on screen, ms. */
+const MARKER_MS = 250;
+const TRACER_MS = 80;
+const NOTICE_MS = 3000;
+
+/** A refused join's code (JoinError) in the player's words. */
+const REFUSED: Record<number, string> = {
+  402: "Online play isn't available for this game right now.",
+  424: "This game's server isn't ready yet.",
+  426: "This game needs an update to play online.",
+  429: "The game's servers are busy right now. Try again later.",
+  503: "No game server is free right now. Try again in a moment.",
+};
+
+/** Server (x, y, z) to three.js (x, z, -y): z up becomes y up, with handedness kept. Never (x, z, y):
+ *  that mirror image turns the strafe-right key into a step to the left on screen. */
+const toThree = (v: THREE.Vector3, x: number, y: number, z: number) => v.set(x, z, -y);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a2233);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 2));
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 1, 8000);
+const hud = document.createElement("div");
+hud.style.cssText = "position:fixed;left:12px;top:12px;color:#fff;font:14px system-ui;white-space:pre";
+const cross = document.createElement("div");
+cross.style.cssText = "position:fixed;left:50%;top:50%;translate:-50% -50%;font:22px system-ui;pointer-events:none";
+document.body.append(renderer.domElement, hud, cross);
+
+/** A ramp as the server has it: a box whose top rises along x (axis 0) or y (axis 1) from lo to hi. */
+function rampMesh(r: number[], material: THREE.Material): THREE.Mesh {
+  const [x0, y0, z0, x1, y1, , axis, lo, hi] = r;
+  const geometry = new THREE.BoxGeometry(x1 - x0, 1, y1 - y0);
+  const corner = geometry.attributes.position;
+  for (let i = 0; i < corner.count; i++) {
+    // How far along the rise this corner is: 0 at the axis's min end, 1 at its max end.
+    const along = axis === 0 ? corner.getX(i) / (x1 - x0) + 0.5 : 0.5 - corner.getZ(i) / (y1 - y0);
+    corner.setY(i, corner.getY(i) > 0 ? lo + (hi - lo) * along : z0);
+  }
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, material);
+  toThree(mesh.position, (x0 + x1) / 2, (y0 + y1) / 2, 0);
+  return mesh;
+}
+
+// The level, drawn from the same boxes and ramps the bodies collide with. Shots are traced against it.
+const level = new THREE.Group();
+const stone = new THREE.MeshStandardMaterial({ color: 0x66707f });
+WORLD.boxes.forEach((b, i) => {
+  const material = i === 0 ? new THREE.MeshStandardMaterial({ color: 0x2a3340 }) : stone;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(b[3] - b[0], b[5] - b[2], b[4] - b[1]), material);
+  toThree(box.position, (b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2);
+  level.add(box);
+});
+for (const r of WORLD.ramps) level.add(rampMesh(r, stone));
+scene.add(level);
+
+const keys = new Set<string>();
+addEventListener("keydown", (e) => keys.add(e.code));
+addEventListener("keyup", (e) => keys.delete(e.code));
+/** The view: yaw turns from +x toward +y (left), pitch is positive up. */
+let viewYaw = 0;
+let viewPitch = 0;
+let firing = false;
+const locked = () => document.pointerLockElement === renderer.domElement;
+renderer.domElement.addEventListener("pointerdown", () => {
+  if (locked()) firing = true;
+  else renderer.domElement.requestPointerLock(); // the first click takes the mouse, the next ones fire
+});
+addEventListener("pointerup", () => (firing = false));
+addEventListener("pointermove", (e) => {
+  if (!locked()) return;
+  viewYaw -= e.movementX * SENSITIVITY; // +yaw turns left, so the mouse moving right lowers it
+  if (viewYaw >= Math.PI) viewYaw -= 2 * Math.PI;
+  if (viewYaw < -Math.PI) viewYaw += 2 * Math.PI;
+  viewPitch = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, viewPitch - e.movementY * SENSITIVITY));
+});
+
+await waitForPlayer();
+const session = await connectAuthority({
+  urls: getAuthorityUrls(),
+  regions: getAuthorityRegions(), // each region is its own pool
+  home: getAuthorityHome(), // the player's region by geography: joined first
+  room: GENEX.slug,
+  auth: () => getColyseusAuth(),
+  world: WORLD,
+}).catch((err: { code?: number }) => {
+  hud.textContent = REFUSED[err.code ?? 0] ?? "Couldn't join the game.";
+  throw err;
+});
+
+/** One line under the HUD: a kill, or what the link is doing. `until` is when it clears. */
+let notice = "";
+let noticeUntil = Infinity;
+function say(text: string, ms = Infinity): void {
+  notice = text;
+  noticeUntil = performance.now() + ms;
+}
+/** A seat's name from the roster. */
+const nameOf = (seat: string): string => (seat === session.id ? "You" : session.players().get(seat)?.name || "Player");
+
+/** Every other player's body, by entity id, with the material that fades while it is shielded. */
+const drawn = new Map<string, { root: THREE.Group; suit: THREE.MeshStandardMaterial }>();
+/** A fire input is staged and not sent yet; inputsSent when the last one went; the life the view was set for. */
+let armed = false;
+let lastShot = -Infinity;
+let life = -1;
+
+session.on("reconnecting", () => say("Reconnecting…")); // the socket dropped: the SDK restores it
+session.on("reconnected", () => say(""));
+session.on("rejoining", () => say("Reconnecting…")); // the room is gone (a deploy, a dead server): the SDK finds the next
+session.on("rejoined", (info) => {
+  // A new seat in a new room, on this same session object: session.id is new, every entity is that
+  // room's, and the seat counts its inputs from 0 again. Draw afresh and start the fire count over.
+  for (const body of drawn.values()) scene.remove(body.root);
+  drawn.clear();
+  armed = false;
+  lastShot = -Infinity;
+  life = -1;
+  say(info.moved ? "Found players, joining their room" : "", NOTICE_MS);
+});
+session.on("disconnect", (code) => say(code === 4500 ? "The game was stopped." : "Disconnected from the game."));
+session.on("kill", (data) => {
+  const kill = data as { by: string; victim: string };
+  say(`${nameOf(kill.by)} took down ${nameOf(kill.victim)}`, NOTICE_MS);
+});
+
+/** A body the hull's size with its feet at the origin, and a visor along +x so its aim shows. */
+function makeBody(): { root: THREE.Group; suit: THREE.MeshStandardMaterial } {
+  const root = new THREE.Group();
+  const suit = new THREE.MeshStandardMaterial({ color: 0xff6b5b, transparent: true });
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(BODY.radius, BODY.height - 2 * BODY.radius), suit);
+  torso.position.y = BODY.height / 2;
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(8, 6, 20), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+  visor.position.set(BODY.radius, EYE, 0);
+  root.add(torso, visor);
+  return { root, suit };
+}
+
+function draw(entities: Map<string, AuthorityEntityView>): void {
+  for (const [id, e] of entities) {
+    if (e.owner === session.id) continue; // first person: your own body is the camera
+    let body = drawn.get(id);
+    if (!body) {
+      body = makeBody();
+      scene.add(body.root);
+      drawn.set(id, body);
+    }
+    toThree(body.root.position, e.x, e.y, e.z); // the feet; other players a render delay behind
+    body.root.rotation.y = e.yaw; // the model faces +x, so it turns onto the heading
+    body.root.scale.y = 1 - (1 - BODY.duckHeight / BODY.height) * e.duck; // 72 tall standing, 54 ducked
+    body.suit.opacity = (e.flags & SHIELDED) !== 0 ? 0.4 : 1;
+  }
+  for (const [id, body] of drawn) {
+    if (entities.has(id)) continue;
+    scene.remove(body.root);
+    drawn.delete(id);
+  }
+}
+
+/** Tracers on screen, each removed TRACER_MS after it was drawn. */
+const tracers: { line: THREE.Line; until: number }[] = [];
+const tracerMaterial = new THREE.LineBasicMaterial({ color: 0xfff2a8 });
+function tracer(from: readonly number[], to: readonly number[]): void {
+  const ends = [toThree(new THREE.Vector3(), from[0], from[1], from[2] - 6), toThree(new THREE.Vector3(), to[0], to[1], to[2])];
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(ends), tracerMaterial);
+  scene.add(line);
+  tracers.push({ line, until: performance.now() + TRACER_MS });
+}
+// Everyone else's shots, from the server's word. Your own is drawn the frame you fire.
+session.on("shot", (data) => {
+  const shot = data as { shooter: string; from: number[]; to: number[] };
+  if (shot.shooter !== session.id) tracer(shot.from, shot.to);
+});
+
+/** The predicted hit whose marker is showing, and until when. */
+let marked = "";
+let markedUntil = 0;
+// Your own shot reaches a body on your screen: the marker shows now, a round trip before the server's word.
+session.onPredictedHit((hit) => {
+  // The module takes nothing off a shielded body: show no marker for a hit it will not count.
+  if (((session.entity(hit.target)?.flags ?? 0) & SHIELDED) !== 0) return;
+  marked = hit.id;
+  markedUntil = performance.now() + MARKER_MS;
+});
+// The state that judged the shot did not show the body hurt: take the marker back.
+session.onHitSettled((hit, confirmed) => {
+  if (!confirmed && hit.id === marked) markedUntil = 0;
+});
+
+const raycaster = new THREE.Raycaster();
+const origin = new THREE.Vector3();
+const heading = new THREE.Vector3();
+/** The module's shot for the input being staged, shown now: fire() in server/room.js with the same
+ *  eye, direction, BODY and reach. */
+function shoot(me: AuthorityEntityView, yaw: number, pitch: number): void {
+  const eye = [me.x, me.y, me.z + EYE - DUCK_DROP * me.duck] as const;
+  const c = Math.cos(pitch);
+  const dir = [c * Math.cos(yaw), c * Math.sin(yaw), Math.sin(pitch)] as const;
+  // The module stops the shot at the world with ctx.world.ray. No client has that call: trace the drawn level.
+  raycaster.set(toThree(origin, ...eye), toThree(heading, ...dir));
+  raycaster.far = RANGE;
+  const reach = raycaster.intersectObject(level, true)[0]?.distance ?? RANGE;
+  const hit = session.predictHitscan(eye, dir, { ...BODY, range: reach });
+  const dist = hit ? hit.dist : reach;
+  tracer(eye, [eye[0] + dir[0] * dist, eye[1] + dir[1] * dist, eye[2] + dir[2] * dist]);
+}
+
+function loop(now: number): void {
+  const me = session.me();
+  if (me && me.epoch !== life) {
+    // A new life (the first spawn, a respawn): look at the middle of the arena.
+    life = me.epoch;
+    viewYaw = Math.atan2(-me.y, -me.x);
+    viewPitch = 0;
+  }
+  const forward = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
+  const right = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+  // The stick in the WORLD's axes: the keys turned by the view's yaw.
+  session.input.moveX = forward * Math.cos(viewYaw) + right * Math.sin(viewYaw);
+  session.input.moveY = forward * Math.sin(viewYaw) - right * Math.cos(viewYaw);
+  // float32, as the server stores them, so the predicted shot runs along the module's own ray
+  const yaw = Math.fround(viewYaw);
+  const pitch = Math.fround(viewPitch);
+  session.input.yaw = yaw;
+  session.input.pitch = pitch;
+  if (me && firing && !armed && session.connected && session.telemetry.inputsSent - lastShot >= FIRE_EVERY_INPUTS) {
+    shoot(me, yaw, pitch); // predicted while the firing input is staged, before the frame() that sends it
+    armed = true;
+  }
+  const held = (keys.has("Space") ? JUMP : 0) | (keys.has("ControlLeft") ? DUCK : 0) | (keys.has("ShiftLeft") ? WALK : 0);
+  session.input.buttons = held | (armed ? FIRE : 0);
+  const sent = session.frame(now);
+  if (armed && sent > 0) {
+    armed = false; // only the input the prediction was made for fires
+    lastShot = session.telemetry.inputsSent;
+  }
+  draw(session.entities());
+
+  const mine = session.me();
+  if (mine) {
+    // The camera at the eye, looking along the aim.
+    toThree(camera.position, mine.x, mine.y, mine.z + EYE - DUCK_DROP * mine.duck);
+    camera.rotation.set(viewPitch, viewYaw - Math.PI / 2, 0, "YXZ");
+  }
+  const at = performance.now();
+  while (tracers.length > 0 && tracers[0].until <= at) {
+    const done = tracers.shift();
+    if (!done) break;
+    scene.remove(done.line);
+    done.line.geometry.dispose();
+  }
+  cross.textContent = at < markedUntil ? "×" : "+";
+  cross.style.color = at < markedUntil ? "#ff5040" : "#fff";
+  if (at > noticeUntil) notice = "";
+  const score = JSON.parse(mine?.data || "{}") as { k?: number; d?: number };
+  // The region and pingMs: the link's round trip. Never rttMs, which holds the room's input buffer.
+  const ping = session.pingMs < 0 ? "" : ` · ${session.region || "local"} ${Math.round(session.pingMs)} ms`;
+  const why = session.prediction.reason === "world_mismatch" ? " · world mismatch: not predicted" : "";
+  hud.textContent = `hp ${mine?.hp ?? 0} · ${score.k ?? 0} kills · ${score.d ?? 0} deaths${ping}${why}\n${notice}`;
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+```
+
+What it shows, and what to keep when you change it:
+
+- **One file holds the world and every number both sides use.** The module and the client import
+  `WORLD`, `BODY`, the button bits, `EYE`, `RANGE` and `COOLDOWN_TICKS` from `src/fps-world.ts`, so the
+  prediction can never drift from the server's rule. A world that differs by one number turns
+  prediction off (the HUD says so).
+- **Fire is button bit 1** and jump is moved to bit 8 (`jumpBit: JUMP`), so the local bots and the
+  validation fuzz, which press bit 1 most, fire instead of hopping.
+- **The stick is sent in the world's axes**: the keys turned by the view's yaw. The view is the
+  player's own (`viewYaw`, `viewPitch`), sent as `yaw` and `pitch`; the client never moves the body.
+- **Drawn at `(x, z, -y)` with `rotation.y = yaw`**, and the camera with
+  `rotation.set(pitch, yaw - Math.PI / 2, 0, "YXZ")` at the eye. Never the top-down templates'
+  `(x, z, y)`.
+- **A shot is three steps the module takes in this order**: the world's stop (`ctx.world.ray`), the
+  bodies inside that distance where the shooter saw them (`ctx.rewind.hitscan` with `BODY` and
+  `lagComp: { buttons: FIRE }`), then the damage. `BODY`'s `height` and `duckHeight` make each target
+  an upright capsule on its feet; without them the target is a ball at the feet and a shot at the
+  chest misses.
+- **The hit marker shows the frame the player fires.** `shoot` gives `session.predictHitscan` the
+  module's own eye, direction and `BODY`, with `range` cut to what the drawn level stops; it runs
+  before the `frame()` that sends the fire bit, and the bit is cleared once that input is sent.
+  `onHitSettled` takes the marker back when the server did not hurt the target. A shielded body gets
+  no marker: the client reads the `flags` bit the module skips by.
+- **Health, kills, deaths and respawns come only from the server**: `hp`, the score in each body's
+  `data`, the `shot` and `kill` events, and the `epoch` bump that makes a respawn snap. Names come from
+  `session.players()`.
+- **The `shooter` genre** makes players solid to each other with no contact code on either side.
+- **The HUD shows `session.region` and `session.pingMs`**, the link's round trip. The room buffers a
+  seat's inputs on a link that stalls and `session.rttMs` includes that wait: never show it as ping.
+- **A drop and a deploy are survived.** `reconnecting` / `reconnected`: the same seat on a restored
+  socket. `rejoining` / `rejoined`: a new seat in a new room on the same `session` object, so the
+  handler removes every drawn body and starts the fire count and the view's life over; the listeners
+  and `session.input` carry over by themselves. The module's `onDrain` hands the scores to the next
+  room by uid, so a deploy costs nobody their kills.

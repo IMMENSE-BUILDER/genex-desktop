@@ -735,11 +735,19 @@ class GENEX_CORE_API AuthoritySession final : public IPumped {
   double Tick() const;
   /** The room's movement preset as JSON text ("" = none). */
   const std::string& Preset() const;
-  /** Smoothed round trip in ms; 0 until the first input is acknowledged: one sample per 50 ms reaches it,
-   *  whatever the room's update rate, each timed by its state's stamp and the link's time (§17.3 *The clock's
-   *  samples*, *A state's arrival*; GenexClockSamples.h), so a stall's burst of states does not move it. It
-   *  counts the wait for the room's next update after an input lands. */
+  /** Smoothed round trip of an input to the state that acknowledges it, in ms; 0 until the first input is
+   *  acknowledged: one sample per 50 ms reaches it, whatever the room's update rate, each timed by its state's
+   *  stamp and the link's time (§17.3 *The clock's samples*, *A state's arrival*; GenexClockSamples.h), so a
+   *  stall's burst of states does not move it. It counts the wait for the room's next update after an input
+   *  lands, and in a paced room (§17.11 *Input pacing*) the time the room held the input in the seat's buffer, so
+   *  it is not what a game shows as ping: that is PingMs(). */
   double Rtt() const;
+  /** The link's smoothed round trip to the room's server, in ms (§17.3 *Ping*; GenexPing.h): the time since the
+   *  newest input the room has received was sent, without the wait in the room's buffer; -1 until the first
+   *  sample and again from a new socket until its first. With Region(), what a game shows a player about the
+   *  link. Each state is timed by the arrival Rtt() times it by (§17.3 *A state's arrival*), so in a room that
+   *  holds nothing the two read the same link. */
+  double PingMs() const;
   /** The render delay in use, ms (§17.3 *The render delay*): how far behind the server the last Frame() drew
    *  other entities, and the delay its inputs' render-time stamps carried. AuthorityOptions::renderDelayMs in a
    *  room that publishes no ceiling; between it and the room's ceiling otherwise, following this client's link.

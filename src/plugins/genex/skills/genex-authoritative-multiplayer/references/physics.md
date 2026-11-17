@@ -1,15 +1,14 @@
 # Server physics: crates, balls, doors
 
 A room module can ask Genex's servers to simulate rigid bodies — crates that topple, a ball that
-bounces off cars, doors on hinges — with the Genex Physics core. The server alone steps them. Every
-client only **draws** them: at the server's present, smoothed when a correction arrives. A client
-never moves a body itself.
+bounces off cars, doors on hinges — with the Genex Physics core. The server steps them, and its
+state is the truth. The game's client code only **draws** them, from `session.entities()`, and never
+moves a body itself. The session draws each at the server's present, smoothed when a correction
+arrives; a client that hands its session the same core (`physicsCore` in `connectAuthority`) predicts
+them with it, and one that does not draws them from the server's states.
 
-**New, and not on Genex's servers until the release that carries the physics core is deployed.**
-`genex-authority-dev validate` runs a physics module on that same core; a validator without it fails
-`physics_unavailable` (update `@genex-ai/authority-dev`). Until the servers run it, a game that must
-ship today keeps to presets and projectiles ([presets.md](presets.md),
-[projectiles.md](projectiles.md)).
+Genex's servers run physics rooms. `genex-authority-dev validate` runs a physics module on the same
+core; a validator without it fails `physics_unavailable` (update `@genex-ai/authority-dev`).
 
 Reach for physics when things must collide with each other: a stack, a pile, a ball between cars
 and walls, a door a player shoves. A player's own movement stays a preset, so it is predicted and
@@ -35,6 +34,11 @@ config: {
 | `limits` | The defaults below | Lower any limit; higher ones are clamped. |
 | `subscribe` | `[]` | Up to 8 physics kinds whose body states `ctx.physics.body(key)` returns. |
 | `player` | `{ events: false }` | `events: true` reports the players' hulls touching bodies. A `topdown` room also gives `radius` and `height` here, or its players have no hulls. |
+| `predict` | `true` | Whether a client may predict the room's bodies. A client does only when it hands its session a physics core (`physicsCore`); `false` has every client draw them from the server. |
+| `patchHz` | The room's update rate | The same setting as `config.patchHz` ([settings.md](settings.md#update-rate)): give one, or the same number in both. |
+| `remotePredict` | `"extrapolate"` | How a predicting client moves other players' bodies between updates: by their velocity (`extrapolate`), under their last input held (`hold`), or under it repeated and decayed (`inputDecay`). |
+| `remoteDecayMs` | 50 | With `inputDecay`: the ms after which a repeated input has decayed to rest, 0 to 1000. |
+| `leadMs` | 250 | How far a client predicts past the last update's ack, ms, 50 to 1000. |
 
 Any other key is a bad config. A room's limits: 512 bodies, 64 joints, 16 bodies with continuous
 collision (`ccd`), 64 queries a tick, 64 events a tick, at most 256 commands a tick.

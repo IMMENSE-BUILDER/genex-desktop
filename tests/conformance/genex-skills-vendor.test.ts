@@ -30,7 +30,7 @@ import {
   splitVendoredSkill,
   writeManifest,
 } from "../../scripts/refresh-genex-skills.ts";
-import { GENEX_GAME_PACKAGES, type GenexGamePackage as GenexGamePackageName } from "../../src/shared/genex.ts";
+import { GENEX_GAME_PACKAGES, GENEX_STUDIO_TOOLS } from "../../src/shared/genex.ts";
 import type { PluginManifest } from "../../src/shared/plugins.ts";
 import { inspectPackage } from "../../src/substrate/plugins/manifest.ts";
 import { tmpDir } from "../helpers/tmp.ts";
@@ -218,14 +218,20 @@ test("Studio's SDK pins are at least what the server-authoritative card asks for
     const order = (a ?? []).map((part, i) => part - (b?.[i] ?? 0)).find((difference) => difference !== 0) ?? 0;
     return order >= 0;
   };
-  const rows: Array<[GenexGamePackageName, RegExp]> = [
-    ["@genex-ai/embed-sdk", /an embed SDK at (\d+\.\d+\.\d+) or newer/],
-    ["@genex-ai/multiplayer", /Projectiles need `@genex-ai\/multiplayer` (\d+\.\d+\.\d+) or newer/],
+  // The card's one sentence of versions (CLI 1.43.6): "Everything this skill teaches is in `@genex-ai/multiplayer` X,
+  // `@genex-ai/embed-sdk` Y and `@genex-ai/authority-dev` Z".
+  const asked =
+    /Everything this skill teaches is in `@genex-ai\/multiplayer` (\d+\.\d+\.\d+), `@genex-ai\/embed-sdk` (\d+\.\d+\.\d+) and `@genex-ai\/authority-dev` (\d+\.\d+\.\d+)/.exec(
+      card.replace(/\s+/g, " "),
+    );
+  assert.ok(asked, "the card names the multiplayer SDK, the embed SDK and the room toolchain it needs");
+  const [, multiplayer = "", embed = "", authorityDev = ""] = asked;
+  const rows: Array<[string, string, string]> = [
+    ["@genex-ai/multiplayer", GENEX_GAME_PACKAGES["@genex-ai/multiplayer"], multiplayer],
+    ["@genex-ai/embed-sdk", GENEX_GAME_PACKAGES["@genex-ai/embed-sdk"], embed],
+    ["@genex-ai/authority-dev", GENEX_STUDIO_TOOLS["@genex-ai/authority-dev"], authorityDev],
   ];
-  for (const [name, asks] of rows) {
-    const minimum = asks.exec(card.replace(/\s+/g, " "))?.[1];
-    assert.ok(minimum, `the card names the ${name} it needs`);
-    const pin = GENEX_GAME_PACKAGES[name];
+  for (const [name, pin, minimum] of rows) {
     assert.ok(atLeast(pin, minimum), `Studio pins ${name} ${pin}; the card needs ${minimum}`);
   }
 });
