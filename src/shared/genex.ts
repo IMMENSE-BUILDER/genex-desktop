@@ -502,6 +502,8 @@ export interface GenexPublishJob {
   room?: GenexPublishRoom;
   /** How far the build or its source is on the way up; only on a running job, never in its record. */
   progress?: GenexSendProgress;
+  /** A publish of the game's apps alone (`publishAppsOnly`): no web build goes with it. */
+  appsOnly?: boolean;
 }
 /**
  * What one publish made of a game's room module, from the CLI's own record of its gate (the report

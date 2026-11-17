@@ -1138,6 +1138,7 @@ export class GenexTools {
         phase: publishPhaseFor(meta),
         startedAt: new Date().toISOString(),
         title: cleanGenexTitle(title) ?? state.renamed ?? state.title ?? defaultGenexTitle(project),
+        appsOnly: true,
       };
       const unread = await this.#stageAppsOnline(project, { state, job, dir, apps }, roomStage);
       state.job = job;

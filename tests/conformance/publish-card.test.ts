@@ -14,6 +14,10 @@ import {
   CloudSendState,
   GenexBuildReview,
   type GenexCloudBuild,
+  GenexPublishJobState,
+  GenexPublishKind,
+  GenexPublishPhase,
+  type GenexPublishState,
   GenexSendStage,
   type GenexNativeRecord,
 } from "../../src/shared/genex.ts";
@@ -31,6 +35,7 @@ import {
   followStep,
   leftWords,
   pressPlan,
+  recordRows,
   sendCalls,
 } from "../../src/renderer/panels/plugins/genex/publish-card-view.ts";
 import { WebOffer } from "../../src/renderer/panels/plugins/genex/publish-platforms-view.ts";
@@ -553,6 +558,44 @@ describe("the Publish card's web row", () => {
     assert.deepEqual([building?.status, building?.busy], ["On this Mac", "Building"]);
     assert.equal(web({ asked })?.status, "Ready to publish", "the build landed: the ask is answered");
     assert.deepEqual(unity(missing, { webOffer: WebOffer.Unavailable }), [], "no row for a web version nothing makes");
+  });
+});
+
+describe("the Publish card read from the publish record", () => {
+  it("never reads a publish of the apps alone as the web version on its way", () => {
+    // An apps-only publish runs as a publish job too: its Uploading is the Mac app's, not a web build's.
+    const running = (appsOnly: boolean): GenexPublishState => ({
+      version: 1,
+      project: "strike",
+      connected: true,
+      job: {
+        id: "job-1",
+        kind: GenexPublishKind.Gallery,
+        state: GenexPublishJobState.Running,
+        phase: GenexPublishPhase.Uploading,
+        startedAt: at(MINUTE_MS),
+        ...(appsOnly ? { appsOnly } : {}),
+      },
+      native: record(null, [], { sending: true }),
+    });
+    const context = { now: NOW, webOffer: WebOffer.Unavailable, madeHere: new Set([PublishTarget.Mac]), mac: true };
+    const apps = recordRows(unrealFolder(READY, 10 * MINUTE_MS), running(true), context);
+    assert.deepEqual(
+      apps.map((row) => [row.name, row.status]),
+      [
+        ["Mac", "Sending to Genex"],
+        ["Windows", "Not built"],
+      ],
+      "a game with no web version gets no web row",
+    );
+    const webGame = (appsOnly: boolean) =>
+      rowOf(recordRows([platform(PublishTarget.Web, READY)], running(appsOnly), context), PublishTarget.Web);
+    assert.deepEqual(
+      [webGame(true)?.status, webGame(true)?.busy],
+      ["Ready to publish", null],
+      "a web build waiting in the folder still waits",
+    );
+    assert.deepEqual([webGame(false)?.status, webGame(false)?.busy], ["Uploading", "Publishing"]);
   });
 });
 

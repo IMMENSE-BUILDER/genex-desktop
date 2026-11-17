@@ -526,6 +526,7 @@ describe("a game with only apps, published", () => {
     const { genex, runs } = await toolsWithStandIn(true, await fixtureApi());
     const started = await genex.publishAppsOnly("dust", [app("Dust Runners"), WINDOWS], "Dust Runners");
     assert.equal(started.job?.state, "running");
+    assert.equal(started.job?.appsOnly, true, "its job says no web build goes with it");
     const state = await genex.publishWait("dust");
     const calls = (await runs()).map((call) =>
       call.args.filter((arg) => !arg.startsWith("--env") && arg !== "--api-url"),
