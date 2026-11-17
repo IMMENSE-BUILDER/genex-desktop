@@ -12,7 +12,7 @@ import {
   type GenexPublishJob,
   type GenexPublishState,
 } from "../../shared/genex.ts";
-import { SECOND_MS } from "../../shared/duration.ts";
+import { MINUTE_MS, SECOND_MS } from "../../shared/duration.ts";
 import { t } from "../../shared/i18n.ts";
 import { stripAnsi } from "./cli.ts";
 import type { GenexConnection } from "./entry-page.ts";
@@ -402,6 +402,21 @@ export function mergeMeta(state: GenexPublishState, meta: HostedMeta | null | un
   if (state.status !== GenexHostedStatus.Published) delete state.playUrl;
   else if (isGenexLink(meta?.playUrl)) state.playUrl = meta.playUrl;
   Object.assign(state, publishUrls(meta));
+}
+
+/** How long after a publish, an export or a preview Genex not knowing the game is no sign it is gone: it may not list it yet. */
+const JUST_PUBLISHED_MS = 30 * MINUTE_MS;
+
+/** Whether the record was last touched (published, exported, previewed, or a publish job ran) less than {@link JUST_PUBLISHED_MS} before `now`. */
+export function justPublished(state: GenexPublishState, now: number): boolean {
+  const stamps = [
+    state.lastPublishAt,
+    state.lastExportAt,
+    state.lastPreviewAt,
+    state.job?.startedAt,
+    state.job?.finishedAt,
+  ];
+  return stamps.some((stamp) => now - Date.parse(stamp ?? "") < JUST_PUBLISHED_MS);
 }
 
 /** The page link the CLI printed for sharing, when it is one of ours. */
