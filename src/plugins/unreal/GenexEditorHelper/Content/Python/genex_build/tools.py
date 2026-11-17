@@ -266,7 +266,9 @@ class GenexBuildTools(unreal.ToolsetDefinition):
 
         Args:
             file: The model (.glb .gltf .fbx .obj, at most 100 MB) in the game folder's assets/ or
-                public/assets/, relative to the game folder (assets/blender/<job>/model.glb).
+                public/assets/, relative to the game folder (assets/blender/<job>/model.glb). In an
+                Unreal project that is not a Genex game's unreal/ folder: any file inside the project
+                folder, relative to it.
             dest: The /Game/ folder for the model's folder, such as /Game/Models.
             name: The model's folder name: a letter, then up to 63 letters, digits or _.
             collision: box (simple boxes: props), convex (hulls: odd shapes), complex (its own
@@ -291,7 +293,8 @@ class GenexBuildTools(unreal.ToolsetDefinition):
         Run character_check before the character goes into the game.
 
         Args:
-            file: The model file, relative to the game folder (assets/agents/<id>/hero.glb).
+            file: The model file, relative to the game folder (assets/agents/<id>/hero.glb), or to
+                the project folder in a project that is not a Genex game's unreal/ folder.
             dest: The /Game/ folder for its folder, such as /Game/Characters.
             name: Its folder name: a letter, then up to 63 letters, digits or _.
 
@@ -307,7 +310,8 @@ class GenexBuildTools(unreal.ToolsetDefinition):
         """Imports the clips of a .glb, .gltf or .fbx of the game's assets onto an existing skeleton.
 
         Args:
-            file: The file, relative to the game folder.
+            file: The file, relative to the game folder, or to the project folder in a project that
+                is not a Genex game's unreal/ folder.
             skeleton: The Skeleton asset's /Game/ path (import_character answers it).
             dest: The /Game/ folder for its folder.
             name: Its folder name: a letter, then up to 63 letters, digits or _.
@@ -323,7 +327,8 @@ class GenexBuildTools(unreal.ToolsetDefinition):
         """Imports a .wav, .mp3, .ogg or .flac of the game's assets as a sound wave.
 
         Args:
-            file: The sound file, relative to the game folder (assets/sfx/hit.mp3).
+            file: The sound file, relative to the game folder (assets/sfx/hit.mp3), or to the project
+                folder in a project that is not a Genex game's unreal/ folder.
             dest: The /Game/ folder for its folder, such as /Game/Sounds.
             name: Its folder name: a letter, then up to 63 letters, digits or _.
 

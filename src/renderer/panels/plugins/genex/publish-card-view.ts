@@ -577,7 +577,9 @@ export function recordRows(
   context: CardContext,
 ): CardRow[] {
   const view = publishView(state, context.now);
-  const webSend = view.running ? { status: view.phase, since: view.startedAt, progress: view.progress } : undefined;
+  // A publish of the apps alone runs as a publish job too: its steps are the apps', never the web version's.
+  const webGoes = view.running && state.job?.appsOnly !== true;
+  const webSend = webGoes ? { status: view.phase, since: view.startedAt, progress: view.progress } : undefined;
   return cardRows({
     ...context,
     platforms,

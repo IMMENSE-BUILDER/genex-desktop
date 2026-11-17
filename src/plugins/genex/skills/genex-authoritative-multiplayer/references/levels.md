@@ -81,9 +81,9 @@ what no body can touch is not there. Three choices, each on top of the last:
 1. **`ctx.world.ray(eye, dir, { range: 4096 })`** asks the room's world. Enough when what stops a body stops a bullet.
 2. **`ctx.world.ray(eye, dir, { range: 4096, world: "shot" })`** asks the module's `shotWorld`, which `genex world shots` fits on the trace
    channel: what a muzzle can see from where a body can be, what no body reaches included. A room without one is never answered from its
-   `world`: the call throws naming `no_shot_world`, and `authority validate` fails `shot_world_missing`. A module with several `worlds` names a `shotWorlds` entry for each, with a
+   `world`: the call throws naming `no_shot_world`, and `genex-authority-dev validate` fails `shot_world_missing`. A module with several `worlds` names a `shotWorlds` entry for each, with a
    `shotWorld` for any other room, or it does not load. It has no hash and no client knows it. Its cost is real: it is in the module's bytes and the sandbox's
-   memory, and `authority validate` fails `shot_world_cost` when a ray costs a room's budget. The fit's report says how far its stops are
+   memory, and `genex-authority-dev validate` fails `shot_world_cost` when a ray costs a room's budget. The fit's report says how far its stops are
    from the source's surfaces and on what share of rays the two disagree. Exit 3 names the actors when it does not fit its budget.
 3. **`ctx.world.claim(eye, dir, claimed, { range: 4096 })`** takes the stop the shooter's own client saw on the mesh it draws, and holds it to
    the shot world. A claimed stop is as exact as what the player sees, and costs what a ray costs.

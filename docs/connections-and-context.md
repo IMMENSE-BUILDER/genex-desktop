@@ -135,7 +135,9 @@ contractor environment (no keys, none of the other vendor's variables; Codex wit
 `CODEX_NON_INTERACTIVE=1` so it asks nothing), keeps only its last output for `studio.log` and
 stops it after ten minutes. Both installers use folders discovery already searches (`~/.local/bin`;
 Codex's `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` on Windows). The engine then rechecks, and an
-installer that exits cleanly without a working CLI counts as failed. There is one job per CLI: a
+installer that exits cleanly without a working CLI counts as failed. When Claude Code's installer
+fails, main asks its download host (`downloads.claude.ai`) once and keeps the refusal or network
+error with the failure, as a failed download keeps its own. There is one job per CLI: a
 second press joins it and every button follows it (`cli.install`). The page names only which CLI;
 `studio:cli-install.start` is native, so fixture profiles refuse it. Like the person's own terminal,
 the installer runs outside `ProcessSandbox` ([cli-installer.ts](../src/substrate/cli-installer.ts)).
@@ -375,7 +377,10 @@ terminal reads and prints nothing; the box is made under the engine's own scratc
 connected Check connection, Sign in again and Update. The CLI has no command that says whether it
 is signed in, so the engine asks by opening a session in an empty folder, at most once a minute:
 the answer lists the models the account can run and its plan, or refuses with ACP's sign-in code
-(`-32000`). The row's status names the CLI's version and the plan. First launch's "or use" lines offer it beside Grok Build and Cursor on the first line (plans a person may already pay for; local models, OpenRouter and OpenCode on the second), with its Beta tag and the same Install and Sign in on its own screen. The model list is the account's (`session/new`'s `availableModels`, so a paid plan's newer Gemini shows by itself); the picker starts with the newest Gemini generation it lists, each family at its newest version with every thinking level (`googleLatest` in `renderer/model-lineup.ts`), and the other vendors' models Google's plan runs (Claude, GPT-OSS) and older Gemini wait under More models.
+(`-32000`). While a boxed session of a turn is open it is the proof and nothing is asked, and a
+signed-in account is asked a second time before one refusal reads as signed out: the CLI answers
+"sign in" whenever it could not renew the sign-in, and a check refused beside a long build had the
+chat ask a working build for a sign-in. The row's status names the CLI's version and the plan. First launch's "or use" lines offer it beside Grok Build and Cursor on the first line (plans a person may already pay for; local models, OpenRouter and OpenCode on the second), with its Beta tag and the same Install and Sign in on its own screen. The model list is the account's (`session/new`'s `availableModels`, so a paid plan's newer Gemini shows by itself). The CLI lists each thinking level as a model of its own (`gemini-3.8-flash-high`, `-medium`, `-low`): a model listed at two levels or more is one row whose levels are the composer's effort dial (`byThinkingLevel`), and a turn picks the CLI's id for the model at the picked effort (`antigravityModelId`); a pick saved as a level's own id still runs, and opens on the model at that level (`savedLevel`). The picker starts with the newest Gemini generation it lists, each family at its newest version (`googleLatest` in `renderer/model-lineup.ts`), and the other vendors' models Google's plan runs (Claude, GPT-OSS) and older Gemini wait under More models.
 
 Antigravity keeps its Google sign-in in the operating system's own store (the Keychain, Windows'
 Credential Manager, the Secret Service) when it can reach it, and in

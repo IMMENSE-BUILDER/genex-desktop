@@ -251,6 +251,7 @@ import {
   isOpen,
   markUnknownAfterRestart,
   MAX_UPLOADS,
+  justPublished,
   linkedElsewhere,
   mergeMeta,
   MESSAGE as PUBLISH_MESSAGE,
@@ -288,6 +289,19 @@ const REVIEW_READ_TIMEOUT_MS = MINUTE_MS;
 const NATIVE_FILE = "native.json";
 /** The systems an app on Genex is for: what the Publish card's switch can take off. */
 const APP_PLATFORMS: ReadonlySet<string> = new Set(["mac", "windows", "linux"]);
+/** What a publish record says of a game's page on Genex, dropped once Genex no longer has the game. */
+const GONE_GAME_FIELDS = [
+  "slug",
+  "projectId",
+  "status",
+  "draftUrl",
+  "galleryUrl",
+  "playUrl",
+  "readyDraft",
+  "lastPublishAt",
+  "lastError",
+  "job",
+] as const satisfies readonly (keyof GenexPublishState)[];
 /** Bounded so a waiting agent answers well inside the host's 190 s invocation ceiling. */
 const PUBLISH_WAIT_MS = 150_000;
 const MIN_PUBLISH_WAIT_MS = SECOND_MS;
@@ -1124,6 +1138,7 @@ export class GenexTools {
         phase: publishPhaseFor(meta),
         startedAt: new Date().toISOString(),
         title: cleanGenexTitle(title) ?? state.renamed ?? state.title ?? defaultGenexTitle(project),
+        appsOnly: true,
       };
       const unread = await this.#stageAppsOnline(project, { state, job, dir, apps }, roomStage);
       state.job = job;
@@ -1977,9 +1992,10 @@ export class GenexTools {
     const own = last?.jobId !== undefined && last.jobId === state.job?.id;
     const warnings = [...(state.warnings ?? []), ...(own ? (last.lines ?? []) : [])];
     const cover = { shot, last, sending: this.#coverSteps.has(project), candidates, clip, clipLast, agentTook };
+    // Asked first: a game Genex no longer has is forgotten here, apps included, before they are read.
+    const hosted = await this.#hostedOf(project, state);
     const native = await this.#nativeRecord(project);
     const remix = { ...(await this.#remixRecord(project)), sending: this.#remixSends.has(project) };
-    const hosted = await this.#hostedOf(project, state);
     // The tested draft's own address (`preview--<slug>`): anyone with it plays the draft, as a guest
     // or signed in. The draft page (`draftUrl`) is the owner's and asks for their sign-in.
     const draftPlay = state.readyDraft ? { draftPlayUrl: state.readyDraft.url } : {};
@@ -1998,10 +2014,46 @@ export class GenexTools {
     if (kept && this.#now() - kept.at < HOSTED_WEB_FRESH_MS) return kept.hosted;
     const answer = await this.#fetch(GenexRoute.projectBySlug(state.slug))
       .then((read) => read?.project)
-      .catch((error: unknown) => (statusOf(error) === HTTP_NOT_FOUND ? this.#movedProject(project, state) : null));
+      .catch((error: unknown) => (statusOf(error) === HTTP_NOT_FOUND ? this.#movedOrGone(project, state) : null));
     const hosted = ownerRead(answer);
     if (hosted.hostedWeb !== undefined) this.#hostedWebs.set(project, { hosted, at: this.#now() });
     return hosted;
+  }
+  /**
+   * What a link Genex reads nothing at leads to: the game under the link it has now, else nothing, and
+   * then the record forgets the game when Genex, asked with a working sign-in, knows no such game.
+   */
+  async #movedOrGone(project: string, state: GenexPublishState): Promise<unknown> {
+    const moved = await this.#movedProject(project, state);
+    if (!moved && (await this.#gameGone(state))) await this.#forgetGoneGame(project, state);
+    return moved;
+  }
+  /**
+   * Whether Genex knows no game for the record's link and id (deleted, or not this account's), as a
+   * signed-in account asks it. False when Genex can't be asked, the sign-in no longer holds (a dead
+   * sign-in reads every game as unknown) or the game was published a moment ago: no answer is evidence
+   * of nothing.
+   */
+  async #gameGone(state: GenexPublishState): Promise<boolean> {
+    if (justPublished(state, this.#now())) return false;
+    const session = await this.#session().catch(() => null);
+    if (!session?.user) return false;
+    if (!state.projectId) return true;
+    return this.#fetch(GenexRoute.project(state.projectId)).then(
+      () => false,
+      (error: unknown) => statusOf(error) === HTTP_NOT_FOUND,
+    );
+  }
+  /**
+   * A game gone from Genex is no longer live from here: its link is set aside (never deleted, like a
+   * stale link a publish finds), and the record forgets its page, its last publish and the apps it
+   * sent, so the dialog says it is not published. The name and the cover stay; a publish makes a game anew.
+   */
+  async #forgetGoneGame(project: string, state: GenexPublishState): Promise<void> {
+    await this.#unlink(this.#publishDir(project)).catch(() => undefined);
+    for (const platform of APP_PLATFORMS) await this.#forgetApp(project, platform);
+    for (const key of GONE_GAME_FIELDS) delete state[key];
+    await this.#savePublishState(project, state);
   }
   /**
    * The game under the link Genex gives it now, when the link Studio knows is gone: moved on

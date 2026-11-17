@@ -303,6 +303,13 @@ export type ProbeBoot = (url: string, options: BootProbeOptions) => Promise<Boot
 export type RunQuickProbe = (url: string, options: QuickProbeOptions) => Promise<QuickProbeResult>;
 /** Run the full probe over a served page. Owner: `prober/full-probe.ts`. */
 export type RunFullProbe = (url: string, options: FullProbeOptions) => Promise<FullProbeResult>;
+/** What the recording pass needs: the renderer to launch and the evidence folder the video is kept in. */
+export interface VideoPassOptions {
+  rendererMode: RendererMode;
+  evidenceDir: string;
+}
+/** Record a served page being entered and played: the video's path, or null when none was kept. Owner: `grade/video-pass.ts`. */
+export type RecordProbeVideo = (url: string, options: VideoPassOptions) => Promise<string | null>;
 /** Find first boot and first playable over a run's snapshots. Owner: `grade/boot-scan.ts`. */
 export type ScanBoot = (options: BootScanOptions) => Promise<BootScanResult>;
 /** Grade one run's checklist. Owner: `grade/checklist/`. */

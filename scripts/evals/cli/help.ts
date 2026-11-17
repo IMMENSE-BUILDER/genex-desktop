@@ -51,9 +51,13 @@ export const MESSAGE: Readonly<Record<EvalCommand, CommandHelp>> = {
     exits: "exit 0 completed or dry run, 3 aborted, 4 void, 65 refused, 75 stopped (resumable), 64 bad usage",
   },
   [EvalCommand.Grade]: {
-    usage: "grade <campaign> --live [--quick]",
+    usage: "grade <campaign> --live [--quick] [--video]",
     summary: "Grade a campaign's runs (full prober; --quick never promotes)",
-    details: [LIVE_NOTE, "Needs a green calibration for the current prober and graders."],
+    details: [
+      LIVE_NOTE,
+      "Needs a green calibration for the current prober and graders.",
+      "--video records each final snapshot's page in a pass of its own; the rows are measured as without it.",
+    ],
     exits: EXITS_COMMON,
   },
   [EvalCommand.Regrade]: {

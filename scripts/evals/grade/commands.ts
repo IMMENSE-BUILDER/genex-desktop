@@ -60,6 +60,8 @@ import {
 import { runQuickProbe } from "./quick-probe.ts";
 import { type RegradeOutcome, regradeBaseline, regradeRun } from "./regrade.ts";
 import { sandboxedServe, vendorReady } from "./serve.ts";
+import type { RecordProbeVideo } from "./types.ts";
+import { recordProbeVideo } from "./video-pass.ts";
 import { APP_VENDOR_DIR } from "../campaign/canary.ts";
 import { APP_SHA_PATTERN } from "../lanes/genex-app.ts";
 
@@ -94,11 +96,17 @@ const VENDOR_MISSING_HINT =
 
 /** The repository root this module ships in (cases, calibration fixtures, template, baselines). */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+/** `grade` and `calibrate`: the quick probe instead of the full prober. */
+const QUICK_FLAG = "--quick";
+/** `grade`: record each final snapshot's page after its probe. */
+const VIDEO_FLAG = "--video";
 
 /** What a grading command runs against: the grading deps and the repository root. */
 export interface GradingCommandContext {
   deps: GradingDeps;
   root: string;
+  /** The recording pass `grade --video` adds to the deps; without one the flag records nothing. */
+  recordVideo?: RecordProbeVideo;
 }
 
 /** A command's printer. */
@@ -190,7 +198,7 @@ export async function systemGradingContext(env: NodeJS.ProcessEnv = process.env)
     now: () => new Date(),
     disabledPluginsOf: (laneId) => laneById(lanes, laneId)?.disabledPlugins ?? [],
   };
-  return { deps, root: REPO_ROOT };
+  return { deps, root: REPO_ROOT, recordVideo: (url, options) => recordProbeVideo(url, options, { lockPath }) };
 }
 
 /**
@@ -232,10 +240,18 @@ function printGrade(report: CampaignGrade, out: Out): void {
   if (report.stop !== null) out(`stopped ${report.stop}`);
 }
 
+/** The deps of one `grade`: quick probes on `--quick`, and the context's recording pass on `--video`. */
+function gradeDeps(context: GradingCommandContext, flags: ReadonlySet<string>): GradingDeps {
+  const deps = { ...context.deps, quick: flags.has(QUICK_FLAG) };
+  if (!flags.has(VIDEO_FLAG) || !context.recordVideo) return deps;
+  return { ...deps, recordVideo: context.recordVideo };
+}
+
 /**
- * `grade <campaign> [--quick]` (§8): every run's scan, final probe and checklist, then the pairs.
- * The final probe is the full prober (M3); `--quick` runs the quick probe instead, and such a grade
- * can never be promoted.
+ * `grade <campaign> [--quick] [--video]` (§8): every run's scan, final probe and checklist, then the
+ * pairs. The final probe is the full prober (M3); `--quick` runs the quick probe instead, and such a
+ * grade can never be promoted. `--video` adds the recording pass after each final probe: a pass of
+ * its own, so the rows are measured exactly as without it.
  */
 export async function gradeCommand(
   args: readonly string[],
@@ -243,15 +259,15 @@ export async function gradeCommand(
   given?: GradingCommandContext,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-  const parsed = parseArgs(args, { flags: ["--quick"] });
+  const parsed = parseArgs(args, { flags: [QUICK_FLAG, VIDEO_FLAG] });
   const campaignId = campaignArg(parsed);
-  if (campaignId === null) {
-    out("usage: grade <campaign> [--quick]");
+  if (parsed === null || campaignId === null) {
+    out("usage: grade <campaign> [--quick] [--video]");
     return GradingExit.Usage;
   }
   const context = await contextFor(given, out, env);
   if (context === null) return GradingExit.Usage;
-  const report = await gradeCampaign(campaignId, { ...context.deps, quick: parsed?.flags.has("--quick") === true });
+  const report = await gradeCampaign(campaignId, gradeDeps(context, parsed.flags));
   printGrade(report, out);
   if (notReady(report.refused)) return GradingExit.NotReady;
   return report.stop !== null ? GradingExit.Refused : GradingExit.Ok;
@@ -313,7 +329,7 @@ export async function calibrateCommand(
   given?: GradingCommandContext,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-  const parsed = parseArgs(args, { flags: ["--quick"] });
+  const parsed = parseArgs(args, { flags: [QUICK_FLAG] });
   if (parsed === null || parsed.positional.length > 0) {
     out("usage: calibrate [--quick]");
     return GradingExit.Usage;
@@ -321,7 +337,7 @@ export async function calibrateCommand(
   const context = await contextFor(given, out, env);
   if (context === null) return GradingExit.Usage;
   const { root } = context;
-  const deps = { ...context.deps, quick: parsed.flags.has("--quick") };
+  const deps = { ...context.deps, quick: parsed.flags.has(QUICK_FLAG) };
   const vendor = await vendorRefusal(deps);
   if (vendor !== null) {
     out(`refused ${vendor}`);

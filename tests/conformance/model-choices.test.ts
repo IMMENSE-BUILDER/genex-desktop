@@ -11,6 +11,8 @@ import {
   roleChoices,
   autoChoice,
   withoutFreeWord,
+  findChoice,
+  savedLevel,
 } from "../../src/renderer/model-choices.ts";
 import type { EngineDescriptor } from "../../src/renderer/types.ts";
 import { MODEL_PICKER_WORDS } from "../../src/renderer/words.ts";
@@ -619,4 +621,22 @@ test("a free model's own trailing Free gives way to its tag", () => {
   assert.equal(withoutFreeWord("Big Pickle"), "Big Pickle");
   assert.equal(withoutFreeWord("Freedom 2"), "Freedom 2", "only a trailing word goes");
   assert.equal(withoutFreeWord("Free"), "Free", "a name that is only the word keeps it");
+});
+
+test("a pick saved as one thinking level's own id is the model that now carries the dial, at that level", () => {
+  const antigravity: EngineDescriptor = {
+    id: "antigravity",
+    label: "Antigravity",
+    kind: "delegated",
+    status: { code: "ready", detail: "Fixture ready" },
+    defaultModel: null,
+    models: [model("gemini-3.8-flash", "Gemini 3.8 Flash", ["low", "medium", "high"], "high"), model("gemini-nova")],
+  };
+  const choices = toChoices([antigravity]);
+  const flash = findChoice(choices, "antigravity::gemini-3.8-flash-low");
+  assert.equal(flash?.key, "antigravity::gemini-3.8-flash");
+  assert.equal(savedLevel("antigravity::gemini-3.8-flash-low", flash), "low");
+  assert.equal(savedLevel("antigravity::gemini-3.8-flash", flash), undefined, "the model itself names no level");
+  assert.equal(savedLevel("antigravity::gemini-3.8-flash-max", flash), undefined, "a level it does not offer");
+  assert.equal(findChoice(choices, "antigravity::gemini-3.8-pro-low"), undefined, "another model is not this one");
 });

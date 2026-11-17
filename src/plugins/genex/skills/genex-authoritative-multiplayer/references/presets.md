@@ -59,6 +59,9 @@ export default defineRoom({
 });
 ```
 
+A whole first-person game on this preset, room module and client, is template 5 in
+[room-template.md](room-template.md).
+
 **Units.** The defaults are the Source engine's, in Source units of about an inch: a hull 32 wide
 and 72 tall (54 ducked), a run of 250 units/s, gravity 800. The easy way to a game in metres is to
 keep these on the server and scale the drawing (`0.0254` metres a unit). A game that sets its own
@@ -125,9 +128,13 @@ friction. A `cap` written in `onInput` applies from the next input. The eye heig
 The Source engine's is `64 - 18 * duck` over the feet. A respawn writes the new spot with
 `vx: 0, vy: 0, vz: 0, duck: 0, mstate: 0` and bumps `epoch`.
 
-**What it does not do.** Players pass through each other: the preset collides only with the world.
-The world is fixed for the room's life, so a door, a lift or a crate that moves is the module's own
-rule, not a solid. And `ctx.rewind.hitscan` does not know the world: stop the shot with
+**What the preset alone does not do.** It collides only with the world, so players pass through each
+other unless the room declares `contacts` (`contacts: { preset: "shooter" }` makes them solid on the
+server and in every client's prediction: [settings.md](settings.md#contacts)). The world is fixed for
+the room's life: a moving platform is a declared lift (`config.lifts`,
+[settings.md](settings.md#lifts)), a crate that topples is a physics body ([physics.md](physics.md)),
+and a door the module opens is the module's own rule, not a solid. And `ctx.rewind.hitscan` does not
+know the world: stop the shot with
 [`ctx.world.ray`](#a-shot-and-the-world). The shot leaves from the eye along
 `(cos(pitch) * cos(yaw), cos(pitch) * sin(yaw), sin(pitch))`.
 
@@ -209,8 +216,10 @@ no longer hold its speed; parallel to the wall it recovers). A ramp the car can 
 about 45° with the default `standable`) is climbed at its flat-ground speed; a steeper one is a
 wall. Downhill the car keeps to the road only while one sub-step's drop stays under `stepHeight`:
 at 60 Hz with 2 sub-steps that is a slope of about 23° at top boost speed, so a steep downhill or a
-crest launches it. Cars pass through each other: a bump or a demolition is the module's own rule,
-and a velocity the module writes into a car shows on its driver's screen as a correction. A car the
+crest launches it. Cars pass through each other unless the room declares
+`contacts: { preset: "vehicle-arena" }`, which has them shove and bounce off each other on the server
+and in every client's prediction ([settings.md](settings.md#contacts)); a demolition is the module's
+own rule, and a velocity the module writes into a car shows on its driver's screen as a correction. A car the
 module pushes into a wall, a ramp or the floor is pushed back out on its next step, through the
 solid's nearest face (never its bottom, nor a top another solid sits on, such as a wall's top under
 the ceiling); keep a push under half a wall's thickness plus the car's radius, or that nearest face
@@ -318,7 +327,9 @@ To show the hit marker the frame the player fires, the client gives `session.pre
 same `eye`, `dir` and `BODY`, with `range` cut to its own wall distance along
 the aim: [projectiles.md](projectiles.md#show-the-hit-at-once-predicted-hits). This `fire` lowers
 no `hp`: add the damage there (a lower `hp` is what confirms the marker), or pass
-`settle: "manual"` and settle the hit from the `shot` event.
+`settle: "manual"` and settle the hit from the `shot` event. Template 5 in
+[room-template.md](room-template.md) is this shot whole: the damage, the kill and the respawn in the
+module, and the tracer and the predicted hit in the client.
 
 - **What it answers.** `dist` is the distance along the ray, `point` where it entered, `normal` the
   face it entered by, `solid` which one, counting `boxes` and then `ramps`. Touching is not hitting:
@@ -454,7 +465,7 @@ const session = await connectAuthority({
 ```
 
 `fields` lists what the step writes (any of `x y z vx vy vz yaw pitch duck mstate cap spin fuel`;
-all of them when left out). `predict: false` turns prediction off: the player's own body is then
+`x y z vx vy vz yaw` when left out). `predict: false` turns prediction off: the player's own body is then
 drawn from the server's state, a round trip late, which is right only for something that does not
 move under the player's hands (a turret, a card table).
 

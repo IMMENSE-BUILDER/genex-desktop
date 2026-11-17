@@ -41,6 +41,8 @@ interface FakeWorld {
   calls: string[];
   contexts: BrowserContextOptions[];
   failTouch: boolean;
+  /** Whether a context refuses to close, as one whose page crashed does. */
+  failContextClose: boolean;
   routes: RouteHandler[];
   sockets: WebSocketHandler[];
   /** The page's event listeners, so a test can fire `requestfailed`. */
@@ -85,10 +87,11 @@ function fakePage(world: FakeWorld): Page {
 }
 
 function fakeBrowser(world: FakeWorld): Browser {
+  const opened: Array<{ close: () => Promise<void> }> = [];
   const browser = {
     newContext: async (options: BrowserContextOptions) => {
       world.contexts.push(options);
-      return {
+      const context = {
         newPage: async () => fakePage(world),
         route: async (_pattern: string, handler: RouteHandler) => {
           world.calls.push("route");
@@ -98,9 +101,18 @@ function fakeBrowser(world: FakeWorld): Browser {
           world.calls.push("routeWebSocket");
           world.sockets.push(handler);
         },
+        close: async () => {
+          world.calls.push("context.close");
+          if (world.failContextClose) throw new Error("the context is already gone");
+        },
       };
+      opened.push(context);
+      return context;
     },
-    close: async () => {},
+    contexts: () => opened,
+    close: async () => {
+      world.calls.push("browser.close");
+    },
   };
   // A partial stand-in for Playwright's browser: only the members the driver calls exist.
   return browser as unknown as Browser;
@@ -110,6 +122,7 @@ const world = (): FakeWorld => ({
   calls: [],
   contexts: [],
   failTouch: false,
+  failContextClose: false,
   routes: [],
   sockets: [],
   listeners: new Map(),
@@ -198,6 +211,56 @@ describe("the Playwright driver's pointer", () => {
     const phone = await probeBrowserOf(fakeBrowser(w), () => 0).openPhone?.("http://127.0.0.1:1/", "init");
     assert.ok(phone?.tap);
     assert.equal(await phone.tap(1, 1), false);
+  });
+});
+
+describe("the Playwright driver's recording", () => {
+  const VIDEO = { dir: "/evidence/run-1/grade-2/final/video-abc" };
+  /** The close calls only, in the order they went out. */
+  const closes = (w: FakeWorld) => w.calls.filter((call) => call.endsWith(".close"));
+
+  it("records the desktop page into the folder asked for, at the probe's viewport", async () => {
+    const w = world();
+    await probeBrowserOf(fakeBrowser(w), () => 0, VIDEO).open("http://127.0.0.1:1/", "init");
+    assert.deepEqual(w.contexts, [
+      {
+        viewport: PROBE_VIEWPORT,
+        deviceScaleFactor: 1,
+        serviceWorkers: "block",
+        recordVideo: { dir: VIDEO.dir, size: PROBE_VIEWPORT },
+      },
+    ]);
+  });
+
+  it("never records the phone pass", async () => {
+    const w = world();
+    await probeBrowserOf(fakeBrowser(w), () => 0, VIDEO).openPhone?.("http://127.0.0.1:1/", "init");
+    assert.deepEqual(w.contexts, [PHONE_CONTEXT]);
+  });
+
+  it("closes the recorded context before the browser: the video is finished only then", async () => {
+    const w = world();
+    const browser = probeBrowserOf(fakeBrowser(w), () => 0, VIDEO);
+    await browser.open("http://127.0.0.1:1/", "init");
+    await browser.close();
+    assert.deepEqual(closes(w), ["context.close", "browser.close"]);
+  });
+
+  it("still closes the browser when a recorded context refuses to close", async () => {
+    const w = { ...world(), failContextClose: true };
+    const browser = probeBrowserOf(fakeBrowser(w), () => 0, VIDEO);
+    await browser.open("http://127.0.0.1:1/", "init");
+    await browser.close();
+    assert.deepEqual(closes(w), ["context.close", "browser.close"]);
+  });
+
+  it("records nothing and closes only the browser unless asked", async () => {
+    const w = world();
+    const browser = probeBrowserOf(fakeBrowser(w), () => 0);
+    await browser.open("http://127.0.0.1:1/", "init");
+    await browser.close();
+    assert.deepEqual(w.contexts, [{ viewport: PROBE_VIEWPORT, deviceScaleFactor: 1, serviceWorkers: "block" }]);
+    assert.deepEqual(closes(w), ["browser.close"]);
   });
 });
 

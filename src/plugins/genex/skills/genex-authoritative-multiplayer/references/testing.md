@@ -88,7 +88,7 @@ where the module itself ended or faulted:
 | `log_flood` | One tick logged more lines, or longer lines, than a room keeps. | Log on events, not every tick. |
 | `short_run` | The fuzz ran fewer than 30 simulated seconds (`--duration`). | Run it with the default duration; a short run never passes. |
 | `host_stall` | A busy machine cut a call off by wall clock while the module stayed under its CPU limit: no verdict on the module. | Change nothing in the module; run `validate` again on a quieter machine. |
-| `physics_unavailable` | The module asks for `physics` and this validator has no physics core. | Update `@genex-ai/authority-dev`; see [physics.md](physics.md) for when servers run physics. |
+| `physics_unavailable` | The module asks for `physics` and this validator has no physics core. | Update `@genex-ai/authority-dev` ([physics.md](physics.md)). |
 | `physics_build` | The two replays ran on different physics core builds, so they were not compared. | Change nothing; run `validate` again. |
 | `physics_backend_parity` | With `--physics-backend both`, the replay on the second physics core gave a different state from some tick on. | Report it with the tick the output names: the two cores must agree, so this is a core bug, not the module's. |
 
@@ -118,8 +118,11 @@ nothing:
    others still move without freezing and jumping, and `session.renderDelayMs` climbs above 100 (a
    local room allows up to 250 ms; a Genex server with the setting off stays at 100).
 3. A hit lands when it looked right on the shooter's screen; a respawn snaps instead of sliding.
-   With projectiles: a shot is judged where the target is on the server, so a dodged bolt misses.
-4. Leaving and rejoining works, and the leaver's body is gone for everyone.
-5. The REPORT line shows no strikes after a few minutes of play.
+   With projectiles swept with `rewind: true`: a bolt aimed at a moving player as drawn hits, and a
+   bolt the target stepped out of the way of misses.
+4. The HUD shows the region and `session.pingMs`. At `--latency 75` the ping reads a little over
+   150 ms (75 each way); a local room's region is `''`.
+5. Leaving and rejoining works, and the leaver's body is gone for everyone.
+6. The REPORT line shows no strikes after a few minutes of play.
 
 Say plainly what was not exercised (a full room, a slow connection, a reconnect).

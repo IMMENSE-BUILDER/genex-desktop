@@ -91,7 +91,7 @@ listed: `skills/genex-threejs-multiplayer/references/realtime-patterns.md`, for 
 built from the SDK calls the card shows. Commands map onto Studio tools as the `genex` skill
 describes (`genex__skill {"name":"genex"}`).
 
-<!-- upstream @genex-ai/cli-demo/templates/skills/genex-threejs-multiplayer/SKILL.md v1.43.5 sha256 828a133e60acfadb48467315d9bfaefcdcbc11643b29b78eef58984c019502ed -->
+<!-- upstream @genex-ai/cli-demo/templates/skills/genex-threejs-multiplayer/SKILL.md v1.43.6 sha256 b04bf271ca8269ca4ee3d0fff7c60bc3e3a56f9d0386bd167d6b644fed89bd26 -->
 ---
 name: genex-threejs-multiplayer
 description: Realtime multiplayer for Genex Three.js games with `@genex-ai/multiplayer` — a relay whose SDK auto-smooths remote players AND shared objects (you do NOT write interpolation). Use whenever 2+ players share a world: movement sync, a shared ball/NPC via objects + ownership, host-authoritative scores/waves, shots/emotes, presence.
@@ -110,7 +110,7 @@ or a shared object and it is already smooth; you never fight over who simulates 
 faking, "so nobody can cheat") is a different kind of game: the server runs the rules. Use
 `$genex-authoritative-multiplayer` for it instead of this skill, and never mix the two in one game.
 A first-person shooter through a real level is that kind of game: the `firstperson` preset predicts
-your body through a world the module exports, and "A real level" in that skill's presets.md turns
+your body through a world the module exports, and that skill's levels.md ("three.js") turns
 your glb or three.js scene into that world with `genex world fit` and `sceneFromThree`.
 
 

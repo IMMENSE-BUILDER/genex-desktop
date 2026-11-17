@@ -18,6 +18,7 @@ import {
   findChoice,
   nearestEffort,
   resolveChoice,
+  savedLevel,
   toChoices,
   unifiedEffort,
   withRoleEfforts,
@@ -400,7 +401,8 @@ export function resolveComposerModel(input: {
       ? findChoice(choices, `${picks.engines?.[role] ?? selectedEngine.id}::${picks[role] ?? ""}`)
       : undefined;
   const efforts = effortScale(selectedChoice, picks ? [roleChoice("builder"), roleChoice("judge")] : []);
-  const effort = unifiedEffort(efforts, input.effort, selectedChoice);
+  // A pick saved as one thinking level's own id keeps that level until an effort is picked.
+  const effort = unifiedEffort(efforts, input.effort ?? savedLevel(input.modelKey, selectedChoice), selectedChoice);
   return {
     studio: input.studio,
     ...view,

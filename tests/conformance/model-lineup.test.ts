@@ -272,3 +272,14 @@ test("on a paid Antigravity plan the newest Gemini generation shows, each family
   );
   assert.equal(modelName(EngineId.Antigravity, paid[0] as (typeof paid)[number]), "Gemini 4 Argon (High)");
 });
+
+test("Antigravity's models as the engine lists them, one row for a model's levels, follow the same rule", () => {
+  const listed = [
+    row("gemini-4-argon", "Gemini 4 Argon", undefined, true),
+    row("gemini-4-hydrogen-xhigh", "Gemini 4 Hydrogen (Extra)"),
+    row("gemini-3.8-flash", "Gemini 3.8 Flash"),
+    row("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
+  ];
+  assert.deepEqual([...latestModels(EngineId.Antigravity, listed)], ["gemini-4-argon", "gemini-4-hydrogen-xhigh"]);
+  assert.equal(modelName(EngineId.Antigravity, listed[0] as (typeof listed)[number]), "Gemini 4 Argon");
+});

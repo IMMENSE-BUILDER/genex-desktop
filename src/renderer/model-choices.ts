@@ -273,7 +273,21 @@ function sameModelChoice(rows: ModelChoice[], saved: string): ModelChoice | unde
   const wanted = modelBase(saved);
   const models = rows.filter((choice) => parseModelKey(choice.key).model !== DEFAULT_MODEL);
   const sameId = models.find((choice) => modelBase(parseModelKey(choice.key).model) === wanted);
-  return sameId ?? models.find((choice) => choice.resolvedModel && modelBase(choice.resolvedModel) === wanted);
+  const alias = sameId ?? models.find((choice) => choice.resolvedModel && modelBase(choice.resolvedModel) === wanted);
+  return alias ?? models.find((choice) => savedLevel(keyOfSaved(choice, saved), choice) !== undefined);
+}
+
+/** `saved` as a key on `choice`'s provider. */
+const keyOfSaved = (choice: ModelChoice, saved: string): string => modelKey(parseModelKey(choice.key).engine, saved);
+
+/**
+ * The effort a saved pick names in its model id: a provider that listed each thinking level as a
+ * model of its own (Antigravity's `gemini-3.8-flash-high`) now lists the model once, with a dial,
+ * and a pick saved before that is this model at that level. Undefined for any other pick.
+ */
+export function savedLevel(key: string | null | undefined, choice: ModelChoice | undefined): string | undefined {
+  if (!key || !choice?.efforts?.length || key === choice.key) return undefined;
+  return choice.efforts.find((effort) => key === `${choice.key}-${effort}`);
 }
 
 /**
