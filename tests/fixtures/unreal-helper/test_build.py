@@ -299,10 +299,46 @@ class ImportModel(BuildCase):
                 self.fresh()
                 self.assert_unchanged(tool('import_model', 'assets/helpers/h1/bike.glb', dest, name, 'box', True))
 
-    def test_a_project_outside_a_game_folder_imports_nothing(self) -> None:
-        unreal.reset(self.path('elsewhere', 'Drift'))
+    def own_project(self) -> str:
+        """An Unreal project that is no Genex game's unreal/ folder, with a model of its own in Art/."""
+        project = self.path('elsewhere', 'Drift')
+        unreal.reset(project)
         unreal.state['actors'] = [self.start]
-        self.assert_unchanged(tool('import_model', 'assets/helpers/h1/bike.glb', '/Game/Genex/Models', 'Bike', 'box', True))
+        return self.write(os.path.join(project, 'Art', 'weapons', 'katana.glb'), 'glTF')
+
+    def test_a_project_on_its_own_imports_a_file_from_anywhere_inside_its_folder(self) -> None:
+        model = self.own_project()
+        nested = '/Game/Genex/Models/Katana/katana/StaticMeshes/katana'
+        for file in ('Art/weapons/katana.glb', model):
+            with self.subTest(file):
+                unreal.state['import_tasks'] = []
+                self.imports(model, (nested, mesh()))
+                result = tool('import_model', file, '/Game/Genex/Models', 'Katana', 'none', False)
+                self.assertEqual((result['asset'], result['class']), (nested, 'StaticMesh'))
+
+    def test_a_project_on_its_own_refuses_files_outside_its_folder_and_links(self) -> None:
+        self.own_project()
+        project = self.path('elsewhere', 'Drift')
+        outside = self.write(os.path.join(self.outside, 'evil.glb'), 'glTF')
+        os.symlink(outside, os.path.join(project, 'Art', 'linked.glb'))
+        os.symlink(self.outside, os.path.join(project, 'Art', 'linked_dir'))
+        self.write(os.path.join(self.outside, 'inner.glb'), 'glTF')
+        self.write(os.path.join(project, 'Art', 'notes.txt'), 'hi')
+        files = {
+            'outside the project': outside,
+            'the old game folder': self.model,
+            'relative out of the project': '../../outside/evil.glb',
+            'dot-dot inside the project': 'Art/weapons/../../../outside/evil.glb',
+            'a link to a file outside': 'Art/linked.glb',
+            'through a linked folder': 'Art/linked_dir/inner.glb',
+            'not a model': 'Art/notes.txt',
+            'a folder': 'Art/weapons',
+            'missing': 'Art/nope.glb',
+            'empty': '',
+        }
+        for label, file in files.items():
+            with self.subTest(label):
+                self.assert_unchanged(tool('import_model', file, '/Game/Genex/Models', 'Katana', 'box', True))
 
     def test_a_model_imports_into_its_own_folder_as_one_mesh_with_its_collision_and_nanite(self) -> None:
         nested = '/Game/Genex/Models/Bike/bike/StaticMeshes/bike'
