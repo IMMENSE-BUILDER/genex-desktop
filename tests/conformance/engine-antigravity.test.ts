@@ -260,6 +260,10 @@ describe("Antigravity's sign-in, plan and models", () => {
     assert.equal(antigravityModelId(models, "gemini-4-argon", "max"), "gemini-4-argon-high", "a level it lacks");
     assert.equal(antigravityModelId(models, "gemini-4-argon-low", "high"), "gemini-4-argon-low", "a saved level's id");
     assert.equal(antigravityModelId(models, "gemini-nova", "high"), "gemini-nova");
+    // Before anything is listed, an effort comes only with a model that has a dial.
+    assert.equal(antigravityModelId([], "gemini-4-argon", "low"), "gemini-4-argon-low");
+    assert.equal(antigravityModelId([], "gemini-4-argon-low", "high"), "gemini-4-argon-low");
+    assert.equal(antigravityModelId([], "gemini-nova"), "gemini-nova");
   });
 
   it("starts a turn on the picked model at the picked effort, by the id the CLI lists", async () => {

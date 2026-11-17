@@ -448,7 +448,7 @@ export class AntigravityEngine implements Engine {
     let opened = await this.#ask();
     if (!opened && wasSignedIn) opened = await this.#ask();
     const vouched = opened ? null : this.#vouched();
-    if (vouched) return vouched;
+    if (vouched) return { ...vouched, at: this.#now() };
     if (opened) await this.#list(cli, opened);
     else this.#catalog.invalidate();
     return { at: this.#now(), signedIn: opened !== null, ...(opened?.tier ? { tier: opened.tier } : {}) };

@@ -177,6 +177,9 @@ function familyRow(family: EngineModel[]): EngineModel {
  * id is the listed one already, a level's own id saved before the dial included.
  */
 export function antigravityModelId(models: readonly EngineModel[], model: string, effort?: string): string {
+  // Nothing listed yet (a loaded session need not list): an effort is only ever sent for a model
+  // with a dial, so the pair names the level's id, unless the id is a level's own already.
+  if (!models.length) return effort && !leveled(model) ? `${model}-${effort}` : model;
   const row = models.find((candidate) => candidate.id === model);
   if (!row?.efforts?.length) return model;
   const level = effort && row.efforts.includes(effort) ? effort : (row.defaultEffort ?? row.efforts[0]);
