@@ -13,6 +13,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { chromium } from "@playwright/test";
 import { probeBoot, runQuickProbe } from "../../scripts/evals/grade/quick-probe.ts";
+import { recordProbeVideo, VIDEO_FILE } from "../../scripts/evals/grade/video-pass.ts";
 import { probeLockPath } from "../../scripts/evals/prober/lock.ts";
 import { CheckResult, EntranceVia, ProbeRow, RendererMode } from "../../scripts/evals/vocabulary.ts";
 import { tmpDir } from "../helpers/tmp.ts";
@@ -42,6 +43,11 @@ const SERVED: Record<string, { file: string; type: string }> = {
   "/index.html": { file: "index.html", type: "text/html" },
   "/game.js": { file: "game.js", type: "text/javascript" },
 };
+
+/** The EBML header every WebM file starts with. */
+const WEBM_SIGNATURE = [0x1a, 0x45, 0xdf, 0xa3];
+/** Smaller than this is a container with no picture in it. */
+const MIN_VIDEO_BYTES = 10_000;
 
 const skip = skipReason();
 
@@ -87,5 +93,21 @@ describe("the quick probe in Chromium", { skip }, () => {
     );
     assert.equal(boot.booted, CheckResult.Pass);
     assert.equal(boot.rendererMode, RendererMode.Software);
+  });
+
+  it("records the page being entered and played as one WebM in the evidence folder", { timeout: 180_000 }, async () => {
+    const home = fs.realpathSync(await tmpDir("eval-prober-browser-"));
+    const evidenceDir = path.join(home, "evidence", "run-1", "grade-2", "final");
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    const video = await recordProbeVideo(
+      url,
+      { rendererMode: RendererMode.Software, evidenceDir },
+      { lockPath: probeLockPath({ GENEX_EVALS_HOME: home }) },
+    );
+    assert.equal(video, path.join(evidenceDir, VIDEO_FILE));
+    assert.deepEqual(fs.readdirSync(evidenceDir), [VIDEO_FILE], "only the video is kept; the scratch folder is gone");
+    const bytes = fs.readFileSync(path.join(evidenceDir, VIDEO_FILE));
+    assert.deepEqual([...bytes.subarray(0, WEBM_SIGNATURE.length)], WEBM_SIGNATURE);
+    assert.ok(bytes.length > MIN_VIDEO_BYTES, `a few seconds of play, not an empty container (${bytes.length} bytes)`);
   });
 });

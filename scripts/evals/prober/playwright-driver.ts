@@ -245,21 +245,39 @@ async function openPage(
   return adapt(page, events, elapsed);
 }
 
-/** Launch Chromium for a renderer mode; the GPU path uses the full Chromium build's new headless mode. */
+/** Where a browser records its desktop page: one `.webm` per page in `dir`, complete once the browser is closed. */
+export interface ProbeVideo {
+  dir: string;
+}
+
+/**
+ * Launch Chromium for a renderer mode; the GPU path uses the full Chromium build's new headless mode.
+ * With `video` the desktop page is recorded (the recording pass of a grade; a measuring probe never is).
+ */
 export async function launchPlaywright(
   mode: RendererMode,
   now: () => number = () => performance.now(),
+  video: ProbeVideo | null = null,
 ): Promise<ProbeBrowser> {
   const channel = mode === RendererMode.Gpu ? { channel: "chromium" } : {};
   const browser = await chromium.launch({ headless: true, args: chromiumArgs(mode), ...channel });
-  return probeBrowserOf(browser, now);
+  return probeBrowserOf(browser, now, video);
+}
+
+/** Close a recording browser: Playwright finishes a video only when its context closes, so contexts go first. */
+async function closeRecording(browser: Browser): Promise<void> {
+  for (const context of browser.contexts()) await context.close().catch(() => {});
+  await browser.close();
 }
 
 /** A launched Playwright browser as the probe's `ProbeBrowser`: desktop pages and the phone pass's touch context. */
-export function probeBrowserOf(browser: Browser, now: () => number): ProbeBrowser {
+export function probeBrowserOf(browser: Browser, now: () => number, video: ProbeVideo | null = null): ProbeBrowser {
+  const desktop: BrowserContextOptions = video
+    ? { ...DESKTOP_CONTEXT, recordVideo: { dir: video.dir, size: PROBE_VIEWPORT } }
+    : DESKTOP_CONTEXT;
   return {
-    open: (url, initScript) => openPage(browser, url, initScript, now),
+    open: (url, initScript) => openPage(browser, url, initScript, now, desktop),
     openPhone: (url, initScript) => openPage(browser, url, initScript, now, PHONE_CONTEXT),
-    close: () => browser.close(),
+    close: () => (video ? closeRecording(browser) : browser.close()),
   };
 }

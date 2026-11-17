@@ -314,6 +314,14 @@ stopped for 30 minutes, atomically (renamed aside, then checked again).
   pass, answering every probe row (a 60 s error window, 5-minute survival, frame-rate floor,
   audio, phone viewport). `l3.dark_phase` is `unknown` without an operator review, and
   `l3.spatially_legible` is judge-owned and always `unknown`.
+- **Recording pass** (`grade/video-pass.ts`, `grade --video` only): after the final probe of a
+  page that drew, the served page is opened once more in a recording browser and taken through the
+  quick probe's phases with no error window (about 25 s). It is a pass of its own because a
+  recorder loads the page: the probe that measures frame rate and timing never runs under one, so
+  rows and `PROBER_VERSION` are the same with and without video. The pass's own rows and frames
+  are thrown away; the largest regular `.webm` the browser wrote is kept as `final/probe.webm`
+  and named by the grade record's `evidence.videoPath`. A failed recording keeps no video and
+  never fails the grade. No model reads the video: it is for `review` and for a person.
 - **Checklist grader** (`grade/checklist/`): one acceptance item per call, `VERDICT: YES|NO`, "if
   the evidence does not show it, NO". Two families, `claude-sonnet-5-5` and `gpt-6.1-sol` at low
   effort, three votes each; families combine by conjunction and are never summed. Evidence is at
@@ -341,7 +349,8 @@ stopped for 30 minutes, atomically (renamed aside, then checked again).
 `grade <campaign>` scans, probes the `final` snapshot (the full prober; `--quick` uses the quick
 probe, marks `quick-grade` and can never be promoted), grades the checklist, writes
 `evidence/<runId>/grade-<seq>/{scan,final,grade.json}` and appends a new `gradeSeq` row, then
-judges the pairs. It skips runs already graded under the same versions, non-builds, harness
+judges the pairs. `--video` adds the recording pass to each run it probes, so a run it skips gets
+no video. It skips runs already graded under the same versions, non-builds, harness
 failures, cases whose version moved and Genex runs whose app build is gone. `regrade` reuses the retained probe unless `--reprobe` is
 given or the prober version moved; `--baseline` regrades every run a committed baseline names.
 
@@ -350,7 +359,7 @@ given or the prober version moved; `--baseline` regrades every run a committed b
 `review <campaign>` serves a blind page on 127.0.0.1 at a random port. Pair mode shows the pairs
 the pairwise judge saw (before any judge ran, every two runs of one case and rep), sides placed
 by a recorded seed and the order shuffled; no run id, lane, engine, model or path reaches the
-page. `--graders` samples 10% (at least 5) of judged checklist items for grader validation,
+page. Each side shows its witnessed frames and, when `grade --video` kept one, its video. `--graders` samples 10% (at least 5) of judged checklist items for grader validation,
 showing each family's verdict. Answers are `genex-evals/human/1` rows in the local ledger;
 the reviewer is a random id in `$GENEX_EVALS_HOME/reviewer-id` (`--reviewer` for a second one),
 and a resumed session skips what that reviewer answered.
@@ -435,7 +444,7 @@ exit 64, and with it they exit 1 in CI.
 | `cases [--check]` | | Lists and validates cases | |
 | `campaign plan --cases … [--lanes primary] [--reps N] [--apps base,cand] [--deadline-min N] [--seed s] [--label l]` | | Prints the matrix, seeded order, canary brackets and estimates; writes `campaign.json` | 64 also for a refused plan |
 | `campaign run <id> [--live] [--budget-hours 8] [--max-quota 70] [--max-runs N] [--account-exclusive] [--serial]` | switch | Dry run without `--live` | 3 aborted, 4 void, 65 refused, 75 stopped (resumable), 128 + signal interrupted |
-| `grade <campaign> [--quick]` | yes | Grades runs and pairs | 2 no covering calibration, no runs or `vendor-missing` |
+| `grade <campaign> [--quick] [--video]` | yes | Grades runs and pairs; `--video` also records each final page | 2 no covering calibration, no runs or `vendor-missing` |
 | `regrade <runId> \| --baseline [--reprobe]` | yes | New `gradeSeq` from retained evidence | 2 as grade |
 | `calibrate [--quick]` | yes | Grades the calibration fixtures | 1 red, 2 `vendor-missing` |
 | `diagnostics <campaign> [--repeatability] [--seed s]` | with `--repeatability` | The diagnostics block; `--repeatability` re-grades a seeded sample | 2 |

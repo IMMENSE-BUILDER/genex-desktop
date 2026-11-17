@@ -78,6 +78,7 @@ import type {
   PairSide,
   PairwiseRequest,
   ProbeResult,
+  RecordProbeVideo,
   RunFullProbe,
   QuickProbeOptions,
   RunQuickProbe,
@@ -168,6 +169,11 @@ export interface GradingDeps {
   quick: boolean;
   quickProbe: RunQuickProbe;
   fullProbe: RunFullProbe;
+  /**
+   * Record the stop-time snapshot's page after its probe (`grade --video`); absent, a grade keeps
+   * no video. A pass of its own: the probe that measures is never loaded by a recorder.
+   */
+  recordVideo?: RecordProbeVideo;
   complete: GraderComplete;
   rubric: PairwiseRubric;
   /** Hold the machine-wide probe lock for the whole call (Rule 11). */
@@ -400,6 +406,18 @@ function noBuildAfterServe(stop: NoBuild | null, handle: ServeHandle): NoBuild |
   return stop;
 }
 
+/** The probe with the video of its page, when this grade records one and the page drew. */
+async function withVideo(
+  deps: Pick<GradingDeps, "recordVideo" | "rendererMode">,
+  url: string,
+  evidenceDir: string,
+  probe: ProbeResult,
+): Promise<ProbeResult> {
+  if (!deps.recordVideo || probe.firstRenderMs === null) return probe;
+  const videoPath = await deps.recordVideo(url, { rendererMode: deps.rendererMode, evidenceDir }).catch(() => null);
+  return { ...probe, evidence: { ...probe.evidence, videoPath } };
+}
+
 /** What the stop-time snapshot's serve and probe found: the probe (null when unknown) and the no-build. */
 interface FinalObservation {
   probe: ProbeResult | null;
@@ -420,7 +438,8 @@ async function probeFinal(row: RunRow, dir: string, deps: GradingDeps): Promise<
   try {
     // A copy whose rebuild failed is never "did not boot": it is not probed, and is unknown unless typed.
     if (handle.servedVia === ServedVia.RebuildFailed) return { probe: null, noBuild };
-    return { probe: await runFinalProbe(deps, handle.url, evidenceDir, handle.servedVia), noBuild };
+    const probe = await runFinalProbe(deps, handle.url, evidenceDir, handle.servedVia);
+    return { probe: await withVideo(deps, handle.url, evidenceDir, probe), noBuild };
   } catch {
     return { probe: null, noBuild };
   } finally {

@@ -32,6 +32,7 @@ import {
 import type {
   FrameRef,
   QuickProbeResult,
+  RecordProbeVideo,
   RunFullProbe,
   RunQuickProbe,
   ServeSnapshot,
@@ -108,6 +109,25 @@ describe("grade and regrade", () => {
     assert.equal((await run(gradeCommand, [CAMPAIGN, "--quick"], quick.context)).code, GradingExit.Ok);
     assert.equal(quick.h.log.fullProbed.length, 0);
     assert.ok(currentRows(await readRunRows(quick.h.deps.paths)).every((row) => row.probe?.quick === true));
+  });
+
+  it("grade records each final snapshot's page only when --video asks for it", async () => {
+    const recorder =
+      (seen: string[]): RecordProbeVideo =>
+      async (url) => {
+        seen.push(url);
+        return null;
+      };
+    const plain: string[] = [];
+    const without = await gradedContext();
+    const notAsked = { ...without.context, recordVideo: recorder(plain) };
+    assert.equal((await run(gradeCommand, [CAMPAIGN], notAsked)).code, GradingExit.Ok);
+    assert.deepEqual(plain, []);
+    const asked: string[] = [];
+    const withVideo = await gradedContext();
+    const recording = { ...withVideo.context, recordVideo: recorder(asked) };
+    assert.equal((await run(gradeCommand, [CAMPAIGN, "--video"], recording)).code, GradingExit.Ok);
+    assert.equal(asked.length, 4, "one recording per run");
   });
 
   it("refuses with a usage line, not a stack trace, when a CLI home variable names another home", async () => {
