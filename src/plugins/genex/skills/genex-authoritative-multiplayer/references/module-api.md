@@ -37,11 +37,11 @@ export default room;
 | Field | What it is |
 |---|---|
 | `contract` | Always `1`. A bundle whose default export has another contract does not load. |
-| `config` | Optional, and the one place to set these. `tickHz` (20, 30, 60 or 120), 120 only with `physics`; `maxPlayers` (a room never seats more than the game's manifest allows), `preset` (`{ name, params? }` with `name` one of `topdown`, `firstperson` or `vehicle`, see [presets.md](presets.md)) and `lagComp: { buttons }` — the bitmask of input buttons that ask for lag compensation. What the room runs with is `ctx.config` in `init`. `physics` asks for server physics (crates, balls, doors): see [physics.md](physics.md), which also says when Genex's servers run it. `interpolation: { maxDelayMs }` is the render delay ceiling ([below](#the-render-delay)). |
+| `config` | Optional, and the one place to set these. `tickHz` (20, 30, 60 or 120), 120 only with `physics`; `maxPlayers` (a room never seats more than the game's manifest allows), `preset` (`{ name, params? }` with `name` one of `topdown`, `firstperson` or `vehicle`, see [presets.md](presets.md)) and `lagComp: { buttons?, projectiles? }`: `buttons` is the bitmask of input buttons whose hit tests are lag-compensated, and `projectiles: true` lets a sweep judge a player's projectile where its shooter saw the targets ([below](#projectiles)). What the room runs with is `ctx.config` in `init`. `physics` asks for server physics (crates, balls, doors): see [physics.md](physics.md). `interpolation: { maxDelayMs }` is the render delay ceiling ([below](#the-render-delay)), and `patchHz` the update rate ([below](#the-update-rate)). `contacts`, `inputs`, `lifts` and `lifetime` are the genre settings of [settings.md](settings.md). |
 | `world` | The `firstperson` and `vehicle` presets' collision world, `{ boxes, ramps }`, fixed for the room's life. Validated when the module loads; its hash becomes the preset's `params.world`, and the client hands its session the same object (`session.setWorld`). Left out, the world is empty: no floor. See [presets.md](presets.md). |
 | `init(ctx)` | Runs once. Returns the module's own state, `ctx.state` from then on. Clients never see it. |
 | `onJoin(ctx, player)` | A player took a seat. Spawn their body here. |
-| `onLeave(ctx, player, reason)` | A seat ended. Remove what they owned. `reason` is a `LeaveReason`: `left`, `dropped` (the reconnect grace ran out), `superseded` (a newer session of the same player took the seat), `revoked` or `closing`. |
+| `onLeave(ctx, player, reason)` | A seat ended. Remove what they owned. `reason` is a `LeaveReason`: `left`, `dropped` (the reconnect grace ran out), `superseded` (a newer session of the same player took the seat), `revoked`, `closing` or `idle` (the seat's input had not changed for `config.lifetime.idleSeatS`). |
 | `onInput(ctx, playerId, input)` | One call per input, in each player's order, before `step`. |
 | `step(ctx)` | Once per tick, after the tick's inputs. |
 | `onDrain(ctx)` | Optional. The server closes this room for a deploy: return what the next room should start from, at most 256 KiB of JSON. It reads it as `ctx.handoff` in `init`. Seats come back with new ids, so key what you keep by `player.uid`. Without it the next room starts clean. |
@@ -66,13 +66,18 @@ where buttons become actions.
 | `ctx.random()` | The room's seeded generator: the only randomness there is. `Math.random` is the same generator. |
 | `ctx.entities` | The entities: the only state clients see. |
 | `ctx.rewind` | Lag-compensated hit tests. |
+| `ctx.world` | Rays through the module's collision world: `ctx.world.ray` and `ctx.world.claim` ([below](#lag-compensation)). |
 | `ctx.projectiles` | Shots on a ballistic flight that every client draws from one launch (below, and [projectiles.md](projectiles.md)). |
+| `ctx.physics` | Server physics, in a room whose config asks for it ([physics.md](physics.md)). |
+| `ctx.lifts` | The room's declared lifts: `ctx.lifts.crushed()` ([settings.md](settings.md#lifts)). |
 | `ctx.emit(type, data?, to?)` | A game event to every client, or only to the seat `to`. Clients receive it with `session.on(type, handler)`. |
 | `ctx.log(...values)` | A server log line, rate limited. |
 
-`init` gets `ctx.config`, `ctx.seed`, `ctx.random()`, `ctx.entities`, `ctx.projectiles` and
-`ctx.log` (no tick, no rewind, no emit yet). A projectile launch in `init` throws, and the module
-does not load: launch from a hook that runs in a tick.
+`init` gets `ctx.config`, `ctx.seed`, `ctx.matchKey` (the key the room's first client asked for,
+`''` for none), `ctx.handoff` (what the room before this one returned from `onDrain`, else `null`),
+`ctx.random()`, `ctx.entities`, `ctx.world`, `ctx.projectiles`, `ctx.physics` (commands only: a
+query throws) and `ctx.log` (no tick, no rewind, no emit yet). A projectile launch in `init` throws,
+and the module does not load: launch from a hook that runs in a tick.
 
 ## Entities
 
@@ -170,10 +175,15 @@ tick on the wire and is drawn at the server's present. The whole guide, the clie
 |---|---|
 | `ctx.projectiles.launch({ kind, x, y, z, vx, vy, vz, g?, hp?, flags?, data?, id? })` | Launches at the tick being stepped, `owner` `''`, and returns the id. In `onInput` the id is `<seat>.<seq>.<n>` (the one the shooter's client predicted) and `src` the seat; passing `id` there throws. Elsewhere `id` is required and `src` is `''`. An existing id is re-launched, replaced whole: a bounce. `g` is downward along −z, 0 to 1000 units/s². Throws a `RangeError`, writing nothing, past the launch budget. |
 | `ctx.projectiles.at(id, tick?)` | `{ x, y, z, vx, vy, vz }` at that tick (default: this one), or `undefined` for an id that is not a projectile. |
-| `ctx.projectiles.sweep(id, { kinds, radius })` | `{ id, dist }[]`, nearest first: the entities of those kinds whose sphere of `radius` the path crossed since the previous tick. The shooter's own body can be among them (a launch point inside it): skip it. Costs the number of entities of those kinds. |
+| `ctx.projectiles.sweep(id, { kinds, radius, height?, duckHeight?, rewind? })` | `{ id, dist }[]`, nearest first: the entities of those kinds whose sphere of `radius` the path crossed since the previous tick. With `height` (and `duckHeight`) each target is a body, an upright capsule on its position, as for `ctx.rewind.hitscan`. The shooter's own body can be among them (a launch point inside it): skip it. Costs the number of entities of those kinds. |
 
-Projectiles take no part in lag compensation: `ctx.rewind` skips them, and a sweep tests bodies
-where they are now. The server never removes one: the module does, on a hit, at the walls or after a
+A projectile is never a lag-compensated target: `ctx.rewind` skips it. A sweep tests bodies where
+they are now. With `rewind: true`, in a room whose config has `lagComp: { projectiles: true }`, it
+tests a player's projectile against the bodies where its shooter saw them; without that config key
+`rewind: true` throws a `TypeError`. A projectile the room launched itself (`src` `''`, a bounce
+re-launched from `step`) is judged against the present either way. Sweep every projectile a player
+fires with `rewind: true` ([projectiles.md](projectiles.md#bodies-and-what-the-shooter-saw)). The
+server never removes one: the module does, on a hit, at the walls or after a
 maximum age. Change a flight by re-launching; `update` on its `x`…`vz` keeps the old launch tick, so
 it jumps. The launches waiting to go out may hold at most 224 entities and 28 KiB of output, about a
 hundred new projectiles in one tick.

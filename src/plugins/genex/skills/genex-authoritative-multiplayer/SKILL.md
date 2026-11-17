@@ -88,7 +88,7 @@ as listed, for example
 `genex__publish {"operation":"gallery"}`; both carry the room module (above). Other commands map
 onto Studio tools as the `genex` skill describes (`genex__skill {"name":"genex"}`).
 
-<!-- upstream @genex-ai/cli-demo/templates/skills/genex-authoritative-multiplayer/SKILL.md v1.43.5 sha256 fb46cf6dbd6895a0904a4472263ffbf29a4830afd9a340829057980194fd8429 -->
+<!-- upstream @genex-ai/cli-demo/templates/skills/genex-authoritative-multiplayer/SKILL.md v1.43.6 sha256 eb1a5e376f1bc1eec23ca59e0d9fa5c9c3f8d5640fa4a21ac56df1e272adbfc3 -->
 ---
 name: genex-authoritative-multiplayer
 description: Server-authoritative multiplayer for Genex games — the game's own room module runs on Genex's servers, players only send input, and the server decides every move and hit (lag-compensated). Use for competitive play where cheating matters: ranked PvP, arenas, shooters (first-person, hitscan or dodgeable projectiles), car football, "so nobody can cheat". Casual co-op and hangouts use genex-threejs-multiplayer instead. Load before writing the room module or any networking code.
@@ -128,33 +128,41 @@ and no shared objects — the server owns all state.
    `config`, `init`, `onJoin`, `onLeave`, `onInput` and `step`. It is server code: keep it and
    everything only it uses in `server/`. Shared pure code (a movement step the client also runs)
    may live in `src/` and be imported by both. The full API and the sandbox's rules are in
-   [references/module-api.md](references/module-api.md); four complete games to start from (an
-   arena with instant shots, one with bolts players can dodge, a car arena with a ball, and the car
-   arena on server physics with crates) are in
-   [references/room-template.md](references/room-template.md).
+   [references/module-api.md](references/module-api.md); five complete games to start from (an
+   arena with instant shots, one with bolts players can dodge, a car arena with a ball, the car
+   arena on server physics with crates, and a first-person arena) are in
+   [references/room-template.md](references/room-template.md). Start a first-person or third-person
+   shooter from template 5.
 2. **The manifest block**, in package.json:
 
    ```json
-   { "genex": { "authority": { "module": "server/room.ts", "tickHz": 30, "maxPlayers": 8, "preset": "topdown" } } }
+   { "genex": { "authority": { "module": "server/room.ts", "maxPlayers": 8 } } }
    ```
 
    A game without a package.json (one made from Studio's template) puts the same object in
    `genex.json` as `{ "authority": { … } }`. `module` is a plain relative path to a `.js` or `.ts`
    file inside the game folder. The rest is optional: `maxPlayers` (1 to 64) is the most a room
-   seats (the module may ask for fewer), `tickHz` (20, 30, 60 or 120) is the rate for a module whose
-   `config` names none (120 only for a module that asks for physics), and `preset` names its movement preset. Left out, each comes from the
+   seats (the module may ask for fewer) and `preset` names its movement preset. `tickHz` (20, 30, 60
+   or 120; 120 only for a module that asks for physics) is the highest rate Genex's servers run the
+   room at: a module whose `config.tickHz` is higher runs at the manifest's rate there, and so does
+   a module whose `config` names none. The local server never reads it, so a manifest `tickHz: 30`
+   over a module that asks for 60 plays at 60 in testing and at 30 once published. Leave `tickHz`
+   out of the manifest and set it in the module's `config`. Left out, each comes from the
    module's own `config`. A malformed block is not ignored — `genex preview` refuses it and says why.
 3. **The client**: `connectAuthority` with the identity from `$genex-threejs-embed-auth`, input
    written to `session.input`, `session.frame(now)` once per render frame, and the scene drawn
    from `session.entities()`.
 4. **The packages**: `npm i @genex-ai/multiplayer@latest @genex-ai/embed-sdk@latest` and
-   `npm i -D @genex-ai/authority-dev`. The game needs a `@genex-ai/multiplayer` that exports
-   `@genex-ai/multiplayer/authority` and an embed SDK at 0.35.0 or newer (it has
-   `getAuthorityUrls`). If the import does not resolve after installing `@latest`, the release with
-   server-authoritative rooms is not out yet: tell the person plainly and stop, rather than writing a
-   server of your own. Projectiles need `@genex-ai/multiplayer` 0.17.4 or newer; predicted hits and
-   a render delay that follows the link need 0.17.14 or newer; the update rate (60 a second by
-   default) needs 0.17.15 or newer.
+   `npm i -D @genex-ai/authority-dev@latest`. Everything this skill teaches is in
+   `@genex-ai/multiplayer` 0.17.19, `@genex-ai/embed-sdk` 0.36.0 and `@genex-ai/authority-dev`
+   0.1.10; a game on older ones lacks what came after them. Projectiles need `@genex-ai/multiplayer`
+   0.17.4 or newer; `home` and `getAuthorityHome` need 0.17.12 (and embed SDK 0.36.0); `region` and
+   `rttMs` need 0.17.13; predicted hits and a render delay that follows the link need 0.17.14; the
+   update rate (60 a second by default) needs 0.17.15; bodies as targets (`height`, `duckHeight`) and
+   a projectile's `rewind` need 0.17.17, and `@genex-ai/authority-dev` 0.1.9 for the local server to
+   judge them (an older one ignores both and tests a ball at the feet); `pingMs` needs 0.17.19. If
+   `@genex-ai/multiplayer/authority` does not resolve after installing `@latest`, tell the person
+   plainly and stop, rather than writing a server of your own.
 
 ## Rules that decide whether it plays well
 
@@ -196,9 +204,10 @@ from one file both import: the session predicts only while the two hash the same
 an editor gets that file from an exporter and `genex world fit`, on any engine:
 [references/levels.md](references/levels.md). Their inputs,
 parameters, units and CPU budget are in [references/presets.md](references/presets.md); read it
-before writing either side. An Unreal level becomes that file by a bake (`Genex.FitCollisionWorld`, "An art level"
-in presets.md), not by hand. A ball the cars knock about is one projectile the module re-launches
-(template 3, and "Running a ball" in presets.md).
+before writing either side. An Unreal level becomes that file by a bake (`Genex.FitCollisionWorld`, "Unreal"
+in levels.md), not by hand. A ball the cars knock about is one projectile the module re-launches
+(template 3, and "Running a ball" in presets.md). Template 5 is a whole first-person game on the
+`firstperson` preset.
 
 ## Feel settings: contacts, inputs, lifts, tick rate, update rate, regions, fast channel
 
@@ -211,14 +220,15 @@ how often the room sends its state, regions and the UDP fast channel are **setti
 
 When things must collide with each other (a stack that topples, a ball between cars and walls, a
 door a player shoves), the module asks for server physics (`config.physics`) and spawns bodies with
-`ctx.physics`; clients only draw them. It is new: check physics.md for when the servers run it. Read
+`ctx.physics`; the game's client code only draws them. Read
 [references/physics.md](references/physics.md) first; template 4 is the car arena with a physics ball
 and crate stacks.
 
 ## Shots: hitscan or projectile
 
 - **Instant** (a rifle, a laser): `ctx.rewind.hitscan` in `onInput`, lag-compensated with
-  `config.lagComp`. Template 1. A world's walls stop it with `ctx.world.ray`:
+  `config.lagComp`. Template 1 (top-down) and template 5 (first-person, with walls, bodies, health
+  and the predicted hit marker). A world's walls stop it with `ctx.world.ray`:
   [references/presets.md](references/presets.md#a-shot-and-the-world). Where bullets differ from
   bodies, a shot world and the shooter's own stop: [references/levels.md](references/levels.md#what-bullets-meet).
 - **Something players see travel and can dodge** (a bolt, a rocket, a grenade, an arrow, a
@@ -283,10 +293,30 @@ function loop(now: number) {
 }
 requestAnimationFrame(loop);
 session.on("shot", (data) => showTracer(data)); // an event the room module emitted
-session.on("rejoining", () => showBanner("Reconnecting…")); // a deploy or a dead server: the SDK is on it
-session.on("rejoined", () => hideBanner()); // a new seat in a new room, on the same session object
+session.on("reconnecting", () => showBanner("Reconnecting…")); // the socket dropped: the SDK restores it
+session.on("reconnected", () => hideBanner()); // the same seat in the same room
+session.on("rejoining", () => showBanner("Reconnecting…")); // a deploy or a dead server: the SDK finds the next room
+session.on("rejoined", () => { hideBanner(); clearDrawnEntities(); }); // a new seat in a new room, on the same session object
 session.on("disconnect", (code) => showLeft(code)); // over for good
 ```
+
+**The session in one table.** Everything the client reads comes from it:
+
+| Member | What it is |
+|---|---|
+| `session.id` | Your seat: the `owner` of your entity. It changes on `rejoined`. |
+| `session.me()` | Your own entity, predicted; `undefined` until the room spawned it. |
+| `session.entities()`, `session.entity(id)` | Every entity as this frame draws it, your predicted shots included. |
+| `session.players()` | The roster, by seat: `{ id, name, uid, team, connected, avatarUrl }`. Names and avatars for a scoreboard come from here; `connected` is false while that player's socket is down. |
+| `session.region`, `session.pingMs` | The region the room's server is in (`''` on the local server) and the link's round trip to it, ms (-1 until measured): what a HUD shows. |
+| `session.connected` | False from a dropped socket until the reconnect's first state, and after the session ends. |
+| `session.code` | The room's invite code ([references/settings.md](references/settings.md#playing-with-a-friend)). |
+| `session.leave()` | Leaves on purpose, for a quit to the menu. Nothing reconnects after it. |
+
+**Show `session.pingMs` as the ping, with `session.region`** (`eu · 42 ms`). Never show
+`session.rttMs`: it is the round trip of an input to the state that acknowledges it, and a room with
+a movement preset keeps a seat's inputs in a buffer before it steps them (up to 100 ms on a link
+that stalls), so `rttMs` reads above the link ([references/settings.md](references/settings.md#inputs)).
 
 **Other players are drawn a render delay behind**, and the session sizes it: 100 ms on a steady
 link, more (up to the room's ceiling, at most 250 ms) when states arrive unevenly, so other players
@@ -297,17 +327,54 @@ client at 100 ms. A module lowers the ceiling with `config.interpolation`
 delay: each input carries the delay its player really drew, so a shot is still judged where it was
 aimed.
 
-**Deploys never end a game.** When a server is updated, your players get a `draining` event, keep
-playing for a minute, and are moved by the SDK to a fresh room, together. You write nothing for that.
-The new room starts from `init` unless your module hands its state on: add `onDrain(ctx)` and read
-`ctx.handoff` in `init`, keyed by uid ([references/module-api.md](references/module-api.md)). `disconnect`
-now means it is really over: a kick, a fault, or no server for three minutes.
+**Deploys never end a game.** When a server is updated, your players get a `draining` event
+(`{ closesInMs }`), keep playing, and are moved by the SDK to a fresh room, together: `rejoining`
+(`{ attempt, code, waitMs }`), then `rejoined` (`{ code, url }`). A dropped socket that the SDK
+restores is `reconnecting` and `reconnected`: the same seat, nothing to rebuild. After `rejoined`
+the `session` object, its listeners, `session.input` and the world you gave it are the same, and
+these are new, so the handler resets what the game keeps of them:
+
+- `session.id` and every entity id: remove every mesh keyed by entity id and let the draw loop build
+  the room again; drop anything cached by the old seat.
+- `session.telemetry`, which counts from 0: reset a fire cooldown counted in `inputsSent`.
+- Your entity's life: its `epoch` starts over. A predicted hit still pending is cancelled by the
+  session.
+
+`rejoined` with `moved: true` is a player who was alone and now sits in a room that has players
+([references/settings.md](references/settings.md#regions)). The new room starts from `init` unless
+your module hands its state on: add `onDrain(ctx)` and read `ctx.handoff` in `init`, keyed by uid
+([references/module-api.md](references/module-api.md); template 5 keeps its scores this way).
+`disconnect` means it is really over: a kick, a fault, or no server for three minutes.
+`rejoin: false` in `connectAuthority` makes a lost room a `disconnect`. Every template handles
+`reconnecting`, `reconnected`, `rejoining`, `rejoined` and `disconnect`.
 
 A refused join rejects with a `code`: 402 (the owner's plan does not include Genex servers — final),
 424 (no room module is published for this build yet), 426 (the SDK is too old), 429 (the owner's
 server time or room limit is used up — try later) or 503 (no server free — the session already retried). Say each
 in the player's words; never loop on 402 or 424. The whole client, with three.js, is in
 [references/room-template.md](references/room-template.md).
+
+## A client in Unity, Unreal, Rust or Godot
+
+The room module is the same for every engine: `server/room.ts`, the manifest block,
+`genex-authority-dev` and every reference page about the module apply as written. The client code in
+this skill is TypeScript for a web game. A game in another engine uses that engine's Genex
+multiplayer SDK, which has the same session under its own names. Read the SDK's README before
+writing the client, and never port the TypeScript by hand.
+
+| Engine | The SDK in the game | Read | The ping to show |
+|---|---|---|---|
+| Unity | The package `com.genex.multiplayer` in `Packages/` | `README.md` in the package, "Server-authoritative rooms" | `Ping` on the session |
+| Unreal | The plugin `GenexMultiplayer` in `Plugins/` (a C++ project to package) | `sdks/unreal/README.md` in the Genex SDK, "Authority rooms" | Blueprint **Get Ping Ms**; C++ `PingMs()` |
+| Rust | The crate `genex-multiplayer` (`sdks/rust/genex-multiplayer`) | `sdks/rust/README.md` in the Genex SDK, "Authority rooms" | `ping_ms()` |
+| Godot | The addon `addons/genex_multiplayer/` | `sdks/godot/README.md` in the Genex SDK, "Server-authoritative rooms" | `rtt()` only: it has no link-only ping |
+
+In Genex Studio the engine's own plugin installs the Unity package, the Unreal plugin and the Godot
+addon into the project and brings its own multiplayer skill for the client: use that skill for the
+client and this one for the room. Two limits to design the room around: the Unity and Unreal SDKs and the
+native Rust and Godot sessions do not send the `lifts@1` capability, so a room that declares
+`config.lifts` refuses their seats (426); and the Godot session ends on a server deploy instead of
+rejoining.
 
 ## Shipping it
 
@@ -320,7 +387,7 @@ ship one that is not ready:
 - **Before any game file uploads**, the module and its report go to a private store that the game's
   address never serves, and `server/` is left out of the public build.
 - **On Genex's servers the owner needs Genex Pro, unless Genex's free tier is on.** With it off a
-  free account is refused with `authority_requires_pro` and nothing is uploaded; it can still build
+  free account is refused with `Room module refused (requires_pro)` and nothing is uploaded; it can still build
   and test everything locally. With it on a free account publishes too, under smaller limits (fewer
   players, rooms and room-hours, at most 60 Hz by default), and once its monthly room time is used
   new rooms are refused until the next period. Say so before the person publishes.

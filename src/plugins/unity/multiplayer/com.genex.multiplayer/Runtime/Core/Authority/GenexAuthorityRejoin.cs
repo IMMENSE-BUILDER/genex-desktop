@@ -382,10 +382,17 @@ namespace Genex.Multiplayer.Authority
         public bool IsClosed => seat.IsClosed && !rejoining;
         public double Tick => seat.Tick;
         public string Preset => seat.Preset;
+        /// <summary>Smoothed round trip of an input to the state that acknowledges it, ms; 0 until the first is in. In a
+        /// paced room (§17.11 <i>Input pacing</i>) it holds the time the room kept the input in the seat's buffer, so it is
+        /// not what a game shows as ping: that is <see cref="Ping"/>.</summary>
         public double Rtt => seat.Rtt;
+        /// <summary>The link's smoothed round trip to the room's server, ms (§17.3 <i>Ping</i>), without the wait in the
+        /// room's buffer; -1 until the first sample, and again after a reconnect or a rejoin. What a game shows as its
+        /// ping.</summary>
+        public double Ping => seat.Ping;
         /// <summary>The round trip a render time is placed by, ms (§17.3 <i>A state's arrival</i>): other entities are drawn at
         /// the server's time less <see cref="RenderDelayMs"/> and half of this. No measure of the link: with next to no
-        /// latency it reads 0 or under it. A game's ping is <see cref="Rtt"/>.</summary>
+        /// latency it reads 0 or under it. A game's ping is <see cref="Ping"/>.</summary>
         public double RenderRtt => seat.RenderRtt;
         /// <summary>How far behind the server other entities are drawn now, ms (§17.3 <i>The render delay</i>):
         /// <see cref="GenexAuthorityOptions.RenderDelayMs"/> in a room that publishes no ceiling, and between it and the

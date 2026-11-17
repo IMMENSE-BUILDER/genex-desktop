@@ -2,6 +2,15 @@
 
 All notable changes to `com.genex.multiplayer`. Versions follow [semantic versioning](https://semver.org); before 1.0 a minor bump may add API.
 
+## 0.10.4
+
+- **A ping that is the link's alone (PROTOCOL.md §17.3 *Ping*).** `Rtt` is the round trip of an input to the state that
+  acknowledges it, and a game server now holds a seat's inputs in a short buffer on a link that stalls (§17.11 *Input
+  pacing*, in rooms with a movement preset too), so `Rtt` reads up to 100 ms above the link there. `GenexAuthoritySeat`
+  and `GenexAuthoritySession` gain `Ping` (ms, -1 until the first sample, and again on a new socket): the time since
+  the newest input the room has received was sent. Show `Ping`; `Rtt` is unchanged and nothing changes on the wire.
+  Vectors: `conformance/authority/ping.json` (`GenexSmoke ping`).
+
 ## 0.10.3
 
 - **Predicted hits on bodies: a height and a ducked height (PROTOCOL.md §17.9 *Target shapes*).** A predicted hit tested

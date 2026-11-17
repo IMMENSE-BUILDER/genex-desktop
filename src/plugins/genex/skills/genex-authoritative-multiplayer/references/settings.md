@@ -2,8 +2,9 @@
 
 A room module says how its game feels as **data in `config`**, never as code that names the game.
 Pick the genre preset closest to the game; every setting you leave out comes from its table, and
-every engine runs the same table, so prediction matches on every client. All of it needs a
-`firstperson` or `vehicle` movement preset ([presets.md](presets.md)); a bad value is refused when the
+every engine runs the same table, so prediction matches on every client. `contacts` and `lifts`
+need a `firstperson` or `vehicle` movement preset ([presets.md](presets.md)); `inputs`, `patchHz`,
+`lifetime` and `interpolation` work in any room. A bad value is refused when the
 module loads, naming the first bad path (for example `$.config.contacts.top.speed`).
 
 | The game | `contacts.preset` | Movement | Seats on each other | Updates a second | Input repeat |
@@ -43,8 +44,9 @@ config: { tickHz: 60, maxPlayers: 6, preset: { name: "vehicle", params: {} }, co
 - **Cells you can override**: `shape` (default: the movement preset's hull, a box over a `vehicle`),
   `restitution`, `passes` (1 to 64), `offWall`, `drawing` (`predicted`, `separate`, `timeline`: how a
   client draws other seats), `push` (`shared` or `mover`), `headFriction` (`slide` or `carry`, for props).
-- A module that needs a rule the table cannot say keeps the contact functions of
-  [module-api.md](module-api.md); do not mix the two.
+- A module that needs a rule the table cannot say declares no `contacts`, moves the seats itself in
+  `step`, and its client hands `connectAuthority` the same rule as functions (`contacts`, and
+  `contactPass` for a whole pass) so its prediction runs it; do not mix the two.
 
 ## Inputs
 
@@ -53,6 +55,18 @@ under its last input (`repeat: "on"`, bounded to about 33 ms a starve and 100 ms
 (`"off"`). The default is the genre's column above (`inputs.preset`, else `contacts.preset`, else on).
 Car arenas measured worse with repeats on, shooters and character games better. Override only with a
 measurement: `inputs: { repeat: "off" }`. The client follows the room's setting by itself.
+
+**A room with a movement preset paces its inputs.** It steps each seat one input a tick from a short
+buffer, never several at once as they arrive, so a player whose Wi-Fi holds packets back for a
+moment is not drawn standing and then jumping by everyone else. On a steady link the buffer holds
+one input; on a link that stalls it holds up to 100 ms of them (50 ms in a physics room that
+predicts), and that seat is stepped that much later. Nothing in the module or the client turns it
+on, and `genex-authority-dev` (0.1.10 or newer) paces the same way. Two things follow for the game:
+
+- `session.rttMs` includes the wait in that buffer, so it reads above the link. The ping a game
+  shows is `session.pingMs`, the link's round trip alone, with `session.region`.
+- A hit marker that waits for the server waits for the buffer too. Show it from a predicted hit
+  ([projectiles.md](projectiles.md#show-the-hit-at-once-predicted-hits)).
 
 A seat that stops sending inputs holds where its last one left it, in the air too, and everyone else
 sees that. `settleMs` (100 to 60000, default none) has the room step its `firstperson` or `vehicle` body
@@ -85,16 +99,19 @@ lifts: { platforms: [
 ] }
 ```
 
-- A path has `points`, one leg length in **ticks** per leg (`legs`: one fewer than the points for the
-  default `pingpong`, one per point for `loop`), optional `waits` (one per point), `ease` (`linear` or
-  `smooth`) and `phase`. A `spin.period` is the ticks of a full turn (8 or more); `surface` is a
-  conveyor's speed in the platform's frame. 1 to 32 platforms, ids of a-z, 0-9 and `-`.
+- A path has `points`, one leg length in **ticks** per leg (`legs`: one fewer than the points for
+  `mode: "pingpong"`, the default, and one per point for `mode: "loop"`), optional `waits` (one per
+  point), `ease` (`linear` or `smooth`) and `phase`. A `spin.period` is the ticks of a full turn (8 or
+  more) and `spin.dir` its direction, `1` (the default, counterclockwise seen from above) or `-1`;
+  `surface` is a conveyor's speed in the platform's frame. 1 to 32 platforms, ids of a-z, 0-9 and `-`.
 - A platform that moves more than the movement preset's `radius` in one tick is refused, naming the
   leg and the most allowed. Lengths in ticks scale with `tickHz`: the same elevator at 120 Hz has doubled legs.
 - The client draws a lift with `session.liftPose(id)` and, in a `firstperson` view, adds
   `session.viewCarry()` to its yaw once a frame. The module reads `ctx.lifts.crushed()` for damage.
-- The client must send the `lifts@1` capability; `connectAuthority` does. A client that does not (the
-  Godot SDK today) is refused when the room declares lifts, never allowed to fall through them.
+- The client must send the `lifts@1` capability; `connectAuthority` does. A client that does not is
+  refused (426) when the room declares lifts, never allowed to fall through them: the Unity and
+  Unreal SDKs and the native Rust and Godot sessions do not send it, so declare lifts only in a game
+  whose every client is a web build on `connectAuthority`.
   With server physics, crates ride lifts and a conveyor moves them.
 
 ## Tick rate
@@ -162,7 +179,7 @@ region's ping is often still out when the measurement ends. A full region (503) 
 to the next-best after a second refusal. Nothing to
 configure in the module.
 
-Three options on `connectAuthority` change this, and most games need none:
+Four options on `connectAuthority` change this, and most games need none:
 
 | Option | Default | What it does |
 |---|---|---|
@@ -183,16 +200,18 @@ Most games need none: Auto finds the players. Add one when players ask to choose
 more than company. It is a setting, not a screen before every match.
 
 ```ts
-import { authorityRegionOf, connectAuthority, measureAuthorityRegions } from '@genex-ai/multiplayer/authority';
+import { connectAuthority, measureAuthorityRegions } from '@genex-ai/multiplayer/authority';
 
 const regions = getAuthorityRegions();
 const NAMES: Record<string, string> = { asia: 'Asia', eu: 'Europe', us: 'North America' };
 
 // In settings: Auto first, then each region with its ping. No join is made.
 const pings = await measureAuthorityRegions(regions); // [{ region: 'asia', pingMs: 38 }, …] in list order
+// A stand with one region is not measured: its pingMs is null, and so is a region that did not answer.
+const noPing = regions.length <= 1 ? '' : ' · no answer';
 const rows = [{ value: '', label: 'Auto (recommended)' }, ...pings.map((p) => ({
   value: p.region,
-  label: `${NAMES[p.region] ?? p.region} · ${p.pingMs === null ? 'no answer' : `${Math.round(p.pingMs)} ms`}`,
+  label: `${NAMES[p.region] ?? p.region}${p.pingMs === null ? noPing : ` · ${Math.round(p.pingMs)} ms`}`,
 }))];
 
 // The choice is the player's: keep it, and pass it on the next join. '' is Auto.
@@ -202,8 +221,8 @@ const session = await connectAuthority({
   ...(picked === '' ? {} : { region: picked }),
 });
 
-// Show where the player is, and say when they were moved.
-const here = authorityRegionOf(regions, session.url); // 'asia' | 'eu' | 'us' | undefined
+// Show where the player is and their ping there, and say when they were moved.
+const here = `${NAMES[session.region] ?? session.region} · ${Math.round(session.pingMs)} ms`; // pingMs is -1 until measured
 session.on('rejoined', (info) => { if (info.moved) showToast('Found players, joining their room'); });
 ```
 
@@ -247,7 +266,7 @@ WebSocket. It needs nothing in the room module.
   the log, or as `session.fast.line`, `GetTransportLine()`, `GenexFastStatus.Line`, `transport_line()`. A log
   that says `websocket` is the first thing to read when a game feels late.
 - **A browser game has it by default, over WebTransport, with nothing to write**: `connectAuthority` and the
-  web engine bridge (Godot and Rust web exports) use it wherever the room's server runs the relay and the
+  web engine bridge (a Godot web export) use it wherever the room's server runs the relay and the
   browser can open it; `fast: false` turns it off. Anything else lands the seat on the WebSocket by itself,
   and `session.fast.fallback` says why (`no-webtransport`, `no-relay`, `not-offered`, `unreachable`,
   `handshake`, `stall`, `server`). A game gets it once it is rebuilt on this SDK.

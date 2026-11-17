@@ -12,7 +12,8 @@ exist after `npm i @genex-ai/multiplayer@latest`, the release is not out yet: sa
 not move projectile entities by hand every tick instead. Predicted hits
 ([below](#show-the-hit-at-once-predicted-hits)) need 0.17.14 or newer: while
 `session.onPredictedHit` does not exist, show hits from the module's events only. Bodies as targets
-(`height`) and `rewind` ([below](#bodies-and-what-the-shooter-saw)) need 0.17.17 or newer.
+(`height`) and `rewind` ([below](#bodies-and-what-the-shooter-saw)) need 0.17.17 or newer, and
+`@genex-ai/authority-dev` 0.1.9 for the local server to judge them.
 
 A complete room and client to start from: the bolt arena, the second template in
 [room-template.md](room-template.md).
@@ -22,12 +23,16 @@ A complete room and client to start from: the bolt arena, the second template in
 | Use | When | How it is judged | The shooter's hit marker, at once |
 |---|---|---|---|
 | Hitscan, `ctx.rewind.hitscan` | The shot is instant: rifles, lasers, a sniper. It must land where the crosshair was. | Lag-compensated (with `config.lagComp`): against where the shooter saw the targets. | `session.predictHitscan` |
-| A projectile, `ctx.projectiles` | Players can see the shot travel and dodge it: bolts, rockets, grenades, arrows, dodgeballs, fireballs. | Against where the targets are on the server now. No lag compensation. | `hits` in `session.predictProjectile` |
+| A projectile, `ctx.projectiles` | Players can see the shot travel and dodge it: bolts, rockets, grenades, arrows, dodgeballs, fireballs. | A player's, swept with `rewind: true`: each tick of its flight against where its shooter saw the targets. A projectile the room launched itself, and any sweep without `rewind`: against where the targets are on the server now. | `hits` in `session.predictProjectile` |
 
-A projectile is fair without lag compensation because the target sees it coming at the server's
-present and can step aside. That also means a shooter must lead a moving target: the bodies they see
-are their render delay in the past, 100 ms or more. Keep projectiles slow enough to see (a few to a
-few tens of units per second); a shot that should feel instant is hitscan.
+A target sees a projectile coming at the server's present and can step aside. The shooter sees the
+targets a render delay and half a round trip in the past, so a shot aimed at a moving target as
+drawn, judged against the present, passes behind it. Sweep every projectile a player fires with
+`rewind: true` in a room whose config has `lagComp: { projectiles: true }`
+([below](#bodies-and-what-the-shooter-saw)): the room then judges it where that shooter saw the
+targets. Keep projectiles slow enough to see at the game's scale: a few tens of units a second in a
+top-down arena whose bodies run 6, about 2000 in a `firstperson` room, whose bodies run 250. A shot
+that should feel instant is hitscan.
 
 ## The room module
 
@@ -73,6 +78,7 @@ if (Math.abs(at.x) > ARENA || Math.abs(at.y) > ARENA || at.z < 0) ctx.entities.r
 The entities of those `kinds` whose sphere of `radius` the projectile's path crossed between the
 previous tick and this one, nearest first, as `{ id, dist }` (`dist`: how far along that path, from
 its point at the previous tick). A fast projectile never tunnels through a body between two ticks.
+The options also take `height`, `duckHeight` and `rewind` ([below](#bodies-and-what-the-shooter-saw)).
 
 - The projectile is a point: `radius` is the target's radius **plus** the projectile's.
 - Swept in `step`, bodies are tested where they stand this tick, after this tick's inputs moved them;
@@ -277,16 +283,25 @@ if (armed && sent > 0) {
 
 ### Axes in three.js
 
-The server's ground is x/y and +z is up; `yaw` 0 points along +x. In three.js y is up:
+The server's ground is x/y and +z is up; `yaw` 0 points along +x. In three.js y is up. A `topdown`
+room (templates 1 and 2) draws the server's `y` as three's `z`:
 
 ```ts
-mesh.position.set(e.x, e.z + HEIGHT, e.y); // server (x, y, z) → three (x, z, y)
+mesh.position.set(e.x, e.z + HEIGHT, e.y); // topdown only: server (x, y, z) → three (x, z, y)
 mesh.lookAt(e.x + e.vx, e.z + HEIGHT + e.vz, e.y + e.vy); // point a rocket along its flight
 ```
 
-A body turns by `-yaw` around three's y axis. A projectile launched at `z: 0` and drawn at a fixed
-`HEIGHT` keeps the hit test on the ground plane; a lob launches with `vz > 0` and `g > 0` and lands
-when `ctx.projectiles.at(id).z < 0`.
+There a body turns by `-yaw` around three's y axis. A projectile launched at `z: 0` and drawn at a
+fixed `HEIGHT` keeps the hit test on the ground plane; a lob launches with `vz > 0` and `g > 0` and
+lands when `ctx.projectiles.at(id).z < 0`.
+
+A `firstperson` or `vehicle` room never draws that way. It keeps three's handedness
+([presets.md](presets.md#axes-and-threejs)), for projectiles as for bodies:
+
+```ts
+mesh.position.set(e.x, e.z, -e.y); // firstperson and vehicle: server (x, y, z) → three (x, z, -y)
+mesh.lookAt(e.x + e.vx, e.z + e.vz, -(e.y + e.vy));
+```
 
 ## Every client must support projectiles
 
@@ -295,9 +310,9 @@ writes the launch once and never moves it. Every client in a room whose module l
 must support them:
 
 - Ship `@genex-ai/multiplayer` 0.17.4 or newer in the same build as the first module that launches.
-- A native build (Unity, Godot, Unreal, Rust) in the same room supports them only once its Genex
-  multiplayer SDK passes the projectile conformance checks; until then, keep that build out of rooms
-  with projectiles.
+- The Unity, Unreal, Rust and Godot SDKs draw and predict projectiles (the "Projectiles" section of
+  each SDK's README). Predicted hits are in the Unity, Unreal and Rust SDKs; a Godot client shows
+  hits from the module's events.
 
 ## Before calling it done
 

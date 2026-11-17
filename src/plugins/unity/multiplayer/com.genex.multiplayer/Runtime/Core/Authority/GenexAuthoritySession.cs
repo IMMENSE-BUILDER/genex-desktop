@@ -1055,6 +1055,10 @@ namespace Genex.Multiplayer.Authority
         private double sentMap = double.NaN;
         private readonly GenexInputThrottle throttle = new GenexInputThrottle();
         private double throttleAt = double.NaN;
+        /// <summary>The link's round trip (§17.3 *Ping*), and the socket whose inputs it has timed: a new one counts its
+        /// inputs from 1 again.</summary>
+        private readonly GenexPing ping = new GenexPing();
+        private int pingEpoch;
         private readonly Predict predict;
         private readonly TaskCompletionSource<bool> firstState = new TaskCompletionSource<bool>();
         private readonly GenexAuthorityTelemetry telemetry = new GenexAuthorityTelemetry();
@@ -1211,6 +1215,7 @@ namespace Genex.Multiplayer.Authority
             // reconciler exists. Without one the server would rewind to ~100 ms after what was drawn. Set here, it
             // is the handle's own from then on, which PaceRenderDelay writes each frame the delay moves.
             handle = room.Input(new AuthorityInput(), new InputOptions { Mode = "reliable", RenderDelay = delayNow });
+            pingEpoch = handle.Epoch;
             shadow = new GenexShadowInput(handle, () => room.Clock);
             // §17.12: with the fast channel your inputs also go by datagram (numbered by the handle) and your motion arrives
             // by snapshot, written into this same state; its ack stands in for the handle's.
@@ -1319,9 +1324,14 @@ namespace Genex.Multiplayer.Authority
         public double Tick => room.State != null ? room.State.tick : 0;
         /// <summary>The room's movement preset as JSON text ("" = none).</summary>
         public string Preset => room.State?.preset ?? "";
-        /// <summary>Smoothed round trip to the server in ms, as the room clock measures it; 0 until the first input is
-        /// acknowledged. What a game shows as its ping.</summary>
+        /// <summary>Smoothed round trip of an input to the state that acknowledges it, ms, as the room clock measures it; 0
+        /// until the first input is acknowledged. In a paced room (§17.11 <i>Input pacing</i>) it holds the time the room
+        /// kept the input in the seat's buffer, so it is not what a game shows as ping: that is <see cref="Ping"/>.</summary>
         public double Rtt => MeasuredRtt();
+        /// <summary>The link's smoothed round trip to the room's server, ms (§17.3 <i>Ping</i>): the time since the newest
+        /// input the room has received was sent, without the wait in the room's buffer; -1 until the first sample, and
+        /// again on a new socket. What a game shows as its ping.</summary>
+        public double Ping => ping.Ms;
         /// <summary>The round trip a render time is placed by, ms (§17.3 <i>A state's arrival</i>,
         /// <see cref="GenexPacedClock.SmoothedRtt"/>): the server's time less half of it is the stamp of a state arriving
         /// now, so other entities are drawn at the server's time less <see cref="RenderDelayMs"/> and half of this. It is
@@ -1851,6 +1861,12 @@ namespace Genex.Multiplayer.Authority
                 var seq = handle.Send();
                 if (seq > 0)
                 {
+                    if (handle.Epoch != pingEpoch)
+                    {
+                        ping.Reset();
+                        pingEpoch = handle.Epoch;
+                    }
+                    ping.Sent(seq, GenexTime.Now());
                     sent++;
                     fast.Sent(seq, (ushort)data.tick, GenexInput.FromRaw(data.moveX, data.moveY, data.moveZ, data.yaw, data.pitch, data.buttons),
                         FastRenderStamp());
@@ -3962,6 +3978,9 @@ namespace Genex.Multiplayer.Authority
         {
             if (decodingArrived) drainStates++;
             projectileTtl.NoteState(GenexTime.Now());
+            // §17.3 *Ping*: a state's acknowledged input plus the ones the room holds is the newest it has received, on
+            // either channel. Timed at the read, as Rtt is.
+            ping.State(GenexTime.Now(), fast.Ack(), MySeat()?.inBuf ?? double.NaN, handle.SentCount);
             NoteBodies();
             physicsPrediction.OnState(ServerNowArrived());
             // A fast snapshot is counted just before it is written (§17.12): a state that raised the count came by the
