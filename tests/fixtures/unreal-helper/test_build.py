@@ -339,6 +339,13 @@ class ImportModel(BuildCase):
         for label, file in files.items():
             with self.subTest(label):
                 self.assert_unchanged(tool('import_model', file, '/Game/Genex/Models', 'Katana', 'box', True))
+        # A file kept in a Genex game's folder (where the app's own agent puts them) is told what to do,
+        # by its full path and by the game-relative path that agent is used to.
+        for file in (self.model, 'assets/helpers/h1/bike.glb'):
+            with self.subTest(file):
+                result = tool('import_model', file, '/Game/Genex/Models', 'Katana', 'box', True)
+                self.assertIn('has to be copied into the project first', result['error'])
+                self.assertEqual(result['project'], os.path.realpath(project))
 
     def test_a_model_imports_into_its_own_folder_as_one_mesh_with_its_collision_and_nanite(self) -> None:
         nested = '/Game/Genex/Models/Bike/bike/StaticMeshes/bike'

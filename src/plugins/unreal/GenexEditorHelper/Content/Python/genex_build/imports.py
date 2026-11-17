@@ -58,7 +58,11 @@ MESSAGE = {
     'not_assets': ('The file must be a file in the game folder\'s assets/ (or public/assets/), such as '
                    'assets/blender/<job>/model.glb.'),
     'not_in_project': ('The file must be a file inside this Unreal project\'s folder, given relative to it, such as '
-                       'assets/model.glb.'),
+                       'assets/model.glb. A file kept elsewhere (a Genex game folder\'s assets/, a download) has to be '
+                       'copied into the project first.'),
+    'missing_in_project': ('There is no such file in this Unreal project\'s folder: the path is read relative to it. A '
+                           'file kept elsewhere (a Genex game folder\'s assets/, a download) has to be copied into the '
+                           'project first.'),
     'collision': f'collision must be one of {", ".join(COLLISIONS)}.',
     'nanite': 'nanite must be true or false.',
     'nothing': 'Unreal imported nothing from this file; see the editor log.',
@@ -96,6 +100,13 @@ def game_folder() -> str:
     return project if own_project() else os.path.dirname(project)
 
 
+def _missing(folder: str, relative: str) -> bool:
+    """Whether a well-formed relative path names nothing in `folder`; a malformed one is left to the path checks."""
+    if not relative or '\0' in relative or '\\' in relative or '..' in relative.split('/'):
+        return False
+    return not os.path.lexists(os.path.join(folder, relative))
+
+
 def game_asset(file: object, extensions: tuple, max_bytes: int) -> str:
     """The real path of a file in the game's assets, given relative to the game folder or as its own full path.
 
@@ -110,7 +121,9 @@ def game_asset(file: object, extensions: tuple, max_bytes: int) -> str:
         relative = os.path.relpath(normal, game) if inside else file
     if own_project():
         if not isinstance(relative, str) or os.path.isabs(relative):
-            raise Refused(MESSAGE['not_in_project'], file=file)
+            raise Refused(MESSAGE['not_in_project'], file=file, project=game)
+        if _missing(game, relative):
+            raise Refused(MESSAGE['missing_in_project'], file=file, project=game)
     elif not isinstance(relative, str) or not relative.startswith(ASSET_ROOTS):
         raise Refused(MESSAGE['not_assets'], file=file)
     return paths.game_file(game, relative, extensions, max_bytes)
