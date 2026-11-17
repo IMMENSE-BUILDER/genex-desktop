@@ -113,7 +113,8 @@ writes resolves outside `spec.workRoot` (the lane root) or inside `~/AI Games` o
 profile. Games live in `spec.gamesRoot`, the only allowed project root; background improvement
 is off.
 
-`runEvalLane` checks the engine is ready and lists the model, turns off the spec's
+`runEvalLane` checks the engine is ready and lists the model (a model list that is still loading
+is read again every second for up to two minutes, `CATALOG_WAIT_MS`), turns off the spec's
 `disabledPlugins` as the Plugins panel's switch does and reads each back, opens a fresh game chat
 in the pinned permission mode, sends the brief and suffix with the commission, answers each `ask_user`
 question with the policy sentence and approves plan reviews (up to `maxAnswers`), and waits for
@@ -123,8 +124,8 @@ budgets, run ids, the permission mode and mode served, questions and answers, th
 against the shipped seed, the template digest taken when the app seeded the game, the first
 preview proxy, CLI versions, every installed plugin with whether it was on at the end, and errors. Exit is 0 when the lane reported, 1 when it failed.
 
-The runner types the app's failures like a raw lane's: an engine that was not ready is
-`engine-not-ready`; an unknown model, a plugin to turn off that is not installed or stays on, a
+The runner types the app's failures like a raw lane's: an engine that was not ready, or whose
+model list never finished loading, is `engine-not-ready`; a model missing from a loaded list, a plugin to turn off that is not installed or stays on, a
 failed thread, an unwritten report, a report ending in a harness failure, or a refused (78) or
 failed (1) launch with no report is `app-failed`. Any `engine_fallback` event during a run is
 `contamination`, and so is a report that does not show a lane's `disabledPlugins` off (a build
