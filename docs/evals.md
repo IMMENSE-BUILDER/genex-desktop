@@ -91,7 +91,10 @@ file.
 The CLI runs as a detached process group. Each stdout line lands in `stream.jsonl` as
 `{"receivedAt": <epoch ms>, "line": "<raw line>"}` as it arrives; `stdout.log` and `stderr.log`
 keep the raw output. At deadline plus 5 minutes the group gets SIGTERM, then SIGKILL 10 s later;
-anything the agent left running is reaped the same way. Guards read typed fields only, never
+anything the agent left running is reaped the same way. A run ends when the group's leader
+exits, for the Genex app too: output that a process outside the group still holds open (a server
+the agent left running keeps Electron's crash handler alive, and that holds the app's stderr) is
+read for 5 s more, then dropped. Guards read typed fields only, never
 message text: Claude's assistant error codes, 401/429 and rejected rate-limit events; Claude's
 init line must show no MCP servers, plugins or operator skills and the pinned permission mode;
 Codex's parent rollout must list only stock skills and inject no `AGENTS.md`. A run that writes
