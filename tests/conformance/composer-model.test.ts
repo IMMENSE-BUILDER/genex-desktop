@@ -732,3 +732,26 @@ it("a default worker on a signed-out or missing provider blocks no message", () 
     assert.equal(sendBlockOf(view, view.selected), null);
   }
 });
+
+describe("a pick saved before a provider's levels became a dial", () => {
+  const antigravity: EngineDescriptor = {
+    id: "antigravity",
+    label: "Antigravity",
+    kind: "delegated",
+    supportsSessions: true,
+    status: { code: "ready", detail: "" },
+    defaultModel: null,
+    models: [model("gemini-3.8-flash", { efforts: ["low", "medium", "high"], defaultEffort: "high" })],
+  };
+  const open = (modelKey: string, effort: string | null) =>
+    resolveComposerModel({ studio: true, engines: [antigravity], modelKey, effort });
+
+  it("opens on the model at the level the saved id names, until an effort is picked", () => {
+    const saved = open("antigravity::gemini-3.8-flash-low", null);
+    assert.equal(saved.selected, "antigravity::gemini-3.8-flash");
+    assert.deepEqual(saved.efforts, ["low", "medium", "high"]);
+    assert.equal(saved.effort, "low");
+    assert.equal(open("antigravity::gemini-3.8-flash-low", "medium").effort, "medium");
+    assert.equal(open("antigravity::gemini-3.8-flash", null).effort, "high", "a new pick starts where the model does");
+  });
+});

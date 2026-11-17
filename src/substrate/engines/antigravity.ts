@@ -46,6 +46,7 @@ import {
   type AntigravitySession,
   type AntigravityTier,
   type Json,
+  antigravityModelId,
   parseAntigravitySession,
   record,
   text,
@@ -267,6 +268,10 @@ export interface AntigravityTurnPlan {
   cwd: string;
   resume?: string | undefined;
   model?: string | undefined;
+  /** The effort picked for `model`, for a model with a dial (`antigravityModelId`). */
+  effort?: string | undefined;
+  /** The account's models as last listed: a loaded session need not list them again. */
+  models?: readonly EngineModel[] | undefined;
   /** The prompt's content blocks; none for a sign-in check, which only opens a session. */
   prompt: Json[];
   signal: AbortSignal;
@@ -438,8 +443,10 @@ export class AntigravityEngine implements Engine {
    * as signed out; a refusal beside an open session is left to that session to report.
    */
   async #probe(cli: AntigravityCli): Promise<SignIn> {
+    // As it was when the check started: a sign-in that lands meanwhile has a check of its own.
+    const wasSignedIn = this.#signIn?.signedIn === true;
     let opened = await this.#ask();
-    if (!opened && this.#signIn?.signedIn) opened = await this.#ask();
+    if (!opened && wasSignedIn) opened = await this.#ask();
     const vouched = opened ? null : this.#vouched();
     if (vouched) return vouched;
     if (opened) await this.#list(cli, opened);
@@ -532,6 +539,8 @@ export class AntigravityEngine implements Engine {
         cwd: runDir,
         resume: request.resume,
         model: request.model,
+        effort: request.effort,
+        models: this.#catalog.models(),
         prompt: promptBlocks(this.#brief(request, { cwd, scratch, bridge }), request.images ?? []),
         signal: controller.signal,
         neverTouch: request.worker?.neverTouch,
@@ -608,6 +617,8 @@ export class AntigravityEngine implements Engine {
       const plan: AntigravityTurnPlan = {
         cwd: scratch,
         model: request.model,
+        effort: request.effort,
+        models: this.#catalog.models(),
         prompt: promptBlocks(answerPrompt(request), images),
         signal,
       };
@@ -810,7 +821,11 @@ export async function runTurn(
     sessionId = session.sessionId;
     hooks.onSession(session);
     if (!plan.prompt.length) return null;
-    if (plan.model) await connection.request(AcpMethod.SessionSetModel, { sessionId, modelId: plan.model });
+    if (plan.model) {
+      const listed = session.models.length ? session.models : (plan.models ?? []);
+      const modelId = antigravityModelId(listed, plan.model, plan.effort);
+      await connection.request(AcpMethod.SessionSetModel, { sessionId, modelId });
+    }
     live = true;
     return record(await connection.request(AcpMethod.SessionPrompt, { sessionId, prompt: plan.prompt }));
   } catch (err) {

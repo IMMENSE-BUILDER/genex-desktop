@@ -30,7 +30,11 @@ import {
   failure,
   googleFailure,
 } from "../../src/substrate/engines/antigravity.ts";
-import { ANTIGRAVITY_HOSTS, parseAntigravitySession } from "../../src/substrate/engines/antigravity-cli.ts";
+import {
+  ANTIGRAVITY_HOSTS,
+  antigravityModelId,
+  parseAntigravitySession,
+} from "../../src/substrate/engines/antigravity-cli.ts";
 import { antigravityHome, antigravityHomes, sandboxedCliHomes } from "../../src/substrate/credential-homes.ts";
 import { childEnv } from "../../src/substrate/child-env.ts";
 import { type DelegateEvent, DelegateEventType, EngineError } from "../../src/substrate/engines/types.ts";
@@ -204,23 +208,77 @@ const refusal = async () => ({
 describe("Antigravity's sign-in, plan and models", () => {
   it("reads a new session: the models the account can run, the one it starts on, and its plan", async () => {
     const session = parseAntigravitySession(await json("antigravity-session-new-1.5.7.json"));
+    // Flipped (effort dial): the CLI lists each thinking level as a model; a model listed at
+    // several is one row with the levels on its dial, and one listed at a single level stays.
     assert.deepEqual(
       session.models.map((model) => [model.id, model.label]),
       [
-        ["gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"],
-        ["gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"],
-        ["gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"],
+        ["gemini-3.8-flash", "Gemini 3.8 Flash"],
         ["claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"],
         ["claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"],
         ["gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"],
       ],
     );
+    const [flash, ...rest] = session.models;
+    assert.deepEqual(flash?.efforts, ["low", "medium", "high"], "fastest first, as every dial");
+    assert.equal(flash?.defaultEffort, "high", "the level the session starts on");
+    assert.deepEqual(
+      rest.map((model) => model.efforts),
+      [undefined, undefined, undefined],
+    );
     assert.deepEqual(
       session.models.filter((model) => model.providerDefault).map((model) => model.id),
-      ["gemini-3.8-flash-high"],
+      ["gemini-3.8-flash"],
     );
     assert.deepEqual(session.tier, { id: "free-tier", name: "Antigravity Starter Quota" });
     assert.throws(() => parseAntigravitySession({ models: {} }), /could not be read/);
+  });
+
+  it("gives a model its levels as a dial, and leaves alone an id that only looks like one", () => {
+    const listed = (ids: string[], current = "") => ({
+      sessionId: "s",
+      models: { currentModelId: current, availableModels: ids.map((modelId) => ({ modelId, name: modelId })) },
+    });
+    const paid = parseAntigravitySession(
+      listed(["gemini-4-argon-high", "gemini-4-argon-low", "gemini-4-hydrogen-xhigh", "gemini-nova"]),
+    );
+    assert.deepEqual(
+      paid.models.map((model) => [model.id, model.efforts, model.defaultEffort]),
+      [
+        ["gemini-4-argon", ["low", "high"], "high"],
+        ["gemini-4-hydrogen-xhigh", undefined, undefined],
+        ["gemini-nova", undefined, undefined],
+      ],
+      "with none started on, the level Google lists first",
+    );
+    const taken = parseAntigravitySession(listed(["gemini-x", "gemini-x-high", "gemini-x-low"]));
+    assert.equal(taken.models.length, 3, "a listed id is never given to a second row");
+
+    const { models } = paid;
+    assert.equal(antigravityModelId(models, "gemini-4-argon", "low"), "gemini-4-argon-low");
+    assert.equal(antigravityModelId(models, "gemini-4-argon"), "gemini-4-argon-high", "no pick: where it starts");
+    assert.equal(antigravityModelId(models, "gemini-4-argon", "max"), "gemini-4-argon-high", "a level it lacks");
+    assert.equal(antigravityModelId(models, "gemini-4-argon-low", "high"), "gemini-4-argon-low", "a saved level's id");
+    assert.equal(antigravityModelId(models, "gemini-nova", "high"), "gemini-nova");
+  });
+
+  it("starts a turn on the picked model at the picked effort, by the id the CLI lists", async () => {
+    const { engine, agents } = await engineWith();
+    const cwd = await game();
+    const picked = (agent: Scripted | undefined) =>
+      agent?.received.find((message) => message.method === AcpMethod.SessionSetModel)?.params;
+    await engine.delegate({ cwd, prompt: "Go", model: "gemini-3.8-flash", effort: "low" });
+    await engine.delegate({ cwd, prompt: "Go", model: "gemini-3.8-flash" });
+    await engine.delegate({ cwd, prompt: "Go", model: "gemini-3.8-flash-medium", effort: "low" });
+    // The scripted answer says nothing, which a judge's answer may not: the model was picked before it.
+    await assert.rejects(
+      engine.complete({ model: "gemini-3.8-flash", effort: "medium", messages: [{ role: "user", content: "?" }] }),
+      /no answer/,
+    );
+    assert.deepEqual(
+      agents.map((agent) => (picked(agent) as Json | undefined)?.modelId),
+      ["gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-medium"],
+    );
   });
 
   it("is not installed, signed out, or ready with its plan and models, asking the CLI once until a sign-in", async () => {
@@ -241,7 +299,7 @@ describe("Antigravity's sign-in, plan and models", () => {
     const status = await engine.status();
     assert.equal(status.code, EngineStatusCode.Ready);
     assert.match(status.detail ?? "", /1\.5\.7 · Antigravity Starter Quota/);
-    assert.equal((await engine.models()).length, 6);
+    assert.equal((await engine.models()).length, 4);
     assert.equal((await engine.account()).source, LoginSource.System);
     assert.equal(agents.length, 2, "one more check, after the sign-in");
     await assert.rejects(stat(agents[1]?.invocation.cwd ?? ""), "the check's folder is removed");
@@ -273,7 +331,7 @@ describe("Antigravity's sign-in, plan and models", () => {
     now += 23 * 60_000;
     assert.equal((await engine.status()).code, EngineStatusCode.Ready, "the open session is the sign-in's proof");
     assert.equal((await engine.account()).source, LoginSource.System);
-    assert.equal((await engine.models()).length, 6);
+    assert.equal((await engine.models()).length, 4);
     assert.equal(agents.length, 2, "the first check and the build: no check ran beside the build");
 
     finish({ stopReason: "end_turn" });
@@ -295,7 +353,7 @@ describe("Antigravity's sign-in, plan and models", () => {
     refusals = 1;
     now += 2 * 60_000;
     assert.equal((await engine.status()).code, EngineStatusCode.Ready, "one refusal is asked again");
-    assert.equal((await engine.models()).length, 6, "the models stay listed through it");
+    assert.equal((await engine.models()).length, 4, "the models stay listed through it");
     assert.equal(agents.length, 3);
 
     refusals = 2;
