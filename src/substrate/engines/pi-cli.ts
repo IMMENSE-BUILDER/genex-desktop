@@ -207,9 +207,8 @@ export function parsePiModels(stdout: string, extraHosts?: Record<string, readon
 
 const STORE_FILES = ["models-store.json", "models.json"] as const;
 
-/** Hosts named in Pi's own model store. Never reads `auth.json`. */
-export async function readPiProviderHosts(home: string): Promise<Record<string, string[]>> {
-  const agent = path.join(home, ".pi", "agent");
+/** Hosts named in Pi's own model store, in Pi's folder (`piAgentDir`). Never reads `auth.json`. */
+export async function readPiProviderHosts(agent: string): Promise<Record<string, string[]>> {
   const merged: Record<string, string[]> = {};
   for (const file of STORE_FILES) {
     const text = await readFile(path.join(agent, file), "utf8").catch(() => "");

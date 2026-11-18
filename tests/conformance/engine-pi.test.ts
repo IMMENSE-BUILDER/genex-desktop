@@ -11,7 +11,15 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { PiEngine, type PiExec, type PiInvocation, piSandbox, stderrFailure } from "../../src/substrate/engines/pi.ts";
+import {
+  PiEngine,
+  type PiEngineOptions,
+  type PiExec,
+  type PiInvocation,
+  piSandbox,
+  stderrFailure,
+} from "../../src/substrate/engines/pi.ts";
+import { credentialHomes, piAgentDir, sandboxedCliHomes } from "../../src/substrate/credential-homes.ts";
 import { hostsFromPiModelsJson, parsePiModels } from "../../src/substrate/engines/pi-cli.ts";
 import { translatePiEvent } from "../../src/substrate/engines/pi-events.ts";
 import { ProcessSandbox } from "../../src/substrate/spawn.ts";
@@ -31,7 +39,10 @@ const events = async (name: string) =>
 
 const ready = async () => ({ ready: true, path: "/usr/local/bin/pi", version: "0.1.0", detail: "ok" });
 
-async function engineWith(stream: (invocation: PiInvocation) => AsyncIterable<Record<string, unknown>>) {
+async function engineWith(
+  stream: (invocation: PiInvocation) => AsyncIterable<Record<string, unknown>>,
+  where: Pick<PiEngineOptions, "env" | "home" | "platform"> = {},
+) {
   const root = await tmpDir("pi-engine-");
   const seen: PiInvocation[] = [];
   const execFn: PiExec = (invocation) => {
@@ -44,6 +55,7 @@ async function engineWith(stream: (invocation: PiInvocation) => AsyncIterable<Re
     execFn,
     resolveCli: ready,
     listModels: () => fixture("pi-models.txt"),
+    ...where,
   });
   return { engine, seen, root };
 }
@@ -344,6 +356,64 @@ describe("Pi's sandbox", () => {
     assert.ok(!box.policy.denyRead.includes(piHome), "the CLI reads its own sign-ins");
     assert.ok(!box.policy.denyWrite.includes(piHome), "a deny on the whole store would cut those two write grants");
   });
+  it("on Windows a session writes Pi's own folder, which it runs in as the sandbox's own user", () => {
+    const agent = path.join("/Users/dev", ".pi", "agent");
+    const sandbox = piSandbox({
+      runDir: "/game",
+      gameDir: "/game",
+      gitDirs: [],
+      scratchDir: "/tmp/scratch",
+      secretPaths: [],
+      env: {},
+      home: "/Users/dev",
+      platform: "win32",
+    });
+    assert.ok(
+      sandbox.writableRoots.includes(agent),
+      "Windows grants whole folders, and Pi makes its lock folder beside auth.json",
+    );
+    assert.ok(!sandbox.writableRoots.includes(path.join("/Users/dev", ".pi")), "never the folder above it");
+    assert.deepEqual(sandbox.readableHome, [path.join("/Users/dev", ".pi")]);
+    const denied = sandbox.denyWrite ?? [];
+    for (const leaf of ["auth.json", "settings.json", "models.json", "extensions", "bin"])
+      assert.ok(denied.includes(path.join(agent, leaf)), `agent/${leaf} stays named as never a session's to write`);
+  });
+
+  it("every session is told where Pi's folder is, whoever the sandbox runs it as", async () => {
+    const stream = await events("pi-stream.jsonl");
+    const home = await realpath(await tmpDir("pi-home-"));
+    const { engine, seen } = await engineWith(() => replay(stream), { env: {}, home });
+    await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
+    assert.equal(
+      seen[0]?.env.PI_CODING_AGENT_DIR,
+      path.join(home, ".pi", "agent"),
+      "Windows runs the session as the sandbox's own user, whose home holds no Pi sign-in",
+    );
+  });
+
+  it("follows a Pi folder the person moved with PI_CODING_AGENT_DIR", async () => {
+    const home = await realpath(await tmpDir("pi-home-"));
+    const moved = path.join(await realpath(await tmpDir("pi-moved-")), "agent");
+    const env = { PI_CODING_AGENT_DIR: moved };
+    assert.equal(piAgentDir(env, home), moved);
+    assert.equal(piAgentDir({ PI_CODING_AGENT_DIR: "~/pi-data" }, home), path.join(home, "pi-data"), "Pi expands ~");
+    assert.equal(
+      piAgentDir({ PI_CODING_AGENT_DIR: "relative/agent" }, home),
+      path.join(home, ".pi", "agent"),
+      "a relative folder is never granted: it would mean a different place in every session",
+    );
+    for (const homes of [credentialHomes([], env, home), sandboxedCliHomes(env, home)])
+      assert.ok(homes.includes(moved), "the moved folder holds the sign-ins, so it is fenced like ~/.pi");
+    const stream = await events("pi-stream.jsonl");
+    const { engine, seen } = await engineWith(() => replay(stream), { env, home });
+    await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
+    const [session] = seen;
+    assert.equal(session?.env.PI_CODING_AGENT_DIR, moved);
+    assert.ok(session?.sandbox.writableRoots.includes(path.join(moved, "sessions")), "its transcripts go there");
+    assert.ok(session?.sandbox.readableHome?.includes(moved), "and it reads its sign-ins there");
+    assert.ok(session?.sandbox.denyWrite?.includes(path.join(moved, "auth.json")));
+  });
+
   it("a building session in a linked worktree writes its Git metadata; a read-only session does not", async () => {
     const repo = await realpath(await tmpDir("pi-repo-"));
     await writeFile(path.join(repo, "main.js"), "export const x = 1;\n");

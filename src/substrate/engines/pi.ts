@@ -43,7 +43,7 @@ import {
 import type { PartialDelegateState } from "./common.ts";
 import { ProcessSandbox, type SandboxOptions, shellQuote } from "../spawn.ts";
 import { childEnv } from "../child-env.ts";
-import { credentialHomes } from "../credential-homes.ts";
+import { credentialHomes, PI_AGENT_DIR_ENV, piAgentDir, piAgentHome, piHomes } from "../credential-homes.ts";
 import { stopChild } from "../process-tree.ts";
 import type { Usage } from "../types.ts";
 import { CodingCliState } from "../../shared/coding-cli.ts";
@@ -53,6 +53,7 @@ import { EngineFailureKind, StopReason } from "../../shared/engine-requests.ts";
 import { ModelCatalogSource } from "../../shared/model-catalog.ts";
 import { engineMode, PermissionMode } from "../../shared/permissions.ts";
 import { EngineId } from "../../shared/providers.ts";
+import { StudioPlatform } from "../../shared/boot.ts";
 import { redactSecrets } from "../../shared/redact.ts";
 import type { ChildProcess } from "node:child_process";
 
@@ -111,6 +112,12 @@ export interface PiEngineOptions {
   listModels?: () => Promise<string>;
   resolveCli?: () => Promise<{ ready: boolean; path?: string; version?: string; detail: string }>;
   lockRecovery?: string;
+  /** The person's environment, which may move Pi's folder (`PI_CODING_AGENT_DIR`); the studio's own when not given. */
+  env?: Record<string, string | undefined>;
+  /** The person's home folder; the real one when not given. */
+  home?: string;
+  /** The platform the sessions run on; this computer's when not given. */
+  platform?: NodeJS.Platform;
 }
 
 interface PiRun {
@@ -124,6 +131,17 @@ interface PiRun {
   pendingFailure: { message: string; status: number | null } | undefined;
 }
 
+/**
+ * What a session writes in Pi's folder: its transcripts, and the lock folder Pi makes beside
+ * `auth.json` even to read it. Windows grants whole folders that exist and lets a command create
+ * nothing in one it was not granted, so there the session is granted Pi's folder itself, as
+ * OpenCode's and Cursor's are.
+ */
+function piWrites(agent: string, platform: NodeJS.Platform): string[] {
+  if (platform === StudioPlatform.Windows) return [agent];
+  return [path.join(agent, "sessions"), path.join(agent, "auth.json.lock")];
+}
+
 /** The sandbox a session runs in: the folder it works in, and Pi's home read-only but for its own records. */
 export function piSandbox(input: {
   runDir: string;
@@ -132,16 +150,19 @@ export function piSandbox(input: {
   scratchDir: string;
   secretPaths: string[];
   toolPath?: () => Promise<string>;
+  env?: Record<string, string | undefined>;
   home?: string;
+  platform?: NodeJS.Platform;
 }): SandboxOptions {
+  const env = input.env ?? process.env;
   const home = input.home ?? os.homedir();
-  const piHome = path.join(home, ".pi");
-  const agent = path.join(piHome, "agent");
+  const piHome = piAgentHome(home);
+  const agent = piAgentDir(env, home);
   return {
-    writableRoots: [input.runDir, ...input.gitDirs, path.join(agent, "sessions"), path.join(agent, "auth.json.lock")],
+    writableRoots: [input.runDir, ...input.gitDirs, ...piWrites(agent, input.platform ?? process.platform)],
     scratchDir: input.scratchDir,
     secretPaths: input.secretPaths,
-    readableHome: [piHome],
+    readableHome: piHomes(env, home),
     // Name what later runs unsandboxed anyway: a second lock on the files above, should this
     // sandbox ever grant `~/.pi` again.
     denyWrite: [
@@ -178,6 +199,9 @@ export class PiEngine implements Engine {
   readonly #listModels: (() => Promise<string>) | undefined;
   readonly #resolveCli: () => Promise<{ ready: boolean; path?: string; version?: string; detail: string }>;
   readonly #lockRecovery: string | undefined;
+  readonly #env: Record<string, string | undefined>;
+  readonly #home: string;
+  readonly #platform: NodeJS.Platform;
   #hosts = new Map<string, string[]>();
   #signedIn = false;
 
@@ -190,6 +214,9 @@ export class PiEngine implements Engine {
     this.#listModels = options.listModels;
     this.#resolveCli = options.resolveCli ?? defaultResolveCli;
     this.#lockRecovery = options.lockRecovery;
+    this.#env = options.env ?? process.env;
+    this.#home = options.home ?? os.homedir();
+    this.#platform = options.platform ?? process.platform;
   }
 
   async status(): Promise<EngineStatus> {
@@ -353,7 +380,7 @@ export class PiEngine implements Engine {
     binary: string | undefined,
   ): Promise<{ models: EngineModel[]; source: typeof ModelCatalogSource.Provider }> {
     const stdout = this.#listModels ? await this.#listModels() : await listPiModels(binary);
-    const extra = await readPiProviderHosts(os.homedir()).catch(() => ({}));
+    const extra = await readPiProviderHosts(piAgentDir(this.#env, this.#home)).catch(() => ({}));
     const listed = parsePiModels(stdout, extra);
     this.#hosts = new Map(listed.map((model) => [model.row.id, model.hosts]));
     this.#signedIn = listed.length > 0;
@@ -427,7 +454,9 @@ export class PiEngine implements Engine {
       argv,
       cwd: ctx.runDir,
       prompt: ctx.prompt,
-      env: {},
+      // Pi's folder, named outright: Windows runs a session as the sandbox's own user, whose home
+      // holds no Pi sign-in.
+      env: { [PI_AGENT_DIR_ENV]: piAgentDir(this.#env, this.#home) },
       signal: ctx.signal,
       sandbox: piSandbox({
         runDir: ctx.runDir,
@@ -438,6 +467,9 @@ export class PiEngine implements Engine {
         scratchDir: path.join(this.#scratchRoot, "tmp"),
         secretPaths: [...this.#protectedPaths, ...(request.denyReads ?? [])],
         ...(this.#toolPath ? { toolPath: this.#toolPath } : {}),
+        env: this.#env,
+        home: this.#home,
+        platform: this.#platform,
       }),
       domains: this.#domains(model),
     };
