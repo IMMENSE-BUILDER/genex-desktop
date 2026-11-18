@@ -8,7 +8,8 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { build } from "esbuild";
 import { rendererBuildOptions } from "../../scripts/renderer-build.mjs";
-import { EngineStatusCode } from "../../src/shared/engine-descriptor.ts";
+import { CodingCliState } from "../../src/shared/coding-cli.ts";
+import { EngineStatusCode, LoginSource } from "../../src/shared/engine-descriptor.ts";
 import { EngineId } from "../../src/shared/providers.ts";
 
 /** The row and the screen as the renderer build compiles them, and React's server renderer. */
@@ -120,5 +121,39 @@ describe("OpenCode where Genex can't install it", () => {
     const mac = screen(null);
     assert.match(mac, />Set up OpenCode</);
     assert.doesNotMatch(mac, /install guide/i);
+  });
+});
+
+describe("Pi, which Genex installs nowhere", () => {
+  it("Settings offers its install guide on every system", async () => {
+    const { CliSignInRow, createElement, renderToStaticMarkup } = await views();
+    const engine = { ...missing, id: EngineId.Pi, label: "Pi" };
+    for (const platform of ["darwin", "linux", "win32"]) {
+      onPlatform(platform);
+      const html = renderToStaticMarkup(
+        createElement(CliSignInRow, { engine, provider: EngineId.Pi, onEnginesRefresh: () => {} }),
+      );
+      assert.match(html, />Install guide</, platform);
+      assert.match(html, /Install Pi with its guide, then check again\./, platform);
+    }
+  });
+
+  it("a Pi too old for a session says to update it, not that it did not answer", async () => {
+    const { CliSignInRow, createElement, renderToStaticMarkup } = await views();
+    onPlatform("linux");
+    const engine = {
+      ...missing,
+      id: EngineId.Pi,
+      label: "Pi",
+      status: { code: EngineStatusCode.Error, detail: "" },
+      account: { source: LoginSource.None, cli: { state: CodingCliState.Incompatible } },
+    };
+    const html = renderToStaticMarkup(
+      createElement(CliSignInRow, { engine, provider: EngineId.Pi, onEnginesRefresh: () => {} }),
+    );
+    assert.match(html, />Update needed</);
+    assert.match(html, /This version of Pi is too old for Genex\. Update it to keep building\./);
+    assert.match(html, />Update Pi</);
+    assert.doesNotMatch(html, /didn(&#x27;|')t answer/);
   });
 });

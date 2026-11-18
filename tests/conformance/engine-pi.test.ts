@@ -22,6 +22,7 @@ import {
 import { credentialHomes, piAgentDir, sandboxedCliHomes } from "../../src/substrate/credential-homes.ts";
 import { hostsFromPiModelsJson, parsePiModels } from "../../src/substrate/engines/pi-cli.ts";
 import { translatePiEvent } from "../../src/substrate/engines/pi-events.ts";
+import { preparePiView } from "../../src/substrate/engines/pi-agent-view.ts";
 import { SandboxUnavailableError } from "../../src/substrate/sandbox-unavailable.ts";
 import { ProcessSandbox } from "../../src/substrate/spawn.ts";
 import { EngineError, type DelegateEvent } from "../../src/substrate/engines/types.ts";
@@ -372,8 +373,35 @@ describe("Pi's sessions", () => {
   });
 });
 
+/** What Pi loads or runs from its folder, there or not: never a session's to write. */
+const PI_LOADS = [
+  "settings.json",
+  "trust.json",
+  "models.json",
+  "models-store.json",
+  "mcp.json",
+  "keybindings.json",
+  "AGENTS.md",
+  "AGENTS.override.md",
+  "CLAUDE.md",
+  "SYSTEM.md",
+  "APPEND_SYSTEM.md",
+  "extensions",
+  "skills",
+  "prompts",
+  "themes",
+  "npm",
+  "git",
+  "bin",
+  "tools",
+];
+/** Whether a grant on one of `roots` reaches `file`. */
+const reaches = (roots: readonly string[], file: string): boolean =>
+  roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`));
+
 describe("Pi's sandbox", () => {
-  it("writes the game folder and Pi's own home, and denies the studio's secrets", () => {
+  it("on macOS a session writes the game and, of Pi's folder, its transcripts, its sign-in and its locks by name", () => {
+    const agent = path.join("/Users/dev", ".pi", "agent");
     const sandbox = piSandbox({
       runDir: "/game",
       gameDir: "/game",
@@ -381,46 +409,26 @@ describe("Pi's sandbox", () => {
       scratchDir: "/tmp/scratch",
       secretPaths: ["/secrets"],
       home: "/Users/dev",
+      env: {},
       platform: "darwin",
     });
-    assert.ok(sandbox.writableRoots.includes("/game"));
-    assert.ok(
-      sandbox.writableRoots.includes(path.join("/Users/dev", ".pi", "agent")),
-      "a session keeps its transcripts and its sign-in there, and Pi makes lock folders beside its files",
-    );
-    assert.ok(!sandbox.writableRoots.includes(path.join("/Users/dev", ".pi")), "never the folder above it");
+    const writes = (file: string) => reaches(sandbox.writableRoots, file);
+    assert.ok(writes("/game/main.js"));
+    assert.ok(writes(path.join(agent, "sessions", "--game--", "1.jsonl")), "a session keeps its transcripts");
+    assert.ok(writes(path.join(agent, "auth.json.lock")), "Pi makes a lock folder even to read auth.json");
+    assert.ok(writes(path.join(agent, "auth.json")), "and saves a renewed sign-in: a refresh it cannot save is spent");
+    assert.ok(writes(path.join(agent, "settings.json.lock")), "Pi locks its settings to read them");
+    assert.ok(writes(path.join(agent, "models-store.json.lock")), "and its model store");
+    assert.ok(!sandbox.writableRoots.includes(agent), "never Pi's folder whole");
+    for (const leaf of PI_LOADS)
+      assert.ok(!writes(path.join(agent, leaf)), `a session cannot plant ${leaf}, which later runs unsandboxed`);
     assert.equal(sandbox.ownHome, undefined, "`~/.pi` is not a write grant: a session must not rewrite it");
     assert.deepEqual(sandbox.readableHome, [path.join("/Users/dev", ".pi")], "the CLI still reads its sign-ins");
     assert.ok(sandbox.secretPaths.includes("/secrets"));
-    const denied = sandbox.denyWrite ?? [];
-    for (const leaf of [
-      "settings.json",
-      "trust.json",
-      "models.json",
-      "models-store.json",
-      "mcp.json",
-      "extensions",
-      "skills",
-      "npm",
-      "bin",
-      "tools",
-      "prompts",
-    ])
-      assert.ok(
-        denied.some((p) => p.endsWith(`${path.sep}${leaf}`)),
-        `a session cannot plant ${leaf} that later runs unsandboxed`,
-      );
-    assert.ok(
-      denied.some((p) => p === path.join("/game", ".pi")),
-      "a game's own .pi folder is not the session's to plant",
-    );
-    assert.ok(
-      !denied.includes(path.join("/Users/dev", ".pi", "agent", "auth.json")),
-      "Pi saves a renewed sign-in during a session: a refresh it cannot save is spent",
-    );
+    assert.deepEqual(sandbox.denyWrite, [path.join("/game", ".pi")], "a game's own .pi is not the session's to plant");
   });
 
-  it("leaves Pi's home readable, and its folder writable but for what Pi loads and runs", async () => {
+  it("the policy leaves Pi's home readable and out of the write denies that would cut its grants", async () => {
     const home = os.homedir();
     const piHome = path.join(home, ".pi");
     const agent = path.join(piHome, "agent");
@@ -431,45 +439,49 @@ describe("Pi's sandbox", () => {
         gitDirs: [],
         scratchDir: "/tmp/pi-scratch",
         secretPaths: [],
+        env: {},
         platform: "darwin",
       }),
       enabled: false,
     });
-    const writes = (dir: string) =>
-      box.policy.allowWrite.some((root) => dir === root || dir.startsWith(`${root}${path.sep}`));
+    const writes = (file: string) => reaches(box.policy.allowWrite, file);
     assert.ok(writes(path.join(agent, "sessions")), "a session writes its transcripts");
     assert.ok(writes(path.join(agent, "auth.json.lock")), "Pi makes a lock folder even to read auth.json");
     assert.ok(writes(path.join(agent, "auth.json")), "and saves a renewed sign-in");
-    for (const planted of ["bin", "tools", "prompts", "extensions", "skills", "npm", "agents"])
-      assert.ok(
-        box.policy.denyWrite.includes(path.join(agent, planted)),
-        `a session cannot plant agent/${planted}, which runs outside it`,
-      );
-    assert.ok(!writes(path.join(home, ".pi", "AGENTS.md")), "nor the instructions its sign-in reads");
+    for (const planted of PI_LOADS)
+      assert.ok(!writes(path.join(agent, planted)), `a session cannot plant agent/${planted}, which runs outside it`);
     assert.ok(!box.policy.denyRead.includes(piHome), "the CLI reads its own sign-ins");
     assert.ok(!box.policy.denyWrite.includes(piHome), "a deny on the whole store would cut the write grant inside it");
   });
-  it("on Linux a session writes Pi's own folder, and is denied only what is there", () => {
+
+  it("on Linux a session writes the folder that stands for Pi's and the transcripts, never Pi's folder", () => {
     const agent = path.join("/home/dev", ".pi", "agent");
     const gamePi = path.join("/game", ".pi");
-    const there = new Set([path.join(agent, "auth.json"), path.join(agent, "extensions"), gamePi]);
-    const sandbox = piSandbox({
-      runDir: "/game",
-      gameDir: "/game",
-      gitDirs: [],
-      scratchDir: "/tmp/scratch",
-      secretPaths: [],
-      env: {},
-      home: "/home/dev",
-      platform: "linux",
-      exists: (file) => there.has(file),
-    });
-    assert.ok(sandbox.writableRoots.includes(agent), "Linux leaves out a grant on the lock folder Pi has yet to make");
-    assert.ok(!sandbox.writableRoots.includes(path.join("/home/dev", ".pi")), "never the folder above it");
-    assert.deepEqual(
-      sandbox.denyWrite,
-      [path.join(agent, "extensions"), gamePi],
-      "a deny on a missing path would put a stand-in file there, in Pi's folder and in the game",
+    const policy = (there: string[], agentView?: string) =>
+      piSandbox({
+        runDir: "/game",
+        gameDir: "/game",
+        gitDirs: [],
+        scratchDir: "/tmp/scratch",
+        secretPaths: [],
+        env: {},
+        home: "/home/dev",
+        platform: "linux",
+        exists: (file) => there.includes(file),
+        ...(agentView ? { agentView } : {}),
+      });
+    const sandbox = policy([]);
+    const writes = (file: string) => reaches(sandbox.writableRoots, file);
+    assert.ok(writes(path.join(agent, "genex", "auth.json.lock")), "Pi makes its lock beside the sign-in it is given");
+    assert.ok(writes(path.join(agent, "sessions", "--game--", "1.jsonl")), "transcripts stay where Pi keeps them");
+    assert.ok(!sandbox.writableRoots.includes(agent), "Linux grants a folder whole: never the person's own");
+    for (const leaf of ["auth.json.lock", ...PI_LOADS])
+      assert.ok(!writes(path.join(agent, leaf)), `nothing in the person's folder is a session's to make: ${leaf}`);
+    assert.deepEqual(sandbox.denyWrite, [], "a deny on a missing .pi would put a stand-in file in the game");
+    assert.deepEqual(policy([gamePi]).denyWrite, [gamePi], "a .pi that is there is denied");
+    assert.ok(
+      policy([], "/real/agent/genex").writableRoots.includes("/real/agent/genex"),
+      "the session's folder by its real path, when Pi's folder is reached through a link",
     );
   });
 
@@ -491,12 +503,10 @@ describe("Pi's sandbox", () => {
     );
     assert.ok(!sandbox.writableRoots.includes(path.join("/Users/dev", ".pi")), "never the folder above it");
     assert.deepEqual(sandbox.readableHome, [path.join("/Users/dev", ".pi")]);
-    const denied = sandbox.denyWrite ?? [];
-    for (const leaf of ["settings.json", "models.json", "extensions", "bin"])
-      assert.ok(denied.includes(path.join(agent, leaf)), `agent/${leaf} stays named as never a session's to write`);
+    assert.deepEqual(sandbox.denyWrite, [path.join("/game", ".pi")]);
   });
 
-  it("in the real sandbox a session takes Pi's lock and keeps its transcripts, and never what Pi loads or runs", {
+  it("in the real sandbox a session takes Pi's locks, saves a renewed sign-in and keeps its transcripts, and plants nothing Pi loads", {
     skip: process.platform === "win32" && "Windows grants last a whole session: pi-cli-live.test.ts runs them",
   }, async (t) => {
     const root = await realpath(await tmpDir("pi-box-"));
@@ -508,6 +518,10 @@ describe("Pi's sandbox", () => {
     await writeFile(path.join(game, "main.js"), "export const x = 1;\n");
     await writeFile(path.join(agent, "auth.json"), "{}");
     await writeFile(path.join(agent, "settings.json"), "{}");
+    // The folder Pi is pointed at (`PI_CODING_AGENT_DIR`): Pi's own, or on Linux the one that stands for it.
+    const view = process.platform === "linux" ? await preparePiView(agent) : undefined;
+    const folder = view ?? agent;
+    const own = ["auth.json", "extensions", "sessions", "settings.json", ...(view ? ["genex"] : [])].sort();
     const sandbox = await ProcessSandbox.create(
       piSandbox({
         runDir: game,
@@ -517,6 +531,7 @@ describe("Pi's sandbox", () => {
         secretPaths: [],
         env: {},
         home,
+        ...(view ? { agentView: view } : {}),
       }),
     );
     try {
@@ -524,30 +539,30 @@ describe("Pi's sandbox", () => {
       if (started instanceof SandboxUnavailableError) return t.skip(`no sandbox on this machine: ${started.message}`);
       if (started) throw started;
       const run = (command: string) => sandbox.run({ command, cwd: game });
-      // proper-lockfile's lock is a folder made beside the file and removed again; Pi takes it even to read.
-      const lock = await run(
-        'mkdir "$PI_AGENT/auth.json.lock" && rmdir "$PI_AGENT/auth.json.lock"'.replaceAll("$PI_AGENT", agent),
-      );
-      assert.equal(lock.code, 0, `Pi makes its lock folder beside auth.json: ${lock.stderr}`);
-      const kept = await run(`mkdir -p "${agent}/sessions/game" && echo turn > "${agent}/sessions/game/1.jsonl"`);
+      // proper-lockfile's lock is a folder made beside the file's real path and removed again; Pi
+      // takes one even to read its sign-in, its settings and its model store.
+      assert.equal(path.dirname(await realpath(path.join(folder, "auth.json"))), folder, "the lock's place");
+      for (const file of ["auth.json", "settings.json", "models-store.json"]) {
+        const lock = await run(`mkdir "${path.join(folder, file)}.lock" && rmdir "${path.join(folder, file)}.lock"`);
+        assert.equal(lock.code, 0, `Pi makes its lock folder beside ${file}: ${lock.stderr}`);
+      }
+      const kept = await run(`mkdir -p "${folder}/sessions/game" && echo turn > "${folder}/sessions/game/1.jsonl"`);
       assert.equal(kept.code, 0, `a session keeps its transcript: ${kept.stderr}`);
       assert.equal(await readFile(path.join(agent, "sessions", "game", "1.jsonl"), "utf8"), "turn\n");
-      const renewed = await run(`echo '{"renewed":true}' > "${path.join(agent, "auth.json")}"`);
+      const renewed = await run(`echo '{"renewed":true}' > "${path.join(folder, "auth.json")}"`);
       assert.equal(renewed.code, 0, `Pi saves a renewed sign-in: ${renewed.stderr}`);
-      assert.equal(await readFile(path.join(agent, "auth.json"), "utf8"), '{"renewed":true}\n');
-      for (const leaf of ["settings.json", path.join("extensions", "planted.ts")])
+      assert.equal(await readFile(path.join(agent, "auth.json"), "utf8"), '{"renewed":true}\n', "into the person's");
+      // What Pi loads, in the person's folder: the entries that are there, and the ones that are not.
+      for (const leaf of ["settings.json", path.join("extensions", "planted.ts"), "models.json", "APPEND_SYSTEM.md"])
         await run(`echo planted > "${path.join(agent, leaf)}"`);
+      await run(`mkdir "${path.join(agent, "skills")}"`);
+      await run(`rm "${path.join(agent, "settings.json")}"`);
       assert.equal(
         await readFile(path.join(agent, "settings.json"), "utf8"),
         "{}",
         "Pi's settings are never a session's",
       );
       assert.deepEqual(await readdir(path.join(agent, "extensions")), [], "nor code Pi later runs outside the sandbox");
-      if (process.platform === "darwin") {
-        // Only macOS denies a path that is not there yet without putting a stand-in file in its place.
-        await run(`mkdir "${path.join(agent, "skills")}"`);
-        assert.equal(existsSync(path.join(agent, "skills")), false, "a session cannot start a skills folder either");
-      }
       const build = await run("git init -q . && git add -A && ls -A");
       assert.equal(build.code, 0, `the build's own commit takes every file of the game: ${build.stderr}`);
       assert.deepEqual(
@@ -558,17 +573,13 @@ describe("Pi's sandbox", () => {
       const seen = await run(`ls -A "${agent}"`);
       assert.deepEqual(
         seen.stdout.split("\n").filter(Boolean).sort(),
-        ["auth.json", "extensions", "sessions", "settings.json"],
-        "a session sees Pi's folder as it is: no empty stand-in for a file Pi does not have",
+        own,
+        "a session sees Pi's folder as it is: no stand-in for a file Pi does not have, and nothing it planted",
       );
     } finally {
       await sandbox.dispose();
     }
-    assert.deepEqual(
-      (await readdir(agent)).sort(),
-      ["auth.json", "extensions", "sessions", "settings.json"],
-      "and nothing else is left in the person's Pi folder",
-    );
+    assert.deepEqual((await readdir(agent)).sort(), own, "and nothing else is left in the person's Pi folder");
   });
 
   it("a model Pi has not listed yet still reaches its provider, and only a provider Pi knows", async () => {
@@ -588,13 +599,37 @@ describe("Pi's sandbox", () => {
   it("every session is told where Pi's folder is, whoever the sandbox runs it as", async () => {
     const stream = await events("pi-stream.jsonl");
     const home = await realpath(await tmpDir("pi-home-"));
-    const { engine, seen } = await engineWith(() => replay(stream), { env: {}, home });
+    for (const platform of ["darwin", "win32"] as const) {
+      const { engine, seen } = await engineWith(() => replay(stream), { env: {}, home, platform });
+      await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
+      assert.equal(
+        seen[0]?.env.PI_CODING_AGENT_DIR,
+        path.join(home, ".pi", "agent"),
+        "Windows runs the session as the sandbox's own user, whose home holds no Pi sign-in",
+      );
+    }
+  });
+
+  it("on Linux every session runs on the folder that stands for Pi's, made as Pi's folder is now", {
+    skip: process.platform === "win32" && "the folder is made of links, which Windows keeps for administrators",
+  }, async () => {
+    const stream = await events("pi-stream.jsonl");
+    const home = await realpath(await tmpDir("pi-home-"));
+    const agent = path.join(home, ".pi", "agent");
+    await mkdir(agent, { recursive: true });
+    await writeFile(path.join(agent, "auth.json"), '{"signed":"in"}');
+    await writeFile(path.join(agent, "models.json"), "{}");
+    const { engine, seen } = await engineWith(() => replay(stream), { env: {}, home, platform: "linux" });
     await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
-    assert.equal(
-      seen[0]?.env.PI_CODING_AGENT_DIR,
-      path.join(home, ".pi", "agent"),
-      "Windows runs the session as the sandbox's own user, whose home holds no Pi sign-in",
-    );
+    await engine.complete({ messages: [{ role: "user", content: "judge" }] });
+    const view = path.join(agent, "genex");
+    for (const session of seen) {
+      assert.equal(session.env.PI_CODING_AGENT_DIR, view, "a build and a one-shot answer alike");
+      assert.ok(session.sandbox.writableRoots.includes(view), "which the session writes");
+      assert.ok(!session.sandbox.writableRoots.includes(agent), "and never Pi's own folder");
+    }
+    assert.equal(await readFile(path.join(view, "auth.json"), "utf8"), '{"signed":"in"}', "Pi finds its sign-in");
+    assert.equal(await realpath(path.join(view, "models.json")), path.join(agent, "models.json"));
   });
 
   it("follows a Pi folder the person moved with PI_CODING_AGENT_DIR", async () => {
@@ -615,9 +650,9 @@ describe("Pi's sandbox", () => {
     await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
     const [session] = seen;
     assert.equal(session?.env.PI_CODING_AGENT_DIR, moved);
-    assert.ok(session?.sandbox.writableRoots.includes(moved), "its transcripts go there");
+    assert.ok(session?.sandbox.writableRoots.includes(path.join(moved, "sessions")), "its transcripts go there");
     assert.ok(session?.sandbox.readableHome?.includes(moved), "and it reads its sign-ins there");
-    assert.ok(session?.sandbox.denyWrite?.includes(path.join(moved, "settings.json")));
+    assert.ok(!reaches(session?.sandbox.writableRoots ?? [], path.join(moved, "settings.json")));
   });
 
   it("a building session in a linked worktree writes its Git metadata; a read-only session does not", async () => {

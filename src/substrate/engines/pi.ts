@@ -4,7 +4,8 @@
  * Pi runs its own agent loop on whichever providers the person signed it in to (`/login` in its
  * TUI) and keeps those sign-ins in its own store, which the studio never reads. It has no OS
  * sandbox of its own, so every session starts inside ProcessSandbox. The prompt goes in on stdin;
- * each stdout line is one JSON event (`pi-events.ts`); a session is resumed by `--session-id`.
+ * each stdout line is one JSON event (`pi-events.ts`); a session is continued by its id, or forked
+ * into the turn's folder when it was made in another (`pi-sessions.ts`).
  * Studio tools arrive through the same bridge Codex and OpenCode use.
  */
 import { randomUUID } from "node:crypto";
@@ -22,6 +23,7 @@ import { JUDGE_RULES, offLimitsNote, planModeNote, readOnlyNote } from "./codex-
 import { gitMetadataDirs } from "./session-commands.ts";
 import { builtInPiHosts, parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
 import { findPiSession, piSessionArgs, samePiFolder, type PiSessionFile } from "./pi-sessions.ts";
+import { piViewDir, preparePiView } from "./pi-agent-view.ts";
 import { parsePiLine, translatePiEvent, type Translated } from "./pi-events.ts";
 import {
   type CompleteRequest,
@@ -45,7 +47,7 @@ import {
 import type { PartialDelegateState } from "./common.ts";
 import { ProcessSandbox, type SandboxOptions, shellQuote } from "../spawn.ts";
 import { childEnv } from "../child-env.ts";
-import { credentialHomes, PI_AGENT_DIR_ENV, piAgentDir, piAgentHome, piHomes } from "../credential-homes.ts";
+import { credentialHomes, PI_AGENT_DIR_ENV, piAgentDir, piHomes } from "../credential-homes.ts";
 import { stopChild } from "../process-tree.ts";
 import type { Usage } from "../types.ts";
 import { CodingCliState } from "../../shared/coding-cli.ts";
@@ -70,24 +72,11 @@ const STDERR_TAIL_CHARS = 4_000;
  */
 const CREDENTIAL_STORE_DENIED = /\b(?:EPERM|EACCES|EROFS|EBUSY)\b[^\n]*[/\\]auth\.json/;
 /**
- * What a session never writes in Pi's folder: the settings and model files that say what Pi loads
- * and which servers it calls, and the code Pi later runs outside the sandbox. `auth.json` is not
- * here: Pi saves a renewed sign-in into it during a session, and a refresh it cannot save is spent.
+ * What Pi's own session writes in Pi's folder, each by its name: its transcripts, its sign-in (Pi
+ * saves a renewed one during a session, and a refresh it cannot save is spent) and the lock folders
+ * Pi makes beside the files it reads. Nothing Pi loads or runs is among them, there or not.
  */
-const AGENT_DENIED = [
-  "settings.json",
-  "trust.json",
-  "models.json",
-  "models-store.json",
-  "mcp.json",
-  "extensions",
-  "skills",
-  "npm",
-  "agents",
-  "bin",
-  "tools",
-  "prompts",
-] as const;
+const PI_WRITTEN = ["sessions", "auth.json", "auth.json.lock", "models-store.json.lock", "settings.json.lock"] as const;
 /**
  * OAuth's own error code for a refresh token that expired or was revoked (RFC 6749 §5.2): the
  * provider's code, never a sentence, and only as a whole word.
@@ -159,31 +148,32 @@ interface PiRun {
 }
 
 /**
- * What a session never writes: Pi's settings and model files, the code Pi later runs outside the
- * sandbox, and the game's own Pi folder. On Linux a deny on a path that is not there puts a
- * stand-in file in its place while the session runs: Pi would read an empty `settings.json`, and
- * the build's `git add -A` refuses a `.pi` that is no regular file. So there only what exists is
- * denied, and a session can make an entry Pi's folder does not have yet. Windows keeps no deny
- * inside a CLI's own folder (`keepWindowsDenies`).
+ * What a session writes of Pi's folder, as far as each system's sandbox can say it.
+ *
+ * macOS grants a path whether or not it is there, so a session gets Pi's transcripts, its sign-in
+ * and its lock folders by name and nothing else. Linux grants a folder that exists, whole, and Pi
+ * makes its lock beside `auth.json`: there a session runs on a folder of its own that stands for
+ * Pi's (`pi-agent-view.ts`), and writes that and the transcripts. Windows grants whole folders to
+ * the sandbox's one user and keeps no deny inside a CLI's own folder (`keepWindowsDenies`), so a
+ * session there writes Pi's folder, as OpenCode's, Grok Build's and Cursor's sessions write theirs.
  */
-function piDenies(input: {
-  agent: string;
-  piHome: string;
-  gameDir: string;
-  platform: NodeJS.Platform;
-  exists: (file: string) => boolean;
-}): string[] {
-  const { agent, piHome } = input;
-  const denied = [
-    ...AGENT_DENIED.map((leaf) => path.join(agent, leaf)),
-    path.join(piHome, "AGENTS.md"),
-    path.join(piHome, "context-mode"),
-    path.join(input.gameDir, ".pi"),
-  ];
-  return input.platform === StudioPlatform.Linux ? denied.filter(input.exists) : denied;
+function piWrites(agent: string, platform: NodeJS.Platform, view: string | undefined): string[] {
+  if (platform === StudioPlatform.Windows) return [agent];
+  if (platform === StudioPlatform.Linux) return [view ?? piViewDir(agent), path.join(agent, "sessions")];
+  return PI_WRITTEN.map((leaf) => path.join(agent, leaf));
 }
 
-/** The sandbox a session runs in: the folder it works in and Pi's own folder, but for what Pi loads and runs from it. */
+/**
+ * The game's own Pi folder, never a session's to plant. On Linux a deny on a path that is not
+ * there puts a stand-in file in its place while the session runs, and the build's `git add -A`
+ * refuses a `.pi` that is no regular file: so there only a folder that exists is denied.
+ */
+function piDenies(gameDir: string, platform: NodeJS.Platform, exists: (file: string) => boolean): string[] {
+  const gamePi = path.join(gameDir, ".pi");
+  return platform === StudioPlatform.Linux && !exists(gamePi) ? [] : [gamePi];
+}
+
+/** The sandbox a session runs in: the folder it works in, and of Pi's own folder what Pi's session writes. */
 export function piSandbox(input: {
   runDir: string;
   gameDir: string;
@@ -194,22 +184,20 @@ export function piSandbox(input: {
   env?: Record<string, string | undefined>;
   home?: string;
   platform?: NodeJS.Platform;
+  /** Linux: the folder that stands for Pi's in this session (`preparePiView`); its place in Pi's folder when not given. */
+  agentView?: string;
   /** Whether a path is there now; the disk's answer when not given. */
   exists?: (file: string) => boolean;
 }): SandboxOptions {
   const env = input.env ?? process.env;
   const home = input.home ?? os.homedir();
-  const piHome = piAgentHome(home);
-  const agent = piAgentDir(env, home);
   const platform = input.platform ?? process.platform;
   return {
-    // Pi's folder whole: its transcripts, its sign-in, and the lock folders it makes beside its files
-    // even to read them (Linux and Windows grant no path that is not there yet).
-    writableRoots: [input.runDir, ...input.gitDirs, agent],
+    writableRoots: [input.runDir, ...input.gitDirs, ...piWrites(piAgentDir(env, home), platform, input.agentView)],
     scratchDir: input.scratchDir,
     secretPaths: input.secretPaths,
     readableHome: piHomes(env, home),
-    denyWrite: piDenies({ agent, piHome, gameDir: input.gameDir, platform, exists: input.exists ?? existsSync }),
+    denyWrite: piDenies(input.gameDir, platform, input.exists ?? existsSync),
     ...(input.toolPath ? { toolPath: input.toolPath } : {}),
   };
 }
@@ -312,7 +300,10 @@ export class PiEngine implements Engine {
       await this.#cleanUp(cwd, scratch, null);
       throw err;
     });
-    const stills = await writeDelegateStills(request.images ?? [], this.#stillsRoot());
+    const stills = await writeDelegateStills(request.images ?? [], this.#stillsRoot()).catch(async (err) => {
+      await this.#cleanUp(cwd, scratch, bridge);
+      throw err;
+    });
     const deadline = request.timeoutMs
       ? setTimeout(() => {
           run.deadlineHit = true;
@@ -446,8 +437,12 @@ export class PiEngine implements Engine {
     const ownRun =
       kept !== null && samePiFolder(path.dirname(kept.cwd), root) && path.basename(kept.cwd).startsWith(RUN_PREFIX);
     if (!ownRun) return mkdtemp(path.join(this.#scratchRoot, RUN_PREFIX));
-    await mkdir(kept.cwd, { recursive: true });
-    return kept.cwd;
+    // A turn removes its folder when it ends, so one that is there is another turn's: leave it alone.
+    const free = await mkdir(kept.cwd).then(
+      () => true,
+      () => false,
+    );
+    return free ? kept.cwd : mkdtemp(path.join(this.#scratchRoot, RUN_PREFIX));
   }
 
   async #scratch(prefix: string): Promise<string> {
@@ -517,13 +512,15 @@ export class PiEngine implements Engine {
       ...(!ctx.oneshot && ctx.readOnly ? ["--tools", PLAN_TOOLS] : []),
       ...ctx.files.map((file) => `@${file}`),
     ];
+    const agent = piAgentDir(this.#env, this.#home);
+    const view = this.#platform === StudioPlatform.Linux ? await preparePiView(agent) : undefined;
     return {
       argv,
       cwd: ctx.runDir,
       prompt: ctx.prompt,
       // Pi's folder, named outright: Windows runs a session as the sandbox's own user, whose home
-      // holds no Pi sign-in.
-      env: { [PI_AGENT_DIR_ENV]: piAgentDir(this.#env, this.#home) },
+      // holds no Pi sign-in, and Linux runs it on the folder that stands for Pi's.
+      env: { [PI_AGENT_DIR_ENV]: view ?? agent },
       signal: ctx.signal,
       sandbox: piSandbox({
         runDir: ctx.runDir,
@@ -537,6 +534,7 @@ export class PiEngine implements Engine {
         env: this.#env,
         home: this.#home,
         platform: this.#platform,
+        ...(view ? { agentView: view } : {}),
       }),
       domains: this.#domains(model),
     };

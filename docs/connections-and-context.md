@@ -236,23 +236,35 @@ signed in the picker starts OpenCode's GPT models with the ones Codex lists (`ru
 **Pi** ([pi.ts](../src/substrate/engines/pi.ts)) is the Pi coding agent (`pi --mode json`), not the
 `pi-ai` HTTP client. Sign in and `--list-models` run with `--no-extensions --offline`; studio never
 reads Pi's sign-in. Ready once `--list-models` lists a model; a Pi whose help lacks an option a session
-passes is asked to update. Sessions run in `ProcessSandbox` (`readableHome`: `~/.pi`) with
+passes shows "Update needed", and its row runs `pi update`. Sessions run in `ProcessSandbox` (`readableHome`: `~/.pi`) with
 `--no-extensions --no-approve`: a game folder's own `.pi` settings and `.agents/skills` stay untrusted.
 Every session is told where Pi's folder is (`PI_CODING_AGENT_DIR`, `piAgentDir`): by default
 `~/.pi/agent`, or the folder the person moved it to with that variable, which is then fenced like
 `~/.pi` (`piHomes`).
 
-A session is granted Pi's agent folder for writing, on every system: Pi keeps its transcripts there,
-makes a lock folder beside each file it reads (`auth.json.lock`), and saves a renewed subscription
-sign-in into `auth.json` during a session (a refresh it cannot save is spent, and the person must
-sign in again). `~/.pi` above it stays read-only. Inside the folder a session never writes what says
-which code Pi loads and which servers it calls (`settings.json`, `trust.json`, `models.json`,
-`models-store.json`, `mcp.json`, `extensions`, `skills`, `npm`, `agents`, `bin`, `tools`, `prompts`),
-nor a game's own `.pi`. macOS denies each of those whether it exists or not. Linux denies only the
-ones that exist: a deny on a missing path would put a stand-in file there while the session runs, which
-Pi would read as empty settings and the build's `git add -A` would refuse in the game folder. Windows
-runs a session as the sandbox's own user and stamps no deny inside a sandboxed CLI's home, so there a
-session can write Pi's own settings ([windows-sandbox.md](windows-sandbox.md)).
+Of Pi's agent folder a session writes only what Pi's own session must: its transcripts (`sessions`),
+its sign-in file (Pi saves a renewed subscription sign-in into `auth.json` during a session; a refresh
+it cannot save is spent, and the person must sign in again) and the lock folders Pi makes beside the
+files it reads (`auth.json.lock`). It never writes what says which code Pi loads and which servers it
+calls (`settings.json`, `models.json`, `trust.json`, `mcp.json`, the instruction files `AGENTS.md`,
+`SYSTEM.md` and `APPEND_SYSTEM.md`, `extensions`, `skills`, `prompts`, `themes`, `npm`, `bin`),
+whether that is there yet or not. How each system's sandbox says so (`piWrites`):
+
+- **macOS** grants a path that need not exist, so a session gets those entries by name and nothing else.
+- **Linux** grants a folder that exists, whole, and cannot keep a session from making an entry in it;
+  Pi's lock is a folder made beside `auth.json`. So a session runs on a folder of its own that stands
+  for Pi's ([pi-agent-view.ts](../src/substrate/engines/pi-agent-view.ts)): `<agent>/genex`, named in
+  `PI_CODING_AGENT_DIR`, rebuilt before each session. In it `auth.json` is the person's file under a
+  second name (a hard link: Pi locks the path its sign-in resolves to and writes it in place),
+  `models-store.json` is a fresh copy of Pi's catalog cache, and every other entry is a link to the
+  person's, read-only to the session. The session writes that folder and `sessions`; the person's own
+  Pi never reads it, and what a session left there is removed before the next one. A sign-in file kept
+  on another disk than Pi's folder cannot be shared this way, and the session says so. A game's `.pi`
+  is denied only when it exists: a deny on a missing path would put a stand-in file in the game, which
+  the build's `git add -A` refuses.
+- **Windows** runs a session as the sandbox's own user, grants whole folders and stamps no deny inside
+  a sandboxed CLI's home, so there a session can write all of Pi's folder, its settings and
+  `models.json` included ([windows-sandbox.md](windows-sandbox.md)).
 
 Pi files a session under the folder it was started in, and its `--session-id` looks only there. A
 build runs in the game and a Plan or read-only turn in a folder of its own, so the turn that follows

@@ -1931,8 +1931,8 @@ export default {
   "Install OpenCode": "Installer OpenCode",
   "Install OpenCode from Settings › Model Providers.": "Installe OpenCode depuis Réglages › Fournisseurs de modèles.",
   "Install Pi from Settings › Model Providers.": "Installe Pi depuis Réglages › Fournisseurs de modèles.",
-  "Install Pi, then sign in with /login to run its models.":
-    "Installe Pi, puis connecte-toi avec /login pour utiliser ses modèles.",
+  "This version of Pi is too old for Genex. Update it to keep building.":
+    "Cette version de Pi est trop ancienne pour Genex. Mets-la à jour pour continuer.",
   "Install Unity 6": "Installer Unity 6",
   "Install Unreal {version}": "Installer Unreal {version}",
   "Install Xcode": "Installer Xcode",

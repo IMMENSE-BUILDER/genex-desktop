@@ -84,7 +84,7 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
   });
 
   /** The engine on the real CLI, its turns in Genex's real sandbox, reaching only the fake. */
-  const engine = () => {
+  const engine = (platform?: NodeJS.Platform) => {
     const execFn: PiExec = async function* (invocation) {
       const sandbox = await ProcessSandbox.create(invocation.sandbox);
       try {
@@ -99,6 +99,7 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
       protectedPaths: [path.join(root, "secrets")],
       resolveCli: async () => ({ ready: true, path: binary, version: "live", detail: "" }),
       execFn,
+      ...(platform ? { platform } : {}),
     });
   };
 
@@ -190,6 +191,42 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     assert.ok(
       told(done.sent, "Do it.", "And after that?", "Run the probe once."),
       "the approved plan reaches the build",
+    );
+  });
+
+  it("as on Linux: Pi runs on the folder that stands for its own, signs in, builds and keeps the chat through Plan", {
+    timeout: 3 * TURN_TIMEOUT_MS,
+    // A Linux machine runs every case here this way; this one runs the real Pi so on a Mac too.
+    skip: process.platform !== "darwin" && "macOS only: Linux runs every case this way, Windows has no such folder",
+  }, async () => {
+    const dir = await game("linux-way");
+    const built = await engine("linux").delegate({ cwd: dir, prompt: "Run the probe once.", model });
+    assert.equal(built.ok, true, built.errorText);
+    assert.equal(await readFile(path.join(dir, PROOF.file), "utf8"), PROOF.text);
+    fake.next(null);
+    const sentBefore = fake.requests.length;
+    const planned = await engine("linux").delegate({
+      cwd: dir,
+      prompt: "Plan the next step.",
+      model,
+      readOnly: true,
+      resume: built.sessionId,
+    });
+    assert.equal(planned.ok, true, planned.errorText);
+    const sent = fake.requests.slice(sentBefore).map((body) => JSON.stringify(body));
+    assert.ok(
+      sent.some((body) => body.includes("Plan the next step.") && body.includes("Run the probe once.")),
+      "the Plan turn read the build's history from the transcripts in the person's folder",
+    );
+    const keys = fake.authorizations().slice(sentBefore);
+    assert.ok(
+      keys.length > 0 && keys.every((sentKey) => sentKey.includes(FAKE_KEY)),
+      "Pi read its sign-in, the person's own file under a second name, and locked it there",
+    );
+    assert.deepEqual(
+      (await readdir(agent)).sort(),
+      ["auth.json", "genex", "models.json", "sessions"],
+      "the person's folder holds nothing a session made but its transcripts and the folder that stands for it",
     );
   });
 

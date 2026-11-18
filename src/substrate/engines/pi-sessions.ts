@@ -8,7 +8,7 @@
  * that follows one from another folder forks the session into its own (`--fork`), which copies the
  * history and gives it a new id. Read from Pi 1.5.2 (`dist/main.js`, `dist/core/session-manager.js`).
  */
-import { open, readdir } from "node:fs/promises";
+import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { StudioPlatform } from "../../shared/boot.ts";
 
@@ -23,8 +23,13 @@ export interface PiSessionFile {
   cwd: string;
 }
 
-/** The first line of `file` as a session header naming `id`, or null. */
+/**
+ * The first line of `file` as a session header naming `id`, or null. Only a regular file is opened:
+ * a session writes this folder, and a pipe left under a session's name would hold the open forever.
+ */
 async function headerCwd(file: string, id: string): Promise<string | null> {
+  const entry = await lstat(file).catch(() => null);
+  if (!entry?.isFile()) return null;
   const handle = await open(file, "r").catch(() => null);
   if (!handle) return null;
   try {
@@ -39,6 +44,13 @@ async function headerCwd(file: string, id: string): Promise<string | null> {
   } finally {
     await handle.close();
   }
+}
+
+/** Orders session files newest first: a file's name starts with its timestamp, compared as plain text. */
+function newerName(a: string, b: string): number {
+  const [left, right] = [path.basename(a), path.basename(b)];
+  if (left === right) return 0;
+  return left < right ? 1 : -1;
 }
 
 /**
@@ -56,9 +68,7 @@ export async function findPiSession(sessionsRoot: string, id: string): Promise<P
     const files = await readdir(dir).catch(() => []);
     named.push(...files.filter((name) => name.endsWith(suffix)).map((name) => path.join(dir, name)));
   }
-  // A file's name starts with its timestamp, so the last by name is the newest.
-  const newestFirst = named.sort((a, b) => path.basename(b).localeCompare(path.basename(a)));
-  for (const file of newestFirst) {
+  for (const file of named.sort(newerName)) {
     const cwd = await headerCwd(file, id);
     if (cwd) return { file, cwd };
   }

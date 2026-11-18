@@ -2825,8 +2825,6 @@ export const METERED_PROVIDER_WORDS = {
   pi: {
     name: "Pi",
     guide: "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
-    install: t("Install guide"),
-    installLine: t("Install Pi, then sign in with /login to run its models."),
     signIn: t("Sign in"),
     signInLine: t("Open Pi and type /login to connect a provider."),
     signingIn: t("Type /login below and finish signing in. Pi keeps the sign-in."),
@@ -2837,6 +2835,7 @@ export const METERED_PROVIDER_WORDS = {
     update: t("Update Pi"),
     connectedLine: t("Billed by each provider you use"),
     unreachable: t("Pi didn't answer. Check the installation, then try again."),
+    outdatedLine: t("This version of Pi is too old for Genex. Update it to keep building."),
   },
   openRouter: {
     name: "OpenRouter",

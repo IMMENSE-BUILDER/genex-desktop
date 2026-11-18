@@ -127,8 +127,8 @@ const CURSOR_WORDS = {
 /** Pi's row: it has no in-app installer (`installsInApp`), so the row offers its guide, and Sign in is Pi's `/login`. */
 const PI_ROW: CliRowWords = {
   card: { name: WORDS.pi.name, plans: "", guide: WORDS.pi.guide },
-  install: WORDS.pi.install,
-  installLine: WORDS.pi.installLine,
+  install: WORDS.installGuide,
+  installLine: WORDS.installByGuideLine(WORDS.pi.name),
   signIn: WORDS.pi.signIn,
   signInLine: WORDS.pi.signInLine,
   signingIn: WORDS.pi.signingIn,
@@ -137,6 +137,7 @@ const PI_ROW: CliRowWords = {
   update: WORDS.pi.update,
   connectedLine: WORDS.pi.connectedLine,
   unreachable: WORDS.pi.unreachable,
+  outdatedLine: WORDS.pi.outdatedLine,
   again: { title: WORDS.pi.addProvider, line: WORDS.pi.addProviderLine },
 };
 
@@ -248,7 +249,8 @@ function cliRowView(state: OpenCodeRowState, act: CliRowActions, words: CliRowWo
 
 /**
  * The CLI is installed but too old to run: its installer puts the current one in place, as the
- * subscriptions' rows update theirs (its own update would first need it to run).
+ * subscriptions' rows update theirs (its own update would first need it to run). A CLI Genex can't
+ * install (Pi) still starts, so its own update runs.
  */
 function outdatedView(act: CliRowActions, words: CliRowWords, line: string): RowView {
   return {
@@ -257,7 +259,7 @@ function outdatedView(act: CliRowActions, words: CliRowWords, line: string): Row
     line,
     actions: (
       <>
-        <Button variant="default" onClick={act.install}>
+        <Button variant="default" onClick={act.openGuide ? act.update : act.install}>
           {words.update}
         </Button>
         <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
