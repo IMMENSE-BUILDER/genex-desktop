@@ -5,7 +5,8 @@
  * sandbox); the real CLI runs it against `fake-openai-chat.ts`, a provider of the test's own in a
  * Pi folder of the test's own (`PI_CODING_AGENT_DIR`), signed in with a made-up key. The scripted
  * turn runs one `node` command in the session's folder; other turns continue a chat through Plan and
- * back, and carry a picture. Nothing reaches a provider and no account
+ * back, and carry a picture. On macOS and Linux every turn runs on the folder that stands for Pi's
+ * (`pi-agent-view.ts`), on Windows on Pi's own. Nothing reaches a provider and no account
  * is used. Opt-in, like every test that needs this machine's own programs: `STUDIO_PI_CLI_TESTS=1`
  * with a `pi` the engine can find (or `STUDIO_PI_BIN`).
  */
@@ -84,7 +85,7 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
   });
 
   /** The engine on the real CLI, its turns in Genex's real sandbox, reaching only the fake. */
-  const engine = (platform?: NodeJS.Platform) => {
+  const engine = () => {
     const execFn: PiExec = async function* (invocation) {
       const sandbox = await ProcessSandbox.create(invocation.sandbox);
       try {
@@ -99,7 +100,6 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
       protectedPaths: [path.join(root, "secrets")],
       resolveCli: async () => ({ ready: true, path: binary, version: "live", detail: "" }),
       execFn,
-      ...(platform ? { platform } : {}),
     });
   };
 
@@ -125,6 +125,8 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     timeout: TURN_TIMEOUT_MS,
   }, async () => {
     const dir = await game("build");
+    const before = await readdir(agent);
+    const signIn = await readFile(path.join(agent, "auth.json"), "utf8");
     const sentBefore = fake.requests.length;
     const result = await engine().delegate({ cwd: dir, prompt: "Run the probe.", model });
     assert.equal(result.ok, true, result.errorText);
@@ -145,6 +147,16 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     assert.equal(existsSync(path.join(agent, "auth.json.lock")), false, "Pi's lock beside its sign-in is released");
     const sessions = await readdir(path.join(agent, "sessions"), { recursive: true });
     assert.ok(sessions.length > 0, "the session's transcript is kept in the person's Pi folder");
+    assert.equal(await readFile(path.join(agent, "auth.json"), "utf8"), signIn, "the person's sign-in is as it was");
+    // Windows has no folder that stands for Pi's: a session there runs on Pi's own.
+    if (process.platform === "win32") return;
+    const view = path.join(agent, "genex", "agent");
+    assert.equal(existsSync(path.join(view, "auth.json.lock")), false, "the lock Pi took was in its own folder");
+    assert.deepEqual(
+      (await readdir(agent)).sort(),
+      [...new Set([...before, "genex", "sessions"])].sort(),
+      "the person's folder gains nothing from a session but its transcripts and the folder that stands for it",
+    );
   });
 
   it("resumes: the next turn sends the first one's history", { timeout: 2 * TURN_TIMEOUT_MS }, async () => {
@@ -191,43 +203,6 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     assert.ok(
       told(done.sent, "Do it.", "And after that?", "Run the probe once."),
       "the approved plan reaches the build",
-    );
-  });
-
-  it("as on Linux: Pi runs on the folder that stands for its own, signs in, builds and keeps the chat through Plan", {
-    timeout: 3 * TURN_TIMEOUT_MS,
-    // A Linux machine runs every case here this way; this one runs the real Pi so on a Mac too.
-    skip: process.platform !== "darwin" && "macOS only: Linux runs every case this way, Windows has no such folder",
-  }, async () => {
-    const dir = await game("linux-way");
-    const before = await readdir(agent);
-    const built = await engine("linux").delegate({ cwd: dir, prompt: "Run the probe once.", model });
-    assert.equal(built.ok, true, built.errorText);
-    assert.equal(await readFile(path.join(dir, PROOF.file), "utf8"), PROOF.text);
-    fake.next(null);
-    const sentBefore = fake.requests.length;
-    const planned = await engine("linux").delegate({
-      cwd: dir,
-      prompt: "Plan the next step.",
-      model,
-      readOnly: true,
-      resume: built.sessionId,
-    });
-    assert.equal(planned.ok, true, planned.errorText);
-    const sent = fake.requests.slice(sentBefore).map((body) => JSON.stringify(body));
-    assert.ok(
-      sent.some((body) => body.includes("Plan the next step.") && body.includes("Run the probe once.")),
-      "the Plan turn read the build's history from the transcripts in the person's folder",
-    );
-    const keys = fake.authorizations().slice(sentBefore);
-    assert.ok(
-      keys.length > 0 && keys.every((sentKey) => sentKey.includes(FAKE_KEY)),
-      "Pi read its sign-in, the person's own file under a second name, and locked it there",
-    );
-    assert.deepEqual(
-      (await readdir(agent)).sort(),
-      [...new Set([...before, "genex", "sessions"])].sort(),
-      "the person's folder gains nothing from a session but its transcripts and the folder that stands for it",
     );
   });
 

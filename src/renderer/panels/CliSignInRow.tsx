@@ -71,8 +71,8 @@ interface CliRowWords {
   update: string;
   connectedLine: string;
   unreachable: string;
-  /** The line the row shows while its installer runs; a guide-only row never shows it. */
-  installingLine?: string;
+  /** The line the row shows while its installer, or the CLI's own update, runs. */
+  installingLine: string;
   /** The Account menu's item that signs in again: OpenCode adds a provider, Grok switches accounts. */
   again: { title: string; line: string };
   /** OpenCode's own free models running with no provider signed in; Grok Build has none. */
@@ -129,6 +129,7 @@ const PI_ROW: CliRowWords = {
   card: { name: WORDS.pi.name, plans: "", guide: WORDS.pi.guide },
   install: WORDS.installGuide,
   installLine: WORDS.installByGuideLine(WORDS.pi.name),
+  installingLine: WORDS.pi.updatingLine,
   signIn: WORDS.pi.signIn,
   signInLine: WORDS.pi.signInLine,
   signingIn: WORDS.pi.signingIn,
@@ -214,12 +215,7 @@ function notInstalledView(act: CliRowActions, words: CliRowWords): RowView {
 function cliRowView(state: OpenCodeRowState, act: CliRowActions, words: CliRowWords): RowView {
   switch (state) {
     case OpenCodeRowState.Installing:
-      return {
-        tone: RowTone.Busy,
-        status: WORDS.installing,
-        line: words.installingLine ?? words.installLine,
-        actions: null,
-      };
+      return { tone: RowTone.Busy, status: WORDS.installing, line: words.installingLine, actions: null };
     case OpenCodeRowState.NotInstalled:
       return notInstalledView(act, words);
     case OpenCodeRowState.SigningIn:
@@ -249,19 +245,26 @@ function cliRowView(state: OpenCodeRowState, act: CliRowActions, words: CliRowWo
 
 /**
  * The CLI is installed but too old to run: its installer puts the current one in place, as the
- * subscriptions' rows update theirs (its own update would first need it to run). A CLI Genex can't
- * install (Pi) still starts, so its own update runs.
+ * subscriptions' rows update theirs (its own update is run only for a CLI that is ready). A CLI
+ * Genex can't install (Pi) is the person's to update, so its row opens the guide.
  */
 function outdatedView(act: CliRowActions, words: CliRowWords, line: string): RowView {
+  const { openGuide } = act;
   return {
     tone: RowTone.Warning,
     status: t("Update needed"),
     line,
     actions: (
       <>
-        <Button variant="default" onClick={act.openGuide ? act.update : act.install}>
-          {words.update}
-        </Button>
+        {openGuide ? (
+          <Button variant="default" onClick={openGuide}>
+            {WORDS.installGuide}
+          </Button>
+        ) : (
+          <Button variant="default" onClick={act.install}>
+            {words.update}
+          </Button>
+        )}
         <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
       </>
     ),

@@ -12,6 +12,8 @@ import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { StudioPlatform } from "../../shared/boot.ts";
 
+/** The folder of Pi's own folder that Pi files its sessions in. */
+export const PI_SESSIONS_DIR = "sessions";
 /** What Pi accepts as a session id; anything else is never looked up. */
 const SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 /** Enough of a session file to hold its first line, the header. */

@@ -1877,8 +1877,9 @@ export default {
   "Install OpenCode": "Установить OpenCode",
   "Install OpenCode from Settings › Model Providers.": "Установи OpenCode в разделе «Настройки › Провайдеры моделей».",
   "Install Pi from Settings › Model Providers.": "Установи Pi в разделе «Настройки › Провайдеры моделей».",
-  "This version of Pi is too old for Genex. Update it to keep building.":
-    "Эта версия Pi слишком старая для Genex. Обнови её, чтобы продолжить.",
+  "This version of Pi is too old for Genex. Update Pi, then check again.":
+    "Эта версия Pi слишком старая для Genex. Обнови Pi и нажми «Проверить снова».",
+  "Updating Pi. This can take a minute.": "Обновляем Pi. Это может занять минуту.",
   "Install Unity 6": "Установить Unity 6",
   "Install Unreal {version}": "Установить Unreal {version}",
   "Install Xcode": "Установить Xcode",

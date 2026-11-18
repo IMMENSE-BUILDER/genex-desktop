@@ -1921,8 +1921,9 @@ export default {
   "Install OpenCode": "Instalar OpenCode",
   "Install OpenCode from Settings › Model Providers.": "Instale o OpenCode em Configurações › Provedores de modelos.",
   "Install Pi from Settings › Model Providers.": "Instale o Pi em Configurações › Provedores de modelos.",
-  "This version of Pi is too old for Genex. Update it to keep building.":
-    "Esta versão do Pi é antiga demais para o Genex. Atualize para continuar criando.",
+  "This version of Pi is too old for Genex. Update Pi, then check again.":
+    "Esta versão do Pi é antiga demais para o Genex. Atualize o Pi e verifique de novo.",
+  "Updating Pi. This can take a minute.": "Atualizando o Pi. Isso pode levar um minuto.",
   "Install Unity 6": "Instalar Unity 6",
   "Install Unreal {version}": "Instalar Unreal {version}",
   "Install Xcode": "Instalar Xcode",

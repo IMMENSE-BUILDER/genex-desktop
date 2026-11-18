@@ -9,7 +9,6 @@
  * Studio tools arrive through the same bridge Codex and OpenCode use.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,7 +21,7 @@ import { writeDelegateStills } from "./codex.ts";
 import { JUDGE_RULES, offLimitsNote, planModeNote, readOnlyNote } from "./codex-prompts.ts";
 import { gitMetadataDirs } from "./session-commands.ts";
 import { builtInPiHosts, parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
-import { findPiSession, piSessionArgs, samePiFolder, type PiSessionFile } from "./pi-sessions.ts";
+import { findPiSession, PI_SESSIONS_DIR, piSessionArgs, samePiFolder, type PiSessionFile } from "./pi-sessions.ts";
 import { piViewDir, preparePiView } from "./pi-agent-view.ts";
 import { parsePiLine, translatePiEvent, type Translated } from "./pi-events.ts";
 import {
@@ -45,7 +44,7 @@ import {
   STOPPED_BY_USER,
 } from "./common.ts";
 import type { PartialDelegateState } from "./common.ts";
-import { ProcessSandbox, type SandboxOptions, shellQuote } from "../spawn.ts";
+import { gameSettingsDenyWrites, ProcessSandbox, type SandboxOptions, shellQuote } from "../spawn.ts";
 import { childEnv } from "../child-env.ts";
 import { credentialHomes, PI_AGENT_DIR_ENV, piAgentDir, piHomes } from "../credential-homes.ts";
 import { stopChild } from "../process-tree.ts";
@@ -71,12 +70,6 @@ const STDERR_TAIL_CHARS = 4_000;
  * sandboxed session can fail on any other file too.
  */
 const CREDENTIAL_STORE_DENIED = /\b(?:EPERM|EACCES|EROFS|EBUSY)\b[^\n]*[/\\]auth\.json/;
-/**
- * What Pi's own session writes in Pi's folder, each by its name: its transcripts, its sign-in (Pi
- * saves a renewed one during a session, and a refresh it cannot save is spent) and the lock folders
- * Pi makes beside the files it reads. Nothing Pi loads or runs is among them, there or not.
- */
-const PI_WRITTEN = ["sessions", "auth.json", "auth.json.lock", "models-store.json.lock", "settings.json.lock"] as const;
 /**
  * OAuth's own error code for a refresh token that expired or was revoked (RFC 6749 §5.2): the
  * provider's code, never a sentence, and only as a whole word.
@@ -119,6 +112,16 @@ export interface PiInvocation {
 }
 export type PiExec = (invocation: PiInvocation) => AsyncIterable<Record<string, unknown>>;
 
+/** The Pi on this computer, as the engine asks for it. */
+export interface PiCli {
+  ready: boolean;
+  path?: string;
+  version?: string;
+  detail: string;
+  /** Why a Pi that is there cannot run (a missing runtime, a manual path that names nothing); too old when not given. */
+  state?: CodingCliState;
+}
+
 export interface PiEngineOptions {
   scratchRoot?: string;
   protectedPaths?: string[];
@@ -126,7 +129,7 @@ export interface PiEngineOptions {
   onModelsChanged?: () => void;
   execFn?: PiExec;
   listModels?: () => Promise<string>;
-  resolveCli?: () => Promise<{ ready: boolean; path?: string; version?: string; detail: string }>;
+  resolveCli?: () => Promise<PiCli>;
   lockRecovery?: string;
   /** The person's environment, which may move Pi's folder (`PI_CODING_AGENT_DIR`); the studio's own when not given. */
   env?: Record<string, string | undefined>;
@@ -148,29 +151,19 @@ interface PiRun {
 }
 
 /**
- * What a session writes of Pi's folder, as far as each system's sandbox can say it.
+ * What a session writes of Pi's folder `agent`.
  *
- * macOS grants a path whether or not it is there, so a session gets Pi's transcripts, its sign-in
- * and its lock folders by name and nothing else. Linux grants a folder that exists, whole, and Pi
- * makes its lock beside `auth.json`: there a session runs on a folder of its own that stands for
- * Pi's (`pi-agent-view.ts`), and writes that and the transcripts. Windows grants whole folders to
- * the sandbox's one user and keeps no deny inside a CLI's own folder (`keepWindowsDenies`), so a
+ * Pi makes a lock folder beside each file it reads, and of what Pi keeps in its folder a session
+ * may write none that Pi loads or runs: not an extension, not `models.json`, and not its sign-in,
+ * where a stored key that starts with `!` is a command Pi runs. So on macOS and Linux a session
+ * runs on a folder of its own that stands for Pi's (`pi-agent-view.ts`) and writes that and Pi's
+ * transcripts. Windows has no link a session's user can read through, grants whole folders to the
+ * sandbox's one user and keeps no deny inside a CLI's own folder (`keepWindowsDenies`), so a
  * session there writes Pi's folder, as OpenCode's, Grok Build's and Cursor's sessions write theirs.
  */
 function piWrites(agent: string, platform: NodeJS.Platform, view: string | undefined): string[] {
   if (platform === StudioPlatform.Windows) return [agent];
-  if (platform === StudioPlatform.Linux) return [view ?? piViewDir(agent), path.join(agent, "sessions")];
-  return PI_WRITTEN.map((leaf) => path.join(agent, leaf));
-}
-
-/**
- * The game's own Pi folder, never a session's to plant. On Linux a deny on a path that is not
- * there puts a stand-in file in its place while the session runs, and the build's `git add -A`
- * refuses a `.pi` that is no regular file: so there only a folder that exists is denied.
- */
-function piDenies(gameDir: string, platform: NodeJS.Platform, exists: (file: string) => boolean): string[] {
-  const gamePi = path.join(gameDir, ".pi");
-  return platform === StudioPlatform.Linux && !exists(gamePi) ? [] : [gamePi];
+  return [view ?? piViewDir(agent), path.join(agent, PI_SESSIONS_DIR)];
 }
 
 /** The sandbox a session runs in: the folder it works in, and of Pi's own folder what Pi's session writes. */
@@ -184,7 +177,9 @@ export function piSandbox(input: {
   env?: Record<string, string | undefined>;
   home?: string;
   platform?: NodeJS.Platform;
-  /** Linux: the folder that stands for Pi's in this session (`preparePiView`); its place in Pi's folder when not given. */
+  /** Pi's folder by its real path, where the session's folder is; as `env` names it when not given. */
+  agentDir?: string;
+  /** macOS and Linux: the folder that stands for Pi's in this session (`preparePiView`); its place in Pi's folder when not given. */
   agentView?: string;
   /** Whether a path is there now; the disk's answer when not given. */
   exists?: (file: string) => boolean;
@@ -192,12 +187,14 @@ export function piSandbox(input: {
   const env = input.env ?? process.env;
   const home = input.home ?? os.homedir();
   const platform = input.platform ?? process.platform;
+  const agent = input.agentDir ?? piAgentDir(env, home);
   return {
-    writableRoots: [input.runDir, ...input.gitDirs, ...piWrites(piAgentDir(env, home), platform, input.agentView)],
+    writableRoots: [input.runDir, ...input.gitDirs, ...piWrites(agent, platform, input.agentView)],
     scratchDir: input.scratchDir,
     secretPaths: input.secretPaths,
     readableHome: piHomes(env, home),
-    denyWrite: piDenies(input.gameDir, platform, input.exists ?? existsSync),
+    // The game's own Pi folder is never a session's to plant.
+    denyWrite: gameSettingsDenyWrites([path.join(input.gameDir, ".pi")], platform, input.exists),
     ...(input.toolPath ? { toolPath: input.toolPath } : {}),
   };
 }
@@ -213,7 +210,7 @@ export class PiEngine implements Engine {
   readonly #catalog: ModelCatalog;
   readonly #execFn: PiExec | undefined;
   readonly #listModels: (() => Promise<string>) | undefined;
-  readonly #resolveCli: () => Promise<{ ready: boolean; path?: string; version?: string; detail: string }>;
+  readonly #resolveCli: () => Promise<PiCli>;
   readonly #lockRecovery: string | undefined;
   readonly #env: Record<string, string | undefined>;
   readonly #home: string;
@@ -297,11 +294,11 @@ export class PiEngine implements Engine {
     const scratch = readOnly ? await this.#runScratch(kept) : null;
     const runDir = scratch ?? cwd;
     const bridge = await this.#openBridge(request, runDir).catch(async (err) => {
-      await this.#cleanUp(cwd, scratch, null);
+      await this.#cleanUp(scratch, null);
       throw err;
     });
     const stills = await writeDelegateStills(request.images ?? [], this.#stillsRoot()).catch(async (err) => {
-      await this.#cleanUp(cwd, scratch, bridge);
+      await this.#cleanUp(scratch, bridge);
       throw err;
     });
     const deadline = request.timeoutMs
@@ -327,7 +324,7 @@ export class PiEngine implements Engine {
     } finally {
       if (deadline) clearTimeout(deadline);
       if (stills.dir) await rm(stills.dir, { recursive: true, force: true }).catch(() => {});
-      await this.#cleanUp(cwd, scratch, bridge);
+      await this.#cleanUp(scratch, bridge);
     }
     if (request.signal?.aborted || run.deadlineHit)
       return metered(partialDelegateResult(this.id, interruption(request.signal?.aborted), partial()));
@@ -377,14 +374,15 @@ export class PiEngine implements Engine {
 
   /** One answer session in a scratch folder; removed after. */
   async #answer(request: CompleteRequest, signal: AbortSignal): Promise<PiRun> {
-    const scratch = await this.#scratch("answer-");
     const images = request.messages.flatMap((message) => message.images ?? []);
     const stills = await writeDelegateStills(
       images.map((image) => ({ ...image, label: image.label ?? "" })),
       this.#stillsRoot(),
     );
     const run = newRun(this.id, undefined);
+    let scratch: string | null = null;
     try {
+      scratch = await this.#scratch("answer-");
       const invocation = await this.#invocation(
         { model: request.model, effort: request.effort, denyReads: [] },
         {
@@ -402,7 +400,7 @@ export class PiEngine implements Engine {
       return run;
     } finally {
       if (stills.dir) await rm(stills.dir, { recursive: true, force: true }).catch(() => {});
-      await rm(scratch, { recursive: true, force: true }).catch(() => {});
+      if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -424,7 +422,7 @@ export class PiEngine implements Engine {
 
   /** Where Pi files its sessions, one folder for each folder a session was started in. */
   #sessionsRoot(): string {
-    return path.join(piAgentDir(this.#env, this.#home), "sessions");
+    return path.join(piAgentDir(this.#env, this.#home), PI_SESSIONS_DIR);
   }
 
   /**
@@ -460,7 +458,7 @@ export class PiEngine implements Engine {
     });
   }
 
-  async #cleanUp(cwd: string, scratch: string | null, bridge: StudioBridge | null): Promise<void> {
+  async #cleanUp(scratch: string | null, bridge: StudioBridge | null): Promise<void> {
     await bridge?.close().catch(() => {});
     if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
   }
@@ -513,13 +511,13 @@ export class PiEngine implements Engine {
       ...ctx.files.map((file) => `@${file}`),
     ];
     const agent = piAgentDir(this.#env, this.#home);
-    const view = this.#platform === StudioPlatform.Linux ? await preparePiView(agent) : undefined;
+    const view = this.#platform === StudioPlatform.Windows ? undefined : await preparePiView(agent);
     return {
       argv,
       cwd: ctx.runDir,
       prompt: ctx.prompt,
       // Pi's folder, named outright: Windows runs a session as the sandbox's own user, whose home
-      // holds no Pi sign-in, and Linux runs it on the folder that stands for Pi's.
+      // holds no Pi sign-in, and the others run it on the folder that stands for Pi's.
       env: { [PI_AGENT_DIR_ENV]: view ?? agent },
       signal: ctx.signal,
       sandbox: piSandbox({
@@ -534,7 +532,8 @@ export class PiEngine implements Engine {
         env: this.#env,
         home: this.#home,
         platform: this.#platform,
-        ...(view ? { agentView: view } : {}),
+        // The session's folder is made in Pi's folder by its real path: the transcripts beside it.
+        ...(view ? { agentView: view, agentDir: await realpath(agent) } : {}),
       }),
       domains: this.#domains(model),
     };
@@ -726,12 +725,17 @@ function metered(result: DelegateResult): DelegateResult {
   return { ...result, billing: "api" };
 }
 
-function cliState(cli: { ready: boolean; path?: string }): EngineAccount["cli"]["state"] {
+/**
+ * Where Pi stands for its row: only a Pi that started and lacks what a session needs is too old
+ * (`Incompatible`, the row's "Update needed"); one that could not start keeps its own reason.
+ */
+function cliState(cli: PiCli): EngineAccount["cli"]["state"] {
   if (cli.ready) return CodingCliState.Ready;
-  return cli.path ? CodingCliState.Incompatible : CodingCliState.Missing;
+  if (!cli.path) return CodingCliState.Missing;
+  return cli.state && cli.state !== CodingCliState.Ready ? cli.state : CodingCliState.Incompatible;
 }
 
-async function defaultResolveCli(): Promise<{ ready: boolean; path?: string; version?: string; detail: string }> {
+async function defaultResolveCli(): Promise<PiCli> {
   const installation = await resolveCodingCli(EngineId.Pi);
   const { state, path: binary, version, detail } = installation.status;
   return {
@@ -739,6 +743,7 @@ async function defaultResolveCli(): Promise<{ ready: boolean; path?: string; ver
     ...(binary ? { path: binary } : {}),
     ...(version ? { version } : {}),
     detail,
+    state,
   };
 }
 

@@ -138,22 +138,32 @@ describe("Pi, which Genex installs nowhere", () => {
     }
   });
 
-  it("a Pi too old for a session says to update it, not that it did not answer", async () => {
+  it("a Pi too old for a session says to update it, and offers its guide: Genex can update only a Pi that runs", async () => {
     const { CliSignInRow, createElement, renderToStaticMarkup } = await views();
     onPlatform("linux");
-    const engine = {
-      ...missing,
-      id: EngineId.Pi,
-      label: "Pi",
-      status: { code: EngineStatusCode.Error, detail: "" },
-      account: { source: LoginSource.None, cli: { state: CodingCliState.Incompatible } },
-    };
-    const html = renderToStaticMarkup(
-      createElement(CliSignInRow, { engine, provider: EngineId.Pi, onEnginesRefresh: () => {} }),
-    );
-    assert.match(html, />Update needed</);
-    assert.match(html, /This version of Pi is too old for Genex\. Update it to keep building\./);
-    assert.match(html, />Update Pi</);
-    assert.doesNotMatch(html, /didn(&#x27;|')t answer/);
+    const row = (state: CodingCliState) =>
+      renderToStaticMarkup(
+        createElement(CliSignInRow, {
+          engine: {
+            ...missing,
+            id: EngineId.Pi,
+            label: "Pi",
+            status: { code: EngineStatusCode.Error, detail: "" },
+            account: { source: LoginSource.None, cli: { state } },
+          },
+          provider: EngineId.Pi,
+          onEnginesRefresh: () => {},
+        }),
+      );
+    const old = row(CodingCliState.Incompatible);
+    assert.match(old, />Update needed</);
+    assert.match(old, /This version of Pi is too old for Genex\. Update Pi, then check again\./);
+    assert.match(old, />Install guide</);
+    assert.match(old, />Check again</);
+    assert.doesNotMatch(old, />Update Pi</, "Pi's own update is run only for a Pi that is ready");
+    assert.doesNotMatch(old, /didn(&#x27;|')t answer/);
+    const noRuntime = row(CodingCliState.MissingRuntime);
+    assert.match(noRuntime, /Pi didn(&#x27;|')t answer\. Check the installation, then try again\./);
+    assert.doesNotMatch(noRuntime, /too old/, "a Pi that could not start is not an old one");
   });
 });

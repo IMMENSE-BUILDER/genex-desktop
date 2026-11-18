@@ -2835,7 +2835,8 @@ export const METERED_PROVIDER_WORDS = {
     update: t("Update Pi"),
     connectedLine: t("Billed by each provider you use"),
     unreachable: t("Pi didn't answer. Check the installation, then try again."),
-    outdatedLine: t("This version of Pi is too old for Genex. Update it to keep building."),
+    outdatedLine: t("This version of Pi is too old for Genex. Update Pi, then check again."),
+    updatingLine: t("Updating Pi. This can take a minute."),
   },
   openRouter: {
     name: "OpenRouter",

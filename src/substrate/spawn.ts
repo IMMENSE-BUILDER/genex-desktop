@@ -215,8 +215,8 @@ export interface SandboxOptions {
   /**
    * The sign-in home of the one CLI that runs inside this sandbox and reads it (Pi, whose settings,
    * models and extensions a session must never rewrite): out of the credential read and write
-   * denies, and never a write grant — what a session writes there (Pi's transcripts, its sign-in
-   * file) it must name in `writableRoots`.
+   * denies, and never a write grant — what a session writes there (Pi's transcripts and the
+   * folder that stands for Pi's own) it must name in `writableRoots`.
    */
   readableHome?: readonly string[];
   /**
