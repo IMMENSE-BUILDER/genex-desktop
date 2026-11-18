@@ -235,10 +235,10 @@ signed in the picker starts OpenCode's GPT models with the ones Codex lists (`ru
 
 **Pi** ([pi.ts](../src/substrate/engines/pi.ts)) is the Pi coding agent (`pi --mode json`), not the
 `pi-ai` HTTP client. Sign in and `--list-models` run with `--no-extensions --offline`; studio never
-reads Pi's sign-in. Ready once `--list-models` lists a model; a Pi whose help lacks an option a session
-passes shows "Update needed" with Pi's guide (Genex runs `pi update` only for a Pi that is ready), and
-one that cannot start (no Node for its launcher) says it did not answer. Sessions run in
-`ProcessSandbox` (`readableHome`: `~/.pi`) with
+looks into Pi's sign-in (a session gets a copy of the file, below). Ready once `--list-models` lists
+a model; a Pi whose help lacks an option a session passes shows "Update needed" with Pi's guide
+(Genex runs `pi update` only for a Pi that is ready), and one that cannot start (no Node for its
+launcher) says it did not answer. Sessions run in `ProcessSandbox` (`readableHome`: `~/.pi`) with
 `--no-extensions --no-approve`: a game folder's own `.pi` settings and `.agents/skills` stay untrusted.
 Every session is told where Pi's folder is (`PI_CODING_AGENT_DIR`, `piAgentDir`): by default
 `~/.pi/agent`, or the folder the person moved it to with that variable, which is then fenced like
@@ -252,17 +252,22 @@ Pi runs. A session writes none of them. Pi still has to write beside them: a loc
 each file it reads (`auth.json.lock`), a renewed subscription sign-in, its catalog cache. How each
 system gives it that (`piWrites`):
 
-- **macOS and Linux**: a session runs on a folder of its own that stands for Pi's
-  ([pi-agent-view.ts](../src/substrate/engines/pi-agent-view.ts)): `<agent>/genex/agent`, named in
-  `PI_CODING_AGENT_DIR`, rebuilt before each session. In it `auth.json` and `models-store.json` are
-  copies of the person's, made new for each session and never copied back, and every other entry is
-  a link to the person's, read-only to the session. The session writes that folder and `sessions`
-  (Pi's transcripts, kept in the person's folder). The person's own Pi never reads the folder, and
-  what a session left there is removed before the next one, through `<agent>/genex/work`, which no
-  session writes. Two things follow. A sign-in Pi renews during a session lasts that session: where
-  the provider retires the old one, the person's file is then out of date and the next session says
-  to sign in to Pi again. And a session's lock is not the person's Pi's: a session reads settings the
-  person's Pi may be writing at that moment. Linux denies a game's `.pi` only when it exists
+- **macOS and Linux**: every session runs on a folder of its own that stands for Pi's
+  ([pi-agent-view.ts](../src/substrate/engines/pi-agent-view.ts)):
+  `<agent>/genex/agent-<process>-<name>`, named in `PI_CODING_AGENT_DIR`. It is made new when the
+  session starts, before anything can write it, and never used again. In it `auth.json` and
+  `models-store.json` are copies of the person's (the bytes, which Genex never reads as anything
+  else) and are never copied back; every other entry is a link to the person's, read-only to the
+  session. A sign-in file that is there and cannot be read fails the session, as does a `genex` or
+  `genex/work` that is not a folder: Genex removes through those two names. The session writes that folder and `sessions` (Pi's transcripts, kept in the person's
+  folder). When the session ends its folder is renamed into `<agent>/genex/work`, which no session
+  writes, and removed there, so nothing is built or removed through a name a session could have
+  changed and nothing one session left reaches another. A folder whose Genex is gone is taken out
+  the same way when the next session starts. The person's own Pi never reads any of this. Two
+  things follow. A sign-in Pi renews during a session lasts that session: where the provider retires
+  the old one, the person's file is then out of date and a later session says to sign in to Pi
+  again. And a session's lock is not the person's Pi's: a session reads settings the person's Pi may
+  be writing at that moment. Linux denies a game's `.pi` only when it exists
   (`gameSettingsDenyWrites`).
 - **Windows** has no link a session's user can read through, runs a session as the sandbox's own
   user, grants whole folders and stamps no deny inside a sandboxed CLI's home, so there a session

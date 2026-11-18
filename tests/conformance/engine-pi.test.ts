@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,7 +23,7 @@ import {
 import { credentialHomes, piAgentDir, sandboxedCliHomes } from "../../src/substrate/credential-homes.ts";
 import { hostsFromPiModelsJson, parsePiModels } from "../../src/substrate/engines/pi-cli.ts";
 import { translatePiEvent } from "../../src/substrate/engines/pi-events.ts";
-import { preparePiView } from "../../src/substrate/engines/pi-agent-view.ts";
+import { closePiView, openPiView } from "../../src/substrate/engines/pi-agent-view.ts";
 import { SandboxUnavailableError } from "../../src/substrate/sandbox-unavailable.ts";
 import { ProcessSandbox } from "../../src/substrate/spawn.ts";
 import { EngineError, type DelegateEvent } from "../../src/substrate/engines/types.ts";
@@ -62,6 +62,8 @@ async function engineWith(
     execFn,
     resolveCli: ready,
     listModels: () => fixture("pi-models.txt"),
+    // Never this machine's own: a developer's `PI_CODING_AGENT_DIR` would point the tests at their Pi folder.
+    env: {},
     ...where,
     home,
   });
@@ -368,10 +370,7 @@ describe("Pi's sessions", () => {
     }
   });
 
-  it("continues from the newest file of a session, and opens only a regular file under a session's name", {
-    skip: process.platform === "win32" && "a pipe and a link under a session's name are made with POSIX tools",
-    timeout: 20_000,
-  }, async () => {
+  it("continues from the newest file of a session", async () => {
     const cwd = await realpath(await game());
     const { engine, seen, root, home } = await engineWith(() => replay([]));
     const earlier = await keptSession(home, path.join(root, "scratch", "run-earlier"), "sess-twice");
@@ -381,11 +380,20 @@ describe("Pi's sessions", () => {
     await writeFile(later, `${JSON.stringify(header)}\n`);
     await engine.delegate({ cwd, prompt: "Build", resume: "sess-twice", onEvent: () => {} });
     assert.equal(seen[0]?.argv[(seen[0]?.argv.indexOf("--fork") ?? 0) + 1], later);
+  });
+
+  it("opens only a regular file under a session's name", {
+    skip: process.platform === "win32" && "a pipe and a link under a session's name are made with POSIX tools",
+    timeout: 20_000,
+  }, async () => {
+    const cwd = await realpath(await game());
+    const { engine, seen, root, home } = await engineWith(() => replay([]));
     // Sessions are files a sandboxed turn can write: a pipe would hold an open forever, and a link
     // names a file somewhere else.
-    const dir = path.dirname(earlier);
+    const dir = path.dirname(await keptSession(home, path.join(root, "scratch", "run-real"), "sess-real"));
+    const header = { type: "session", version: 3, id: "sess-link", cwd: path.join(root, "scratch", "run-link") };
     const elsewhere = path.join(root, "elsewhere.jsonl");
-    await writeFile(elsewhere, `${JSON.stringify({ ...header, id: "sess-link" })}\n`);
+    await writeFile(elsewhere, `${JSON.stringify(header)}\n`);
     await symlink(elsewhere, path.join(dir, "2026-01-01T00-00-00-000Z_sess-link.jsonl"));
     execFileSync("mkfifo", [path.join(dir, "2026-01-01T00-00-00-000Z_sess-pipe.jsonl")]);
     for (const id of ["sess-link", "sess-pipe"]) {
@@ -467,7 +475,7 @@ describe("Pi's sandbox", () => {
   it("on macOS and Linux a session writes the game, the folder that stands for Pi's and its transcripts, never Pi's folder", () => {
     const home = path.join(path.sep, "home", "dev");
     const agent = path.join(home, ".pi", "agent");
-    const view = path.join(agent, "genex", "agent");
+    const view = path.join(agent, "genex", "agent-1-session");
     for (const platform of VIEW_PLATFORMS) {
       const sandbox = piSandbox({
         runDir: GAME,
@@ -478,6 +486,7 @@ describe("Pi's sandbox", () => {
         home,
         env: {},
         platform,
+        agentView: view,
         exists: () => true,
       });
       const writes = (file: string) => reaches(sandbox.writableRoots, file);
@@ -491,7 +500,8 @@ describe("Pi's sandbox", () => {
           !writes(path.join(agent, leaf)),
           `${platform}: nothing in the person's folder is a session's: ${leaf}`,
         );
-      assert.ok(!writes(path.join(agent, "genex", "work", "staged")), "nor what Genex is putting in the folder");
+      assert.ok(!writes(path.join(agent, "genex", "work", "out")), "nor what Genex is taking out");
+      assert.ok(!writes(path.join(agent, "genex", "agent-1-other", "auth.json")), "nor another session's folder");
       assert.equal(sandbox.ownHome, undefined, "`~/.pi` is not a write grant: a session must not rewrite it");
       assert.deepEqual(sandbox.readableHome, [path.join(home, ".pi")], "the CLI still reads its sign-ins");
       assert.ok(sandbox.secretPaths.includes("/secrets"));
@@ -511,9 +521,9 @@ describe("Pi's sandbox", () => {
       env: {},
       platform: "darwin",
       agentDir: real,
-      agentView: path.join(real, "genex", "agent"),
+      agentView: path.join(real, "genex", "agent-1-session"),
     });
-    assert.ok(sandbox.writableRoots.includes(path.join(real, "genex", "agent")));
+    assert.ok(sandbox.writableRoots.includes(path.join(real, "genex", "agent-1-session")));
     assert.ok(sandbox.writableRoots.includes(path.join(real, "sessions")));
   });
 
@@ -549,12 +559,16 @@ describe("Pi's sandbox", () => {
         secretPaths: [],
         env: {},
         platform: "darwin",
+        agentView: path.join(agent, "genex", "agent-1-session"),
       }),
       enabled: false,
     });
     const writes = (file: string) => reaches(box.policy.allowWrite, file);
     assert.ok(writes(path.join(agent, "sessions")), "a session writes its transcripts");
-    assert.ok(writes(path.join(agent, "genex", "agent", "auth.json.lock")), "and Pi's lock beside its own sign-in");
+    assert.ok(
+      writes(path.join(agent, "genex", "agent-1-session", "auth.json.lock")),
+      "and Pi's lock beside its own sign-in",
+    );
     for (const planted of ["auth.json", ...PI_LOADS])
       assert.ok(!writes(path.join(agent, planted)), `a session cannot plant agent/${planted}, which runs outside it`);
     assert.ok(!box.policy.denyRead.includes(piHome), "the CLI reads its own sign-ins");
@@ -595,7 +609,7 @@ describe("Pi's sandbox", () => {
     await writeFile(path.join(agent, "auth.json"), "{}");
     await writeFile(path.join(agent, "settings.json"), "{}");
     // The folder Pi is pointed at (`PI_CODING_AGENT_DIR`): the one that stands for Pi's own.
-    const view = await preparePiView(agent);
+    const { dir: view, agent: agentDir } = await openPiView(agent);
     const own = ["auth.json", "extensions", "genex", "sessions", "settings.json"];
     const sandbox = await ProcessSandbox.create(
       piSandbox({
@@ -607,6 +621,7 @@ describe("Pi's sandbox", () => {
         env: {},
         home,
         agentView: view,
+        agentDir,
       }),
     );
     try {
@@ -638,6 +653,8 @@ describe("Pi's sandbox", () => {
       await run(`mkdir "${path.join(agent, "auth.json.lock")}"`);
       await run(`rm "${path.join(agent, "settings.json")}"`);
       await run(`echo staged > "${path.join(agent, "genex", "work", "staged")}"`);
+      // The session's folder itself, left closed to its owner: it is still removed when the session ends.
+      await run(`chmod 500 "${view}"`);
       assert.equal(await readFile(path.join(agent, "auth.json"), "utf8"), "{}", "Pi's sign-in is never a session's");
       assert.equal(await readFile(path.join(agent, "settings.json"), "utf8"), "{}", "nor are Pi's settings");
       assert.deepEqual(await readdir(path.join(agent, "extensions")), [], "nor code Pi later runs outside the sandbox");
@@ -659,12 +676,10 @@ describe("Pi's sandbox", () => {
       await sandbox.dispose();
     }
     assert.deepEqual((await readdir(agent)).sort(), own, "and nothing else is left in the person's Pi folder");
-    await preparePiView(agent);
-    assert.equal(
-      await readFile(path.join(view, "auth.json"), "utf8"),
-      "{}",
-      "the next session starts from the person's",
-    );
+    await closePiView(view);
+    assert.deepEqual(await readdir(path.join(agent, "genex")), ["work"], "the session's folder goes when it ends");
+    assert.deepEqual(await readdir(path.join(agent, "genex", "work")), [], "with all the session left in it");
+    assert.deepEqual((await readdir(agent)).sort(), own);
   });
 
   it("a model Pi has not listed yet still reaches its provider, and only a provider Pi knows", async () => {
@@ -694,7 +709,7 @@ describe("Pi's sandbox", () => {
     assert.ok(!existsSync(path.join(home, ".pi", "agent", "genex")), "and no folder is made to stand for Pi's");
   });
 
-  it("on macOS and Linux every session runs on the folder that stands for Pi's, made as Pi's folder is now", {
+  it("on macOS and Linux every session runs on a folder of its own that stands for Pi's, gone when it ends", {
     skip: NO_LINKS,
   }, async () => {
     const stream = await events("pi-stream.jsonl");
@@ -704,21 +719,79 @@ describe("Pi's sandbox", () => {
       await mkdir(agent, { recursive: true });
       await writeFile(path.join(agent, "auth.json"), '{"signed":"in"}');
       await writeFile(path.join(agent, "models.json"), "{}");
-      const { engine, seen } = await engineWith(() => replay(stream), { env: {}, home, platform });
+      // What the session's Pi finds in its folder while it runs.
+      const found: Array<{ signIn: string; models: string }> = [];
+      const { engine, seen } = await engineWith(
+        (invocation) => {
+          const view = invocation.env.PI_CODING_AGENT_DIR ?? "";
+          found.push({
+            signIn: readFileSync(path.join(view, "auth.json"), "utf8"),
+            models: realpathSync(path.join(view, "models.json")),
+          });
+          return replay(stream);
+        },
+        { env: {}, home, platform },
+      );
       await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
       await engine.complete({ messages: [{ role: "user", content: "judge" }] });
-      const view = path.join(agent, "genex", "agent");
       assert.equal(seen.length, 2);
       for (const session of seen) {
-        assert.equal(session.env.PI_CODING_AGENT_DIR, view, `${platform}: a build and a one-shot answer alike`);
+        const view = session.env.PI_CODING_AGENT_DIR ?? "";
+        assert.equal(path.dirname(view), path.join(agent, "genex"), `${platform}: a build and a one-shot answer alike`);
         assert.ok(session.sandbox.writableRoots.includes(view), "which the session writes");
         assert.ok(session.sandbox.writableRoots.includes(path.join(agent, "sessions")), "with Pi's transcripts");
         assert.ok(!reaches(session.sandbox.writableRoots, path.join(agent, "auth.json")), "never Pi's own sign-in");
         assert.ok(!session.sandbox.writableRoots.includes(agent), "and never Pi's own folder");
+        assert.equal(existsSync(view), false, "gone when the session ends");
       }
-      assert.equal(await readFile(path.join(view, "auth.json"), "utf8"), '{"signed":"in"}', "Pi finds its sign-in");
-      assert.equal(await realpath(path.join(view, "models.json")), path.join(agent, "models.json"));
+      assert.notEqual(seen[0]?.env.PI_CODING_AGENT_DIR, seen[1]?.env.PI_CODING_AGENT_DIR, "one folder a session");
+      assert.deepEqual(found, [
+        { signIn: '{"signed":"in"}', models: path.join(agent, "models.json") },
+        { signIn: '{"signed":"in"}', models: path.join(agent, "models.json") },
+      ]);
+      assert.deepEqual(await readdir(path.join(agent, "genex")), ["work"]);
     }
+  });
+
+  it("a session that fails or is stopped leaves no folder behind either", { skip: NO_LINKS }, async () => {
+    const home = await realpath(await tmpDir("pi-home-"));
+    const own = path.join(home, ".pi", "agent", "genex");
+    const failing = await engineWith(
+      // biome-ignore lint/correctness/useYield: a session that dies before its first event
+      async function* () {
+        throw new Error("Pi exited with 1");
+      },
+      { env: {}, home, platform: "linux" },
+    );
+    const failed = await failing.engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
+    assert.equal(failed.ok, false);
+    assert.equal(failing.seen.length, 1, "the session did start");
+    assert.deepEqual(await readdir(own), ["work"]);
+    await assert.rejects(failing.engine.complete({ messages: [{ role: "user", content: "judge" }] }), /exited with 1/);
+    assert.deepEqual(await readdir(own), ["work"]);
+
+    // Stopped by the person while Pi answers: the folder is there during the turn, and gone after it.
+    const stream = await events("pi-stream.jsonl");
+    const controller = new AbortController();
+    let during: string[] = [];
+    const stopping = await engineWith(
+      async function* () {
+        yield stream[0] ?? {};
+        during = await readdir(own);
+        controller.abort();
+      },
+      { env: {}, home, platform: "linux" },
+    );
+    const stopped = await stopping.engine.delegate({
+      cwd: await game(),
+      prompt: "build",
+      signal: controller.signal,
+      onEvent: () => {},
+    });
+    assert.equal(stopped.ok, false);
+    assert.match(stopped.errorText ?? "", /stopped/i);
+    assert.equal(during.length, 2, "the session's folder beside the work folder while it runs");
+    assert.deepEqual(await readdir(own), ["work"]);
   });
 
   it("a Pi folder reached through a link is granted by its real path, where Pi makes its locks", {
@@ -737,8 +810,12 @@ describe("Pi's sandbox", () => {
         platform,
       });
       await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
-      const view = path.join(kept, "genex", "agent");
-      assert.equal(seen[0]?.env.PI_CODING_AGENT_DIR, view, `${platform}: Pi locks the path its sign-in resolves to`);
+      const view = seen[0]?.env.PI_CODING_AGENT_DIR ?? "";
+      assert.equal(
+        path.dirname(view),
+        path.join(kept, "genex"),
+        `${platform}: Pi locks the path its sign-in resolves to`,
+      );
       assert.ok(seen[0]?.sandbox.writableRoots.includes(view));
       assert.ok(seen[0]?.sandbox.writableRoots.includes(path.join(kept, "sessions")), "the transcripts beside it");
     }
@@ -1083,8 +1160,15 @@ describe("Pi's plan and one-shot answers", () => {
     await writeFile(path.join(root, "scratch", "tmp"), "in the way");
     const image = { label: "the bug", mimeType: "image/png", data: PIXEL };
     const cwd = await game();
-    await assert.rejects(engine.complete({ messages: [{ role: "user", content: "A or B?", images: [image] }] }));
-    await assert.rejects(engine.delegate({ cwd, prompt: "Look", readOnly: true, images: [image], onEvent: () => {} }));
+    const refused = (err: NodeJS.ErrnoException) => err.code === "EEXIST" || err.code === "ENOTDIR";
+    await assert.rejects(
+      engine.complete({ messages: [{ role: "user", content: "A or B?", images: [image] }] }),
+      refused,
+    );
+    await assert.rejects(
+      engine.delegate({ cwd, prompt: "Look", readOnly: true, images: [image], onEvent: () => {} }),
+      refused,
+    );
     assert.equal(seen.length, 0, "no session starts without its pictures");
     assert.deepEqual(await readdir(path.join(root, "scratch")), ["tmp"], "no answer or run folder is left");
   });

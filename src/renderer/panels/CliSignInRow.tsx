@@ -4,7 +4,7 @@
  * the row, so Settings stays open), the Account menu once connected, and the picker's models.
  * Loaded when Settings shows it (`MeteredProviders.tsx`): it is not on the first screen.
  */
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { type JSX, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { EngineStatusCode } from "../../shared/engine-descriptor.ts";
 import { t } from "../../shared/i18n.ts";
 import { EngineId } from "../../shared/providers.ts";
@@ -187,6 +187,25 @@ const ANTIGRAVITY_ROW: CliRowWords = {
   again: { title: ANTIGRAVITY_WORDS.signInAgain, line: ANTIGRAVITY_WORDS.signInAgainLine },
 };
 
+/** The CLI's install guide where Genex can't install it, else the button `label` that runs its installer; and Check again. */
+function guideOrInstall(act: CliRowActions, label: string): JSX.Element {
+  const { openGuide } = act;
+  return (
+    <>
+      {openGuide ? (
+        <Button variant="default" onClick={openGuide}>
+          {WORDS.installGuide}
+        </Button>
+      ) : (
+        <Button variant="default" onClick={act.install}>
+          {label}
+        </Button>
+      )}
+      <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
+    </>
+  );
+}
+
 /** Not installed: Install, or where Genex can't install it, the CLI's install guide; and Check again. */
 function notInstalledView(act: CliRowActions, words: CliRowWords): RowView {
   const { openGuide } = act;
@@ -194,20 +213,7 @@ function notInstalledView(act: CliRowActions, words: CliRowWords): RowView {
     tone: RowTone.Off,
     status: WORDS.notInstalled,
     line: openGuide ? WORDS.installByGuideLine(words.card.name) : words.installLine,
-    actions: (
-      <>
-        {openGuide ? (
-          <Button variant="default" onClick={openGuide}>
-            {WORDS.installGuide}
-          </Button>
-        ) : (
-          <Button variant="default" onClick={act.install}>
-            {words.install}
-          </Button>
-        )}
-        <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
-      </>
-    ),
+    actions: guideOrInstall(act, words.install),
   };
 }
 
@@ -249,25 +255,11 @@ function cliRowView(state: OpenCodeRowState, act: CliRowActions, words: CliRowWo
  * Genex can't install (Pi) is the person's to update, so its row opens the guide.
  */
 function outdatedView(act: CliRowActions, words: CliRowWords, line: string): RowView {
-  const { openGuide } = act;
   return {
     tone: RowTone.Warning,
     status: t("Update needed"),
     line,
-    actions: (
-      <>
-        {openGuide ? (
-          <Button variant="default" onClick={openGuide}>
-            {WORDS.installGuide}
-          </Button>
-        ) : (
-          <Button variant="default" onClick={act.install}>
-            {words.update}
-          </Button>
-        )}
-        <Button onClick={act.recheck}>{WORDS.checkAgain}</Button>
-      </>
-    ),
+    actions: guideOrInstall(act, words.update),
   };
 }
 

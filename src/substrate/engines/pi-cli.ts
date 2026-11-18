@@ -214,7 +214,9 @@ export function parsePiModels(stdout: string, extraHosts?: Record<string, readon
   return models;
 }
 
-const STORE_FILES = ["models-store.json", "models.json"] as const;
+/** Pi's cache of its providers' catalogs, in its own folder. */
+export const PI_MODEL_STORE = "models-store.json";
+const STORE_FILES = [PI_MODEL_STORE, "models.json"] as const;
 
 /** Hosts named in Pi's own model store, in Pi's folder (`piAgentDir`). Never reads `auth.json`. */
 export async function readPiProviderHosts(agent: string): Promise<Record<string, string[]>> {

@@ -4084,7 +4084,6 @@ export const MESSAGES = [
   "Updating",
   "Updating Claude Code…",
   "Updating Codex…",
-  "Updating Pi. This can take a minute.",
   "Updating all platforms · {done} of {count} updated",
   "Updating plugins…",
   "Updating {name}. This can take a minute.",

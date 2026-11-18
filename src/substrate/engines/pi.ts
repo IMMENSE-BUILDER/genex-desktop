@@ -2,7 +2,8 @@
  * Pi: a delegated harness, driven through `pi --mode json`.
  *
  * Pi runs its own agent loop on whichever providers the person signed it in to (`/login` in its
- * TUI) and keeps those sign-ins in its own store, which the studio never reads. It has no OS
+ * TUI) and keeps those sign-ins in its own store, which the studio never looks into: a session
+ * gets a copy of the file (`pi-agent-view.ts`). It has no OS
  * sandbox of its own, so every session starts inside ProcessSandbox. The prompt goes in on stdin;
  * each stdout line is one JSON event (`pi-events.ts`); a session is continued by its id, or forked
  * into the turn's folder when it was made in another (`pi-sessions.ts`).
@@ -22,7 +23,7 @@ import { JUDGE_RULES, offLimitsNote, planModeNote, readOnlyNote } from "./codex-
 import { gitMetadataDirs } from "./session-commands.ts";
 import { builtInPiHosts, parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
 import { findPiSession, PI_SESSIONS_DIR, piSessionArgs, samePiFolder, type PiSessionFile } from "./pi-sessions.ts";
-import { piViewDir, preparePiView } from "./pi-agent-view.ts";
+import { closePiView, openPiView, type PiView } from "./pi-agent-view.ts";
 import { parsePiLine, translatePiEvent, type Translated } from "./pi-events.ts";
 import {
   type CompleteRequest,
@@ -156,14 +157,15 @@ interface PiRun {
  * Pi makes a lock folder beside each file it reads, and of what Pi keeps in its folder a session
  * may write none that Pi loads or runs: not an extension, not `models.json`, and not its sign-in,
  * where a stored key that starts with `!` is a command Pi runs. So on macOS and Linux a session
- * runs on a folder of its own that stands for Pi's (`pi-agent-view.ts`) and writes that and Pi's
- * transcripts. Windows has no link a session's user can read through, grants whole folders to the
+ * runs on a folder of its own that stands for Pi's (`view`, `pi-agent-view.ts`) and writes that and
+ * Pi's transcripts. Windows has no link a session's user can read through, grants whole folders to the
  * sandbox's one user and keeps no deny inside a CLI's own folder (`keepWindowsDenies`), so a
  * session there writes Pi's folder, as OpenCode's, Grok Build's and Cursor's sessions write theirs.
  */
 function piWrites(agent: string, platform: NodeJS.Platform, view: string | undefined): string[] {
   if (platform === StudioPlatform.Windows) return [agent];
-  return [view ?? piViewDir(agent), path.join(agent, PI_SESSIONS_DIR)];
+  const transcripts = path.join(agent, PI_SESSIONS_DIR);
+  return view ? [view, transcripts] : [transcripts];
 }
 
 /** The sandbox a session runs in: the folder it works in, and of Pi's own folder what Pi's session writes. */
@@ -179,7 +181,7 @@ export function piSandbox(input: {
   platform?: NodeJS.Platform;
   /** Pi's folder by its real path, where the session's folder is; as `env` names it when not given. */
   agentDir?: string;
-  /** macOS and Linux: the folder that stands for Pi's in this session (`preparePiView`); its place in Pi's folder when not given. */
+  /** macOS and Linux: the folder that stands for Pi's in this session (`openPiView`). */
   agentView?: string;
   /** Whether a path is there now; the disk's answer when not given. */
   exists?: (file: string) => boolean;
@@ -308,10 +310,13 @@ export class PiEngine implements Engine {
         }, request.timeoutMs)
       : null;
     const partial = (): PartialDelegateState => partialState(run, startedAt, request.model, bridge, request);
+    let view: PiView | null = null;
     try {
+      view = await this.#openView();
       const invocation = await this.#invocation(request, {
         cwd,
         runDir,
+        view,
         session: piSessionArgs(sessionId, kept, runDir),
         readOnly,
         prompt: this.#brief(request, { cwd, scratch, bridge }),
@@ -324,6 +329,7 @@ export class PiEngine implements Engine {
     } finally {
       if (deadline) clearTimeout(deadline);
       if (stills.dir) await rm(stills.dir, { recursive: true, force: true }).catch(() => {});
+      await this.#closeView(view);
       await this.#cleanUp(scratch, bridge);
     }
     if (request.signal?.aborted || run.deadlineHit)
@@ -381,13 +387,16 @@ export class PiEngine implements Engine {
     );
     const run = newRun(this.id, undefined);
     let scratch: string | null = null;
+    let view: PiView | null = null;
     try {
       scratch = await this.#scratch("answer-");
+      view = await this.#openView();
       const invocation = await this.#invocation(
         { model: request.model, effort: request.effort, denyReads: [] },
         {
           cwd: scratch,
           runDir: scratch,
+          view,
           session: [],
           readOnly: true,
           oneshot: true,
@@ -400,6 +409,7 @@ export class PiEngine implements Engine {
       return run;
     } finally {
       if (stills.dir) await rm(stills.dir, { recursive: true, force: true }).catch(() => {});
+      await this.#closeView(view);
       if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
   }
@@ -441,6 +451,20 @@ export class PiEngine implements Engine {
       () => false,
     );
     return free ? kept.cwd : mkdtemp(path.join(this.#scratchRoot, RUN_PREFIX));
+  }
+
+  /**
+   * The folder this session's Pi runs on in place of Pi's own (`pi-agent-view.ts`); none on
+   * Windows, where a session runs on Pi's folder itself.
+   */
+  async #openView(): Promise<PiView | null> {
+    if (this.#platform === StudioPlatform.Windows) return null;
+    return openPiView(piAgentDir(this.#env, this.#home));
+  }
+
+  /** The session has ended: its folder goes, with what the session left in it. */
+  async #closeView(view: PiView | null): Promise<void> {
+    if (view) await closePiView(view.dir).catch(() => {});
   }
 
   async #scratch(prefix: string): Promise<string> {
@@ -486,6 +510,8 @@ export class PiEngine implements Engine {
     ctx: {
       cwd: string;
       runDir: string;
+      /** The folder that stands for Pi's in this session; null on Windows. */
+      view: PiView | null;
       /** The options that start or continue the session (`piSessionArgs`); none for a one-shot answer. */
       session: string[];
       readOnly: boolean;
@@ -510,15 +536,14 @@ export class PiEngine implements Engine {
       ...(!ctx.oneshot && ctx.readOnly ? ["--tools", PLAN_TOOLS] : []),
       ...ctx.files.map((file) => `@${file}`),
     ];
-    const agent = piAgentDir(this.#env, this.#home);
-    const view = this.#platform === StudioPlatform.Windows ? undefined : await preparePiView(agent);
+    const { view } = ctx;
     return {
       argv,
       cwd: ctx.runDir,
       prompt: ctx.prompt,
       // Pi's folder, named outright: Windows runs a session as the sandbox's own user, whose home
       // holds no Pi sign-in, and the others run it on the folder that stands for Pi's.
-      env: { [PI_AGENT_DIR_ENV]: view ?? agent },
+      env: { [PI_AGENT_DIR_ENV]: view?.dir ?? piAgentDir(this.#env, this.#home) },
       signal: ctx.signal,
       sandbox: piSandbox({
         runDir: ctx.runDir,
@@ -533,7 +558,7 @@ export class PiEngine implements Engine {
         home: this.#home,
         platform: this.#platform,
         // The session's folder is made in Pi's folder by its real path: the transcripts beside it.
-        ...(view ? { agentView: view, agentDir: await realpath(agent) } : {}),
+        ...(view ? { agentView: view.dir, agentDir: view.agent } : {}),
       }),
       domains: this.#domains(model),
     };

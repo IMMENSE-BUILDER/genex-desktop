@@ -1936,7 +1936,6 @@ export default {
   "Install Pi from Settings › Model Providers.": "Installiere Pi unter Einstellungen › Modellanbieter.",
   "This version of Pi is too old for Genex. Update Pi, then check again.":
     "Diese Version von Pi ist zu alt für Genex. Aktualisier Pi und prüf dann noch mal.",
-  "Updating Pi. This can take a minute.": "Pi wird aktualisiert. Das kann eine Minute dauern.",
   "Install Unity 6": "Unity 6 installieren",
   "Install Unreal {version}": "Unreal {version} installieren",
   "Install Xcode": "Xcode installieren",

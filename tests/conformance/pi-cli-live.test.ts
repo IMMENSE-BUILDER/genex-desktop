@@ -5,8 +5,8 @@
  * sandbox); the real CLI runs it against `fake-openai-chat.ts`, a provider of the test's own in a
  * Pi folder of the test's own (`PI_CODING_AGENT_DIR`), signed in with a made-up key. The scripted
  * turn runs one `node` command in the session's folder; other turns continue a chat through Plan and
- * back, and carry a picture. On macOS and Linux every turn runs on the folder that stands for Pi's
- * (`pi-agent-view.ts`), on Windows on Pi's own. Nothing reaches a provider and no account
+ * back, and carry a picture. On macOS and Linux every turn runs on a folder of its own that stands
+ * for Pi's (`pi-agent-view.ts`), on Windows on Pi's own. Nothing reaches a provider and no account
  * is used. Opt-in, like every test that needs this machine's own programs: `STUDIO_PI_CLI_TESTS=1`
  * with a `pi` the engine can find (or `STUDIO_PI_BIN`).
  */
@@ -42,6 +42,13 @@ const PROOF = { file: "pi-proof.txt", text: "ok" } as const;
 const PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PROBE_SOURCE = `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(PROOF.file)}, ${JSON.stringify(PROOF.text)});\nconsole.log("probe ran");\n`;
 
+/**
+ * Where the fake provider listens. A Linux session has no network of its own and reaches a host
+ * only through the sandbox's proxy, which it is told to skip for `127.0.0.1`: there the fake takes
+ * another loopback address, which goes through the proxy like a provider's.
+ */
+const FAKE_HOST = process.platform === "linux" ? "127.0.0.2" : "127.0.0.1";
+
 /** The real `pi` binary. */
 async function piBinary(): Promise<string> {
   if (process.env.STUDIO_PI_BIN) return process.env.STUDIO_PI_BIN;
@@ -62,7 +69,7 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     // By its real name: a sandbox grants a folder as it is spelled, and macOS reaches `/tmp` and
     // `/var` through links.
     root = await realpath(await tmpDir("pi-live-"));
-    fake = await startFakeChat();
+    fake = await startFakeChat(FAKE_HOST);
     agent = path.join(root, "pi-home", "agent");
     await mkdir(agent, { recursive: true });
     // A provider Pi does not know, as a person adds one: its endpoint in `models.json`, its key in
@@ -90,7 +97,7 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
       const sandbox = await ProcessSandbox.create(invocation.sandbox);
       try {
         // The fake answers on loopback over plain http, which no provider's host list names.
-        yield* piEvents(sandbox, binary, { ...invocation, domains: ["127.0.0.1", "localhost"] });
+        yield* piEvents(sandbox, binary, { ...invocation, domains: [FAKE_HOST, "localhost"] });
       } finally {
         await sandbox.dispose();
       }
@@ -150,12 +157,16 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     assert.equal(await readFile(path.join(agent, "auth.json"), "utf8"), signIn, "the person's sign-in is as it was");
     // Windows has no folder that stands for Pi's: a session there runs on Pi's own.
     if (process.platform === "win32") return;
-    const view = path.join(agent, "genex", "agent");
-    assert.equal(existsSync(path.join(view, "auth.json.lock")), false, "the lock Pi took was in its own folder");
+    assert.deepEqual(
+      await readdir(path.join(agent, "genex")),
+      ["work"],
+      "the folder the session ran on, with the lock Pi took in it, is gone when the session ends",
+    );
+    assert.deepEqual(await readdir(path.join(agent, "genex", "work")), [], "and nothing waits to be removed");
     assert.deepEqual(
       (await readdir(agent)).sort(),
       [...new Set([...before, "genex", "sessions"])].sort(),
-      "the person's folder gains nothing from a session but its transcripts and the folder that stands for it",
+      "the person's folder gains nothing from a session but its transcripts and Genex's own folder",
     );
   });
 
@@ -234,7 +245,11 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     await game("judge", write);
     const result = await engine().delegate({ cwd: dir, prompt: "Write into the game.", model, readOnly: true });
     assert.equal(result.ok, true, result.errorText);
-    assert.match(fake.commandOutput() ?? "", /EPERM|EACCES|not permitted|denied/i, "the sandbox refused the write");
+    assert.match(
+      fake.commandOutput() ?? "",
+      /EPERM|EACCES|EROFS|not permitted|denied/i,
+      "the sandbox refused the write",
+    );
     assert.equal(existsSync(target), false, "the game folder is untouched");
   });
 

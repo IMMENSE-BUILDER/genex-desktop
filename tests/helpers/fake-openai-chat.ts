@@ -65,8 +65,11 @@ function wordsOf(content: unknown): string {
     .join("");
 }
 
-/** The fake provider, listening on loopback. */
-export async function startFakeChat(): Promise<FakeChat> {
+/** The loopback address the fake provider listens on unless a test names another. */
+const LOOPBACK = "127.0.0.1";
+
+/** The fake provider, listening on loopback: on `host`, another address of this computer's own. */
+export async function startFakeChat(host: string = LOOPBACK): Promise<FakeChat> {
   const requests: ChatBody[] = [];
   const headers: IncomingHttpHeaders[] = [];
   let command: string | null = null;
@@ -109,10 +112,10 @@ export async function startFakeChat(): Promise<FakeChat> {
       answer(body, res);
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, host, resolve));
   const { port } = server.address() as AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${port}/v1`,
+    baseUrl: `http://${host}:${port}/v1`,
     requests,
     authorizations: () => headers.map((sent) => String(sent.authorization ?? "")),
     commandOutput: () => output,
