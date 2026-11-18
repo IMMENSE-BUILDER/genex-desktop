@@ -60,6 +60,17 @@ licenses and terms of included third-party software.
   Linux version. Tux was drawn by Larry Ewing with The GIMP. Linux is a registered trademark of
   Linus Torvalds.
 
+## README banner
+
+`.github/banner.png` names the engines Genex builds in and the tools it routes by their own
+logos, each only to identify that product: the Unreal Engine, Unity, Roblox and Three.js marks
+(paths from Simple Icons 16.33.0, CC0-1.0, in white), the Godot icon (by Andrea Calabró, CC BY
+4.0, unaltered), and the Blender, Tripo, Meshy, Uthana, ElevenLabs and fal marks as
+genex.games/tools shows them. Every mark is a trademark of its owner (Epic Games, Inc.; Unity
+Technologies; the Godot Foundation; Roblox Corporation; the three.js authors; the Blender
+Foundation; and the tool vendors). Genex is not affiliated with, sponsored by or endorsed by
+any of them.
+
 ## Routed tool marks
 
 `src/renderer/media/tools` holds the marks of the tools Genex routes, as genex.games/tools shows
