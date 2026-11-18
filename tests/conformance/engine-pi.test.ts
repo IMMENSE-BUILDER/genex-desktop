@@ -451,7 +451,8 @@ describe("Pi's sandbox", () => {
   });
   it("on Linux a session writes Pi's own folder, and is denied only what is there", () => {
     const agent = path.join("/home/dev", ".pi", "agent");
-    const there = new Set([path.join(agent, "auth.json"), path.join(agent, "extensions"), "/game/.pi"]);
+    const gamePi = path.join("/game", ".pi");
+    const there = new Set([path.join(agent, "auth.json"), path.join(agent, "extensions"), gamePi]);
     const sandbox = piSandbox({
       runDir: "/game",
       gameDir: "/game",
@@ -467,7 +468,7 @@ describe("Pi's sandbox", () => {
     assert.ok(!sandbox.writableRoots.includes(path.join("/home/dev", ".pi")), "never the folder above it");
     assert.deepEqual(
       sandbox.denyWrite,
-      [path.join(agent, "extensions"), "/game/.pi"],
+      [path.join(agent, "extensions"), gamePi],
       "a deny on a missing path would put a stand-in file there, in Pi's folder and in the game",
     );
   });
