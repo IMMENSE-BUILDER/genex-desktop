@@ -108,6 +108,11 @@ describe("OpenCode's model list", () => {
       "a ChatGPT sign-in answers on chatgpt.com and refreshes on auth.openai.com",
     );
     assert.deepEqual(builtIn("anthropic"), ["api.anthropic.com"]);
+    assert.deepEqual(
+      builtIn("opencode-go"),
+      ["opencode.ai"],
+      "OpenCode Go answers on opencode.ai even when its listing names no address",
+    );
     assert.deepEqual(builtIn("unheard-of"), [], "an unknown provider with no address reaches nothing new");
   });
 

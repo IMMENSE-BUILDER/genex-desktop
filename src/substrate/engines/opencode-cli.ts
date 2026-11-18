@@ -32,6 +32,8 @@ const OWN_PROVIDER = "opencode";
  */
 const PROVIDER_HOSTS: Readonly<Record<string, readonly string[]>> = {
   [OWN_PROVIDER]: ["opencode.ai"],
+  // OpenCode Go's models answer on the same host; without this the sandbox gives them no network.
+  "opencode-go": ["opencode.ai"],
   openai: ["api.openai.com", "chatgpt.com", "auth.openai.com"],
   anthropic: ["api.anthropic.com"],
   google: ["generativelanguage.googleapis.com"],
