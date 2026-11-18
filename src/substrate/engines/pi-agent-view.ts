@@ -26,7 +26,6 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
   chmod,
-  lchmod,
   lstat,
   mkdir,
   open,
@@ -66,6 +65,8 @@ const WORK_LEFT_BEHIND_MS = MINUTE_MS;
 const LINUX_O_PATH = 0o10000000;
 /** Where Linux keeps a process's open files by number: a name for one that no rename can change. */
 const LINUX_OPEN_FILES = "/proc/self/fd";
+/** Opens a folder itself for reading, never one a link names. */
+const HELD_FOLDER = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 
 /** A session's folder, and Pi's own folder by its real path, where the folder is. */
 export interface PiView {
@@ -207,25 +208,33 @@ async function takeOut(entry: string, work: string): Promise<void> {
 
 /**
  * Gives the owner back `dir` when it is a folder; false for anything else. Never what a link names,
- * even one put there between the look and the change: macOS changes the entry itself (`lchmod`),
- * Linux the folder it has in hand.
+ * even one put there between the look and the change: the mode is set on the folder in hand, not on
+ * a name. Linux can hold a folder whatever its mode. macOS cannot hold one closed to reading, and
+ * has no call that sets a folder's mode without following a link (Node's `lchmod` opens for
+ * writing, which no folder allows): only such a folder is changed by name, after a look.
  */
 async function ownAgain(dir: string): Promise<boolean> {
-  if (process.platform !== StudioPlatform.Linux) {
-    const entry = await lstat(dir).catch(() => null);
-    if (!entry?.isDirectory()) return false;
-    await lchmod(dir, OWNER_ONLY_DIR).catch(() => {});
-    return true;
-  }
-  const held = await open(dir, LINUX_O_PATH | constants.O_NOFOLLOW).catch(() => null);
-  if (!held) return false;
+  const isLinux = process.platform === StudioPlatform.Linux;
+  const flags = isLinux ? LINUX_O_PATH | constants.O_NOFOLLOW : HELD_FOLDER;
+  const held = await open(dir, flags).catch(() => null);
+  if (!held) return !isLinux && ownAgainByName(dir);
   try {
     if (!(await held.stat()).isDirectory()) return false;
-    await chmod(path.join(LINUX_OPEN_FILES, String(held.fd)), OWNER_ONLY_DIR).catch(() => {});
+    // An `O_PATH` handle takes no change itself: the folder is named by the handle's number.
+    if (isLinux) await chmod(path.join(LINUX_OPEN_FILES, String(held.fd)), OWNER_ONLY_DIR).catch(() => {});
+    else await held.chmod(OWNER_ONLY_DIR).catch(() => {});
     return true;
   } finally {
     await held.close();
   }
+}
+
+/** {@link ownAgain} for a folder that cannot be opened: by its name, when the name holds a folder. */
+async function ownAgainByName(dir: string): Promise<boolean> {
+  const entry = await lstat(dir).catch(() => null);
+  if (!entry?.isDirectory()) return false;
+  await chmod(dir, OWNER_ONLY_DIR).catch(() => {});
+  return true;
 }
 
 /** Removes `dir`, a tree in the work folder, whatever modes a session left on its folders. */
