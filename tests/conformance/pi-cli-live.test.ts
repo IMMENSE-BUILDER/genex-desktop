@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { EngineStatusCode } from "../../src/shared/engine-descriptor.ts";
@@ -55,7 +55,9 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
 
   before(async () => {
     binary = await piBinary();
-    root = await tmpDir("pi-live-");
+    // By its real name: a sandbox grants a folder as it is spelled, and macOS reaches `/tmp` and
+    // `/var` through links.
+    root = await realpath(await tmpDir("pi-live-"));
     fake = await startFakeChat();
     agent = path.join(root, "pi-home", "agent");
     await mkdir(agent, { recursive: true });
