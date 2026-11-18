@@ -4611,6 +4611,8 @@ export default {
   "Windows app": "App Windows",
   "Windows didn't get permission to install. Press Do it for me again and choose Yes when Windows asks.":
     "Windows n’a pas eu la permission d’installer. Appuie encore sur « Fais-le pour moi » et choisis Oui quand Windows le demande.",
+  "Windows doesn’t let Genex’s agents sign in on this PC. Set up allows it.":
+    "Windows ne laisse pas les agents de Genex se connecter sur ce PC. « Configurer » l’autorise.",
   "Windows needs a one-time setup of the protected workspace, approved by an administrator.":
     "Windows doit configurer une fois l’espace de travail protégé, avec l’accord d’un administrateur.",
   "Windows will ask you to allow it once.": "Windows te demandera une seule fois de l’autoriser.",

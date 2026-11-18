@@ -82,7 +82,7 @@ import {
   SESSION_MARKER_WAIT_MS,
   type SessionBegun,
 } from "./session-marker.ts";
-import { createBootGate, startStepAfter } from "./boot-gate.ts";
+import { createBootGate, type SetupLeave, startStepAfter } from "./boot-gate.ts";
 import {
   activateChatFixture,
   DevProviders,
@@ -298,8 +298,13 @@ import {
   StartPassage,
   StartStep,
   StudioPlatform,
+  WindowsSetupNeed,
 } from "../shared/boot.ts";
-import { SandboxUnavailableError, sandboxStartFailureCode } from "../substrate/sandbox-unavailable.ts";
+import {
+  SandboxUnavailableError,
+  sandboxSetupProblem,
+  sandboxStartFailureCode,
+} from "../substrate/sandbox-unavailable.ts";
 import { type Painter, paintWhileUsed } from "../substrate/paint-while-used.ts";
 import {
   type DetachedSpawn,
@@ -3153,17 +3158,51 @@ async function startHarness(studio: StudioCore): Promise<boolean> {
     return true;
   } catch (err) {
     if (dev || isSmoke) throw err;
-    const code = sandboxStartFailureCode(err) ?? BootFailure.HarnessFailed;
-    showAgentsFailure(
-      errorMessage(err),
-      async () => {
-        await studio.start();
-        announceReady(userDataRoot);
-      },
-      code,
-    );
+    await agentsNotStarted(err, async () => {
+      await studio.start();
+      announceReady(userDataRoot);
+    });
     return false;
   }
+}
+
+/** A sandbox user Windows will not sign in: the one setup problem found behind an open studio that Set up fixes. */
+function logonRightProblem(err: unknown): SandboxProblem | null {
+  const problem = sandboxSetupProblem(err);
+  return problem?.windowsNeeds?.includes(WindowsSetupNeed.LogonRight) ? problem : null;
+}
+
+/**
+ * The open studio's agents would not start, for `err`: the setup screen when Set up fixes it, else
+ * the sidebar's line. Either one's next try (`start`) that fails comes back here with its own error.
+ */
+async function agentsNotStarted(err: unknown, start: () => Promise<void>): Promise<void> {
+  const retry = async (): Promise<void> => {
+    try {
+      await start();
+    } catch (next) {
+      await agentsNotStarted(next, start);
+    }
+  };
+  const failed = (why: unknown): void =>
+    showAgentsFailure(errorMessage(why), retry, sandboxStartFailureCode(why) ?? BootFailure.HarnessFailed);
+  const setup = logonRightProblem(err);
+  if (setup) await showAgentsSetup(setup, retry, (why) => failed(why ?? err));
+  else failed(err);
+}
+
+/**
+ * The studio's window is open, and its agents would not start for something Set up fixes (Windows
+ * will not sign the sandbox user in, found only when the sandbox starts behind the window): the
+ * window shows the setup screen, whose Set up then starts the agents (`retry`) and brings the
+ * studio back. A Set up that was dismissed or failed brings it back too (`leave`), saying why.
+ */
+async function showAgentsSetup(problem: SandboxProblem, retry: () => Promise<void>, leave: SetupLeave): Promise<void> {
+  studioLog.write("main", `sandbox unavailable: ${problem.code} ${problem.details.join("; ")}`);
+  bootGate.hold(problem, retry, leave);
+  await reshowBoot().catch((err: unknown) =>
+    studioLog.write("main", `setup screen did not load: ${errorMessage(err)}`),
+  );
 }
 
 /**

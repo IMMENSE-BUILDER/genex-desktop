@@ -4277,6 +4277,8 @@ export default {
   "Windows app": "Windows 应用",
   "Windows didn't get permission to install. Press Do it for me again and choose Yes when Windows asks.":
     "Windows 没有获得安装许可。请再按一次“帮我完成”，并在 Windows 询问时选“是”。",
+  "Windows doesn’t let Genex’s agents sign in on this PC. Set up allows it.":
+    "Windows 不允许 Genex 的智能体在这台电脑上登录。“设置”会允许它。",
   "Windows needs a one-time setup of the protected workspace, approved by an administrator.":
     "Windows 需要一次性设置受保护的工作区，并由管理员批准。",
   "Windows will ask you to allow it once.": "Windows 会请你允许一次。",
