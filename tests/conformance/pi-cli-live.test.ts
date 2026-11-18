@@ -180,7 +180,8 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     await mkdir(path.dirname(secret), { recursive: true });
     await writeFile(secret, "genex-secret-words");
     const read = `node -e "console.log(require('node:fs').readFileSync('${secret.replaceAll("\\", "/")}', 'utf8'))"`;
-    const dir = await game("secrets", read);
+    // Its own folder: a game inside the protected folder could not even start.
+    const dir = await game("reads-secret", read);
     const result = await engine().delegate({ cwd: dir, prompt: "Read the secret.", model });
     assert.equal(result.ok, true, result.errorText);
     assert.doesNotMatch(fake.commandOutput() ?? "", /genex-secret-words/, "the secret never reached the model");
