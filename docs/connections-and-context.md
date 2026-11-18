@@ -237,10 +237,16 @@ signed in the picker starts OpenCode's GPT models with the ones Codex lists (`ru
 `--session-id`), not the `pi-ai` HTTP client. Sign in and `--list-models` run with
 `--no-extensions --offline`; studio never reads `~/.pi`. Ready once `--list-models` lists a model.
 Sessions run in `ProcessSandbox` (`readableHome`: `~/.pi`) with `--no-extensions --no-approve`: a game
-folder's own `.pi` settings and `.agents/skills` stay untrusted, so Pi never locks `agent/trust.json`. Pi's home
-is a read exemption, not a write grant: `~/.pi` stays read-only except `agent/sessions` and
-`agent/auth.json.lock`, so `agent/bin`, `agent/tools`, `agent/prompts` and `AGENTS.md` — which a
-sign-in runs outside the sandbox — are never a session's to write. A provider status is read at the
+folder's own `.pi` settings and `.agents/skills` stay untrusted, so Pi never locks `agent/trust.json`. Every
+session is told where Pi's folder is (`PI_CODING_AGENT_DIR`, `piAgentDir`): by default `~/.pi/agent`, or
+the folder the person moved it to with that variable, which is then fenced like `~/.pi` (`piHomes`). On
+macOS and Linux Pi's home is a read exemption, not a write grant: `~/.pi` stays read-only except
+`agent/sessions` and `agent/auth.json.lock`, so `agent/bin`, `agent/tools`, `agent/prompts` and
+`AGENTS.md` — which a sign-in runs outside the sandbox — are never a session's to write. On Windows a
+session runs as the sandbox's own user, whose home is not the person's, and may create nothing in a
+folder it was not granted, so Pi's agent folder is granted for writing at the sandbox's start, as
+OpenCode's and Cursor's are ([windows-sandbox.md](windows-sandbox.md)); a deny inside a sandboxed
+CLI's home is never stamped there, so on Windows a session can write Pi's own settings. A provider status is read at the
 head of Pi's error (`401: {...}`), never a number inside the body it quotes, and an expired sign-in,
 a refresh the provider refuses (OAuth's `invalid_grant`) or one the credential store cannot write (a
 401, or `EPERM` naming `auth.json`) says to sign in again. An unknown provider reaches only its `models.json` host. No in-app installer; Account can

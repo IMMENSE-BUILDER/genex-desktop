@@ -129,7 +129,8 @@ the setup screen opens on `git-missing`. What differs from macOS:
   grants a link's target. npm's global prefix is granted whole: its `node_modules` are the global
   CLIs that run in the sandbox, OpenCode among them. Cursor's own folders (`~/.cursor`,
   `%APPDATA%\Cursor`) are granted at the sandbox's start, as OpenCode's are: its sessions run as
-  the sandbox user and read their sign-in there.
+  the sandbox user and read their sign-in there. So is Pi's agent folder (`piAgentDir`): Pi makes a
+  lock folder beside its sign-in file even to read it.
 - No Schannel client works under the write-restricted token (`System32\curl.exe`, PowerShell
   web requests, .NET `HttpClient`, `winget`), and Git for Windows' own `curl.exe` uses Schannel
   alone, so `curl` over HTTPS fails inside (`SEC_E_NO_CREDENTIALS`); plain HTTP through the proxy
