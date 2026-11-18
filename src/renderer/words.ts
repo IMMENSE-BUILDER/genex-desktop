@@ -4702,6 +4702,10 @@ export const SANDBOX_SETUP_WORDS = {
       line: t("Secondary Logon is turned off on this PC. Set up turns it back on, since agents start through it."),
       fix: t("Turn on Secondary Logon in Windows Services (Startup type: Manual), then try again."),
     },
+    /** Windows will not sign the sandbox user in ("Allow log on locally" was taken from it). */
+    logonRight: {
+      line: t("Windows doesn’t let Genex’s agents sign in on this PC. Set up allows it."),
+    },
   },
   /** A Windows window opened before the core: what the start is doing, by `StartStep`. */
   starting: {
