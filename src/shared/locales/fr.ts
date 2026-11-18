@@ -1930,6 +1930,7 @@ export default {
   "Install Ollama": "Installer Ollama",
   "Install OpenCode": "Installer OpenCode",
   "Install OpenCode from Settings › Model Providers.": "Installe OpenCode depuis Réglages › Fournisseurs de modèles.",
+  "Install Pi from Settings › Model Providers.": "Installe Pi depuis Réglages › Fournisseurs de modèles.",
   "Install Pi, then sign in with /login to run its models.":
     "Installe Pi, puis connecte-toi avec /login pour utiliser ses modèles.",
   "Install Unity 6": "Installer Unity 6",
@@ -2713,8 +2714,12 @@ export default {
   "OpenCode ready · free models": "OpenCode prêt · modèles gratuits",
   "Pi didn't answer. Check the installation, then try again.":
     "Pi ne répond pas. Vérifie l’installation, puis réessaie.",
+  "Pi has no model it can run yet.": "Pi n’a encore aucun modèle qu’il peut lancer.",
+  "Pi isn't installed on this computer.": "Pi n’est pas installé sur cet ordinateur.",
   "Pi keeps each sign-in": "Pi garde chaque connexion",
   "Pi sign-in": "Connexion à Pi",
+  "Pi {version}, {count, plural, other {# model(s)}}":
+    "Pi {version}, {count, plural, one {# modèle} other {# modèles}}",
   "OpenCode sign-in": "Connexion à OpenCode",
   "OpenCode {version}, {count, plural, other {# model(s)}}":
     "OpenCode {version}, {count, plural, one {# modèle} other {# modèles}}",
@@ -3493,6 +3498,8 @@ export default {
     "Connecte-toi à un fournisseur dans OpenCode pour utiliser ses modèles.",
   "Sign in to a provider with OpenCode from Settings › Model Providers.":
     "Connecte-toi à un fournisseur avec OpenCode depuis Réglages › Fournisseurs de modèles.",
+  "Sign in to a provider with Pi from Settings › Model Providers.":
+    "Connecte-toi à un fournisseur avec Pi depuis Réglages › Fournisseurs de modèles.",
   "Sign in to another provider": "Se connecter à un autre fournisseur",
   "Sign in to another provider…": "Se connecter à un autre fournisseur…",
   "Sign in to buy things in games": "Connecte-toi pour acheter dans les jeux",

@@ -1825,6 +1825,7 @@ export default {
   "Install Ollama": "Ollama 설치",
   "Install OpenCode": "OpenCode 설치",
   "Install OpenCode from Settings › Model Providers.": "설정 › 모델 제공자에서 OpenCode를 설치해 주세요.",
+  "Install Pi from Settings › Model Providers.": "설정 › 모델 제공자에서 Pi를 설치해 주세요.",
   "Install Pi, then sign in with /login to run its models.":
     "Pi를 설치한 뒤 /login으로 로그인하면 모델을 실행할 수 있어요.",
   "Install Unity 6": "Unity 6 설치",
@@ -2589,8 +2590,11 @@ export default {
   "OpenCode ready": "OpenCode 준비됨",
   "OpenCode ready · free models": "OpenCode 준비됨 · 무료 모델",
   "Pi didn't answer. Check the installation, then try again.": "Pi가 응답하지 않아요. 설치를 확인하고 다시 시도하세요.",
+  "Pi has no model it can run yet.": "Pi에서 실행할 수 있는 모델이 아직 없어요.",
+  "Pi isn't installed on this computer.": "이 컴퓨터에 Pi가 설치되어 있지 않아요.",
   "Pi keeps each sign-in": "로그인 정보는 각각 Pi가 보관해요",
   "Pi sign-in": "Pi 로그인",
+  "Pi {version}, {count, plural, other {# model(s)}}": "Pi {version}, 모델 {count, plural, other {#개}}",
   "OpenCode sign-in": "OpenCode 로그인",
   "OpenCode {version}, {count, plural, other {# model(s)}}": "OpenCode {version}, 모델 {count, plural, other {#개}}",
   "OpenCode's model list could not be read.": "OpenCode의 모델 목록을 읽을 수 없어요.",
@@ -3353,6 +3357,8 @@ export default {
     "제공자의 모델을 쓰려면 OpenCode에서 해당 제공자에 로그인하세요.",
   "Sign in to a provider with OpenCode from Settings › Model Providers.":
     "설정 › 모델 제공자에서 OpenCode로 제공자에 로그인해 주세요.",
+  "Sign in to a provider with Pi from Settings › Model Providers.":
+    "설정 › 모델 제공자에서 Pi로 제공자에 로그인해 주세요.",
   "Sign in to another provider": "다른 제공자 로그인",
   "Sign in to another provider…": "다른 제공자에 로그인…",
   "Sign in to buy things in games": "로그인하고 게임에서 구매하세요",

@@ -1876,6 +1876,7 @@ export default {
   "Install Ollama": "Установить Ollama",
   "Install OpenCode": "Установить OpenCode",
   "Install OpenCode from Settings › Model Providers.": "Установи OpenCode в разделе «Настройки › Провайдеры моделей».",
+  "Install Pi from Settings › Model Providers.": "Установи Pi в разделе «Настройки › Провайдеры моделей».",
   "Install Pi, then sign in with /login to run its models.":
     "Установи Pi, затем войди через /login, чтобы запускать его модели.",
   "Install Unity 6": "Установить Unity 6",
@@ -2643,8 +2644,12 @@ export default {
   "OpenCode ready": "OpenCode готов",
   "OpenCode ready · free models": "OpenCode готов · бесплатные модели",
   "Pi didn't answer. Check the installation, then try again.": "Pi не отвечает. Проверь установку и попробуй снова.",
+  "Pi has no model it can run yet.": "У Pi пока нет моделей, которые он может запустить.",
+  "Pi isn't installed on this computer.": "Pi не установлен на этом компьютере.",
   "Pi keeps each sign-in": "Pi запоминает каждый вход",
   "Pi sign-in": "Вход в Pi",
+  "Pi {version}, {count, plural, other {# model(s)}}":
+    "Pi {version}, {count, plural, one {# модель} few {# модели} many {# моделей} other {# модели}}",
   "OpenCode sign-in": "Вход в OpenCode",
   "OpenCode {version}, {count, plural, other {# model(s)}}":
     "OpenCode {version}, {count, plural, one {# модель} few {# модели} many {# моделей} other {# модели}}",
@@ -3418,6 +3423,8 @@ export default {
     "Войди в аккаунт провайдера в OpenCode, чтобы запускать его модели.",
   "Sign in to a provider with OpenCode from Settings › Model Providers.":
     "Войди в провайдера через OpenCode в разделе «Настройки › Провайдеры моделей».",
+  "Sign in to a provider with Pi from Settings › Model Providers.":
+    "Войди в провайдера через Pi в разделе «Настройки › Провайдеры моделей».",
   "Sign in to another provider": "Войти в аккаунт другого провайдера",
   "Sign in to another provider…": "Войти через другого провайдера…",
   "Sign in to buy things in games": "Войди, чтобы покупать в играх",

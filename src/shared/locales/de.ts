@@ -1933,6 +1933,7 @@ export default {
   "Install Ollama": "Ollama installieren",
   "Install OpenCode": "OpenCode installieren",
   "Install OpenCode from Settings › Model Providers.": "Installiere OpenCode unter Einstellungen › Modellanbieter.",
+  "Install Pi from Settings › Model Providers.": "Installiere Pi unter Einstellungen › Modellanbieter.",
   "Install Pi, then sign in with /login to run its models.":
     "Installiere Pi und melde dich dann mit /login an, um seine Modelle zu nutzen.",
   "Install Unity 6": "Unity 6 installieren",
@@ -2725,8 +2726,12 @@ export default {
   "OpenCode ready · free models": "OpenCode bereit · kostenlose Modelle",
   "Pi didn't answer. Check the installation, then try again.":
     "Pi antwortet nicht. Prüf die Installation und versuch es erneut.",
+  "Pi has no model it can run yet.": "Pi hat noch kein Modell, das es ausführen kann.",
+  "Pi isn't installed on this computer.": "Pi ist auf diesem Computer nicht installiert.",
   "Pi keeps each sign-in": "Pi merkt sich jede Anmeldung",
   "Pi sign-in": "Anmeldung bei Pi",
+  "Pi {version}, {count, plural, other {# model(s)}}":
+    "Pi {version}, {count, plural, one {# Modell} other {# Modelle}}",
   "OpenCode sign-in": "Anmeldung bei OpenCode",
   "OpenCode {version}, {count, plural, other {# model(s)}}":
     "OpenCode {version}, {count, plural, one {# Modell} other {# Modelle}}",
@@ -3512,6 +3517,8 @@ export default {
     "Melde dich in OpenCode bei einem Anbieter an, um seine Modelle zu nutzen.",
   "Sign in to a provider with OpenCode from Settings › Model Providers.":
     "Melde dich unter Einstellungen › Modellanbieter mit OpenCode bei einem Anbieter an.",
+  "Sign in to a provider with Pi from Settings › Model Providers.":
+    "Melde dich unter Einstellungen › Modellanbieter mit Pi bei einem Anbieter an.",
   "Sign in to another provider": "Bei einem weiteren Anbieter anmelden",
   "Sign in to another provider…": "Bei einem anderen Anbieter anmelden…",
   "Sign in to buy things in games": "Melde dich an, um in Spielen einzukaufen",

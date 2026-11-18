@@ -54,6 +54,7 @@ import { ModelCatalogSource } from "../../shared/model-catalog.ts";
 import { engineMode, PermissionMode } from "../../shared/permissions.ts";
 import { EngineId } from "../../shared/providers.ts";
 import { StudioPlatform } from "../../shared/boot.ts";
+import { t } from "../../shared/i18n.ts";
 import { redactSecrets } from "../../shared/redact.ts";
 import type { ChildProcess } from "node:child_process";
 
@@ -76,12 +77,14 @@ const PLAN_TOOLS = "read,grep,find,ls,bash";
 const MODEL_REFUSED_STATUSES: ReadonlySet<number> = new Set([400, 404]);
 
 const MESSAGE = {
-  NotInstalled: "Pi isn't installed on this Mac.",
-  InstallRemedy: "Install Pi from Settings › Model Providers.",
-  NoModels: "Pi has no model it can run yet.",
-  SignInRemedy: "Sign in to a provider with Pi from Settings › Model Providers.",
+  NotInstalled: "Pi isn't installed on this computer.",
+  NotInstalledStatus: () => t("Pi isn't installed on this computer."),
+  InstallRemedy: () => t("Install Pi from Settings › Model Providers."),
+  NoModels: () => t("Pi has no model it can run yet."),
+  SignInRemedy: () => t("Sign in to a provider with Pi from Settings › Model Providers."),
   SignInAgain: "Sign in to Pi again from Settings › Model Providers.",
-  Ready: (version: string | undefined, count: number) => `Pi ${version ?? ""}, ${count} model(s)`.trim(),
+  Ready: (version: string | undefined, count: number) =>
+    t("Pi {version}, {count, plural, other {# model(s)}}", { version: version ?? "", count }).trim(),
   NoCompact: "Pi compacts its own sessions",
   NoTools: "Pi's one-shot answers take no studio tools",
   Stopped: (code: number | null) => `Pi exited with ${code}`,
@@ -222,11 +225,16 @@ export class PiEngine implements Engine {
   async status(): Promise<EngineStatus> {
     const cli = await this.#resolveCli();
     if (!cli.ready && !cli.path)
-      return { code: EngineStatusCode.NotInstalled, detail: MESSAGE.NotInstalled, remedy: MESSAGE.InstallRemedy };
+      return {
+        code: EngineStatusCode.NotInstalled,
+        detail: MESSAGE.NotInstalledStatus(),
+        remedy: MESSAGE.InstallRemedy(),
+      };
     if (!cli.ready) return { code: EngineStatusCode.Error, detail: cli.detail };
     await this.refreshModels().catch(() => {});
     const count = this.#catalog.models().length;
-    if (!count) return { code: EngineStatusCode.NeedsLogin, detail: MESSAGE.NoModels, remedy: MESSAGE.SignInRemedy };
+    if (!count)
+      return { code: EngineStatusCode.NeedsLogin, detail: MESSAGE.NoModels(), remedy: MESSAGE.SignInRemedy() };
     return { code: EngineStatusCode.Ready, detail: MESSAGE.Ready(cli.version, count) };
   }
 

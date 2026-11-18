@@ -1868,6 +1868,7 @@ export default {
   "Install OpenCode": "OpenCodeをインストール",
   "Install OpenCode from Settings › Model Providers.":
     "設定 › モデルプロバイダーからOpenCodeをインストールしてください。",
+  "Install Pi from Settings › Model Providers.": "設定 › モデルプロバイダーからPiをインストールしてください。",
   "Install Pi, then sign in with /login to run its models.":
     "Piをインストールしてから、/loginでサインインするとモデルを使えます。",
   "Install Unity 6": "Unity 6をインストール",
@@ -2656,8 +2657,11 @@ export default {
   "OpenCode ready · free models": "OpenCode準備完了 · 無料モデル",
   "Pi didn't answer. Check the installation, then try again.":
     "Piから応答がありません。インストールを確認して、もう一度試してください。",
+  "Pi has no model it can run yet.": "Piで実行できるモデルがまだありません。",
+  "Pi isn't installed on this computer.": "このコンピューターにPiがインストールされていません。",
   "Pi keeps each sign-in": "サインイン情報はそれぞれPiが保持します",
   "Pi sign-in": "Piへのサインイン",
+  "Pi {version}, {count, plural, other {# model(s)}}": "Pi {version}、モデル{count, plural, other {#個}}",
   "OpenCode sign-in": "OpenCodeへのサインイン",
   "OpenCode {version}, {count, plural, other {# model(s)}}": "OpenCode {version}、モデル{count, plural, other {#個}}",
   "OpenCode's model list could not be read.": "OpenCodeのモデル一覧を読み取れませんでした。",
@@ -3430,6 +3434,8 @@ export default {
     "プロバイダーのモデルを使うには、OpenCodeでそのプロバイダーにサインインしてください。",
   "Sign in to a provider with OpenCode from Settings › Model Providers.":
     "設定 › モデルプロバイダーから、OpenCodeでプロバイダーにサインインしてください。",
+  "Sign in to a provider with Pi from Settings › Model Providers.":
+    "設定 › モデルプロバイダーから、Piでプロバイダーにサインインしてください。",
   "Sign in to another provider": "別のプロバイダーにサインイン",
   "Sign in to another provider…": "別のプロバイダーにサインイン…",
   "Sign in to buy things in games": "サインインしてゲーム内で購入しましょう",
