@@ -387,7 +387,7 @@ export class PiEngine implements Engine {
   async #readModels(
     binary: string | undefined,
   ): Promise<{ models: EngineModel[]; source: typeof ModelCatalogSource.Provider }> {
-    const stdout = this.#listModels ? await this.#listModels() : await listPiModels(binary);
+    const stdout = this.#listModels ? await this.#listModels() : await listPiModels(binary, this.#env);
     const extra = await readPiProviderHosts(piAgentDir(this.#env, this.#home)).catch(() => ({}));
     const listed = parsePiModels(stdout, extra);
     this.#hosts = new Map(listed.map((model) => [model.row.id, model.hosts]));
@@ -688,9 +688,9 @@ async function defaultResolveCli(): Promise<{ ready: boolean; path?: string; ver
   };
 }
 
-async function listPiModels(binary: string | undefined): Promise<string> {
+async function listPiModels(binary: string | undefined, person: Record<string, string | undefined>): Promise<string> {
   if (!binary) return "";
-  const env = childEnv(process.env, { base: "contractor", vendor: "pi" });
+  const env = childEnv(person, { base: "contractor", vendor: "pi" });
   const result = await runCommand(binary, [...PI_LIST_MODELS_ARGS], {
     env,
     timeoutMs: Math.max(MODELS_TIMEOUT_MS, CATALOG_DEADLINE_MS),
@@ -706,18 +706,32 @@ async function* runPi(invocation: PiInvocation): AsyncGenerator<Record<string, u
   if (!binary) throw new EngineError(EngineFailureKind.Unavailable, EngineId.Pi, MESSAGE.NotInstalled);
   const sandbox = await ProcessSandbox.create(invocation.sandbox);
   try {
-    const command = [binary, ...invocation.argv].map(shellQuote).join(" ");
-    const { child } = await sandbox.spawnLongLived({
-      command,
-      cwd: invocation.cwd,
-      env: invocation.env,
-      label: `pi:${path.basename(invocation.cwd)}`,
-      policy: { allowedDomains: invocation.domains },
-    });
-    yield* childEvents(child, invocation);
+    yield* piEvents(sandbox, binary, invocation);
   } finally {
     await sandbox.dispose().catch(() => {});
   }
+}
+
+/**
+ * One `pi --mode json` in `sandbox`, as its events. The brief is the process's stdin, handed to
+ * the sandbox to deliver: on Windows srt-win passes no pipe on, so a brief written down the
+ * child's own stdin never reached Pi.
+ */
+export async function* piEvents(
+  sandbox: Pick<ProcessSandbox, "spawnLongLived">,
+  binary: string,
+  invocation: Omit<PiInvocation, "sandbox">,
+): AsyncGenerator<Record<string, unknown>> {
+  const command = [binary, ...invocation.argv].map(shellQuote).join(" ");
+  const { child } = await sandbox.spawnLongLived({
+    command,
+    cwd: invocation.cwd,
+    env: invocation.env,
+    label: `pi:${path.basename(invocation.cwd)}`,
+    policy: { allowedDomains: invocation.domains },
+    stdin: invocation.prompt,
+  });
+  yield* childEvents(child, invocation);
 }
 
 /** Split stdout on LF only — Unicode separators are valid inside Pi JSON strings. */
@@ -732,8 +746,10 @@ async function* lfLines(stream: NodeJS.ReadableStream): AsyncGenerator<string> {
   if (leftover) yield leftover.replace(/\r$/, "");
 }
 
-async function* childEvents(child: ChildProcess, invocation: PiInvocation): AsyncGenerator<Record<string, unknown>> {
-  child.stdin?.end(invocation.prompt);
+async function* childEvents(
+  child: ChildProcess,
+  invocation: Pick<PiInvocation, "signal">,
+): AsyncGenerator<Record<string, unknown>> {
   let stderr = "";
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {

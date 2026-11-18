@@ -303,6 +303,7 @@ describe("Pi's sandbox", () => {
       scratchDir: "/tmp/scratch",
       secretPaths: ["/secrets"],
       home: "/Users/dev",
+      platform: "linux",
     });
     assert.ok(sandbox.writableRoots.includes("/game"));
     assert.ok(
@@ -344,10 +345,18 @@ describe("Pi's sandbox", () => {
     const piHome = path.join(home, ".pi");
     const agent = path.join(piHome, "agent");
     const box = await ProcessSandbox.create({
-      ...piSandbox({ runDir: "/game", gameDir: "/game", gitDirs: [], scratchDir: "/tmp/pi-scratch", secretPaths: [] }),
+      ...piSandbox({
+        runDir: "/game",
+        gameDir: "/game",
+        gitDirs: [],
+        scratchDir: "/tmp/pi-scratch",
+        secretPaths: [],
+        platform: "linux",
+      }),
       enabled: false,
     });
-    const writes = (dir: string) => box.policy.allowWrite.some((root) => dir === root || dir.startsWith(`${root}/`));
+    const writes = (dir: string) =>
+      box.policy.allowWrite.some((root) => dir === root || dir.startsWith(`${root}${path.sep}`));
     assert.ok(writes(path.join(agent, "sessions")), "a session writes its transcripts");
     assert.ok(writes(path.join(agent, "auth.json.lock")), "Pi makes a lock folder even to read auth.json");
     for (const planted of ["bin", "tools", "prompts", "extensions", "skills", "npm", "agents"])
@@ -405,7 +414,7 @@ describe("Pi's sandbox", () => {
     for (const homes of [credentialHomes([], env, home), sandboxedCliHomes(env, home)])
       assert.ok(homes.includes(moved), "the moved folder holds the sign-ins, so it is fenced like ~/.pi");
     const stream = await events("pi-stream.jsonl");
-    const { engine, seen } = await engineWith(() => replay(stream), { env, home });
+    const { engine, seen } = await engineWith(() => replay(stream), { env, home, platform: "linux" });
     await engine.delegate({ cwd: await game(), prompt: "build", onEvent: () => {} });
     const [session] = seen;
     assert.equal(session?.env.PI_CODING_AGENT_DIR, moved);

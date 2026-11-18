@@ -1,0 +1,189 @@
+/**
+ * Pi sessions with the real Pi CLI, inside Genex's real sandbox.
+ *
+ * The engine starts each turn as it would for a person (its command line, environment, brief and
+ * sandbox); the real CLI runs it against `fake-openai-chat.ts`, a provider of the test's own in a
+ * Pi folder of the test's own (`PI_CODING_AGENT_DIR`), signed in with a made-up key. The scripted
+ * turn runs one `node` command in the session's folder. Nothing reaches a provider and no account
+ * is used. Opt-in, like every test that needs this machine's own programs: `STUDIO_PI_CLI_TESTS=1`
+ * with a `pi` the engine can find (or `STUDIO_PI_BIN`).
+ */
+import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { after, before, describe, it } from "node:test";
+import { EngineStatusCode } from "../../src/shared/engine-descriptor.ts";
+import { EngineId } from "../../src/shared/providers.ts";
+import { resolveCodingCli } from "../../src/substrate/engines/external-cli.ts";
+import { PiEngine, piEvents, type PiExec } from "../../src/substrate/engines/pi.ts";
+import { ProcessSandbox } from "../../src/substrate/spawn.ts";
+import {
+  FAKE_CHAT_DONE_TEXT,
+  FAKE_CHAT_MODEL,
+  FAKE_CHAT_PROVIDER,
+  type FakeChat,
+  startFakeChat,
+} from "../helpers/fake-openai-chat.ts";
+import { tmpDir } from "../helpers/tmp.ts";
+
+const LIVE = process.env.STUDIO_PI_CLI_TESTS === "1";
+/** How long one scripted turn may take. */
+const TURN_TIMEOUT_MS = 120_000;
+/** The made-up key the test's Pi folder is signed in with. */
+const FAKE_KEY = "genex-fake-key";
+/** Pi's own variable for its folder; the test's process carries it, as a person's would. */
+const PI_FOLDER = "PI_CODING_AGENT_DIR";
+/** What the scripted command writes in the session's folder. */
+const PROOF = { file: "pi-proof.txt", text: "ok" } as const;
+const PROBE_SOURCE = `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(PROOF.file)}, ${JSON.stringify(PROOF.text)});\nconsole.log("probe ran");\n`;
+
+/** The real `pi` binary. */
+async function piBinary(): Promise<string> {
+  if (process.env.STUDIO_PI_BIN) return process.env.STUDIO_PI_BIN;
+  const found = await resolveCodingCli(EngineId.Pi);
+  assert.ok(found.status.path, `no pi CLI found: ${found.status.state}`);
+  return found.status.path;
+}
+
+describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" }, () => {
+  let fake: FakeChat;
+  let root: string;
+  let agent: string;
+  let binary: string;
+  let savedFolder: string | undefined;
+
+  before(async () => {
+    binary = await piBinary();
+    root = await tmpDir("pi-live-");
+    fake = await startFakeChat();
+    agent = path.join(root, "pi-home", "agent");
+    await mkdir(agent, { recursive: true });
+    // A provider Pi does not know, as a person adds one: its endpoint in `models.json`, its key in
+    // Pi's sign-in file.
+    const provider = { baseUrl: fake.baseUrl, api: "openai-completions", models: [{ id: FAKE_CHAT_MODEL }] };
+    await writeFile(path.join(agent, "models.json"), JSON.stringify({ providers: { [FAKE_CHAT_PROVIDER]: provider } }));
+    await writeFile(
+      path.join(agent, "auth.json"),
+      JSON.stringify({ [FAKE_CHAT_PROVIDER]: { type: "api_key", key: FAKE_KEY } }),
+    );
+    savedFolder = process.env[PI_FOLDER];
+    process.env[PI_FOLDER] = agent;
+  });
+
+  after(async () => {
+    await fake?.close();
+    if (savedFolder === undefined) delete process.env[PI_FOLDER];
+    else process.env[PI_FOLDER] = savedFolder;
+  });
+
+  /** The engine on the real CLI, its turns in Genex's real sandbox, reaching only the fake. */
+  const engine = () => {
+    const execFn: PiExec = async function* (invocation) {
+      const sandbox = await ProcessSandbox.create(invocation.sandbox);
+      try {
+        // The fake answers on loopback over plain http, which no provider's host list names.
+        yield* piEvents(sandbox, binary, { ...invocation, domains: ["127.0.0.1", "localhost"] });
+      } finally {
+        await sandbox.dispose();
+      }
+    };
+    return new PiEngine({
+      scratchRoot: path.join(root, "scratch"),
+      protectedPaths: [path.join(root, "secrets")],
+      resolveCli: async () => ({ ready: true, path: binary, version: "live", detail: "" }),
+      execFn,
+    });
+  };
+
+  const model = `${FAKE_CHAT_PROVIDER}/${FAKE_CHAT_MODEL}`;
+
+  async function game(name: string, command: string | null = "node probe.mjs"): Promise<string> {
+    fake.next(command);
+    const dir = path.join(root, name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "probe.mjs"), PROBE_SOURCE);
+    return dir;
+  }
+
+  it("is ready on the test's own Pi folder, and lists the model its provider has", async () => {
+    const pi = engine();
+    const status = await pi.status();
+    assert.equal(status.code, EngineStatusCode.Ready, status.detail);
+    const listed = (await pi.models()).map((row) => row.id);
+    assert.ok(listed.includes(model), `the made-up provider's model among ${listed.join(", ")}`);
+  });
+
+  it("builds: Pi reads its sign-in, gets the brief, and its command runs in the game folder", {
+    timeout: TURN_TIMEOUT_MS,
+  }, async () => {
+    const dir = await game("build");
+    const sentBefore = fake.requests.length;
+    const result = await engine().delegate({ cwd: dir, prompt: "Run the probe.", model });
+    assert.equal(result.ok, true, result.errorText);
+    assert.equal(result.summary, FAKE_CHAT_DONE_TEXT);
+    assert.ok(result.sessionId, "a session Continue can resume");
+    assert.equal(await readFile(path.join(dir, PROOF.file), "utf8"), PROOF.text);
+    assert.match(fake.commandOutput() ?? "", /probe ran/);
+    const sent = fake.requests.slice(sentBefore);
+    assert.ok(
+      sent.some((body) => JSON.stringify(body).includes("Run the probe.")),
+      "the brief reached Pi (on Windows only the sandbox's stdin file carries it)",
+    );
+    const keys = fake.authorizations().slice(sentBefore);
+    assert.ok(
+      keys.length > 0 && keys.every((sentKey) => sentKey.includes(FAKE_KEY)),
+      "every request went out on the key in the person's Pi folder, which the session read",
+    );
+    assert.equal(existsSync(path.join(agent, "auth.json.lock")), false, "Pi's lock beside its sign-in is released");
+    const sessions = await readdir(path.join(agent, "sessions"), { recursive: true });
+    assert.ok(sessions.length > 0, "the session's transcript is kept in the person's Pi folder");
+  });
+
+  it("resumes: the next turn sends the first one's history", { timeout: 2 * TURN_TIMEOUT_MS }, async () => {
+    const dir = await game("resume");
+    const first = await engine().delegate({ cwd: dir, prompt: "Run the probe once.", model });
+    assert.equal(first.ok, true, first.errorText);
+    fake.next(null);
+    const sentBefore = fake.requests.length;
+    const second = await engine().delegate({ cwd: dir, prompt: "Say what you did.", model, resume: first.sessionId });
+    assert.equal(second.ok, true, second.errorText);
+    assert.equal(second.sessionId, first.sessionId, "the same session");
+    const resumed = fake.requests.slice(sentBefore).some((body) => {
+      const sent = JSON.stringify(body);
+      return sent.includes("Say what you did.") && sent.includes("Run the probe once.");
+    });
+    assert.ok(resumed, "the resumed turn read the transcript the first one kept");
+  });
+
+  it("a one-shot answer comes back with no tools and no session", { timeout: TURN_TIMEOUT_MS }, async () => {
+    fake.next(null);
+    const response = await engine().complete({ messages: [{ role: "user", content: "Say done." }], model });
+    assert.equal(response.message.content, FAKE_CHAT_DONE_TEXT);
+  });
+
+  it("a read-only session runs from its own folder, and its sandbox keeps the game as it is", {
+    timeout: TURN_TIMEOUT_MS,
+  }, async () => {
+    const dir = path.join(root, "judge");
+    const target = path.join(dir, PROOF.file);
+    const write = `node -e "require('node:fs').writeFileSync('${target.replaceAll("\\", "/")}', 'ok')"`;
+    await game("judge", write);
+    const result = await engine().delegate({ cwd: dir, prompt: "Write into the game.", model, readOnly: true });
+    assert.equal(result.ok, true, result.errorText);
+    assert.match(fake.commandOutput() ?? "", /EPERM|EACCES|not permitted|denied/i, "the sandbox refused the write");
+    assert.equal(existsSync(target), false, "the game folder is untouched");
+  });
+
+  it("a session cannot read the studio's secrets", { timeout: TURN_TIMEOUT_MS }, async () => {
+    const secret = path.join(root, "secrets", "token.txt");
+    await mkdir(path.dirname(secret), { recursive: true });
+    await writeFile(secret, "genex-secret-words");
+    const read = `node -e "console.log(require('node:fs').readFileSync('${secret.replaceAll("\\", "/")}', 'utf8'))"`;
+    const dir = await game("secrets", read);
+    const result = await engine().delegate({ cwd: dir, prompt: "Read the secret.", model });
+    assert.equal(result.ok, true, result.errorText);
+    assert.doesNotMatch(fake.commandOutput() ?? "", /genex-secret-words/, "the secret never reached the model");
+    assert.match(fake.commandOutput() ?? "", /EPERM|EACCES|ENOENT|not permitted|denied/i);
+  });
+});
