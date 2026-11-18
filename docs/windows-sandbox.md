@@ -140,7 +140,7 @@ the setup screen opens on `git-missing`. What differs from macOS:
   once it keeps a write grant for this user.
 - Neither `spawn()`'s environment nor stdin reaches the child: each run's variables
   (`windowsRunEnv`) go to an env file in scratch and its stdin to a file, each deleted by the
-  command as it reads it, for a long-lived process (`spawnLongLived`'s `stdin`, OpenCode's brief)
+  command as it reads it, for a long-lived process (`spawnLongLived`'s `stdin`, OpenCode's and Pi's briefs)
   as for a run. The host sends nothing down the stdin pipe the command swaps away. The harness hears the host over a loopback inbox
   ([`src/substrate/harness-inbox.ts`](../src/substrate/harness-inbox.ts)) whose first line must
   be the one-time `HARNESS_INBOX_TOKEN`; it answers on stdout. A process whose input goes on for
