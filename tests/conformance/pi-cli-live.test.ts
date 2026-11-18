@@ -4,7 +4,8 @@
  * The engine starts each turn as it would for a person (its command line, environment, brief and
  * sandbox); the real CLI runs it against `fake-openai-chat.ts`, a provider of the test's own in a
  * Pi folder of the test's own (`PI_CODING_AGENT_DIR`), signed in with a made-up key. The scripted
- * turn runs one `node` command in the session's folder. Nothing reaches a provider and no account
+ * turn runs one `node` command in the session's folder; other turns continue a chat through Plan and
+ * back, and carry a picture. Nothing reaches a provider and no account
  * is used. Opt-in, like every test that needs this machine's own programs: `STUDIO_PI_CLI_TESTS=1`
  * with a `pi` the engine can find (or `STUDIO_PI_BIN`).
  */
@@ -36,6 +37,8 @@ const FAKE_KEY = "genex-fake-key";
 const PI_FOLDER = "PI_CODING_AGENT_DIR";
 /** What the scripted command writes in the session's folder. */
 const PROOF = { file: "pi-proof.txt", text: "ok" } as const;
+/** A one-pixel PNG. */
+const PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PROBE_SOURCE = `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(PROOF.file)}, ${JSON.stringify(PROOF.text)});\nconsole.log("probe ran");\n`;
 
 /** The real `pi` binary. */
@@ -63,7 +66,8 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     await mkdir(agent, { recursive: true });
     // A provider Pi does not know, as a person adds one: its endpoint in `models.json`, its key in
     // Pi's sign-in file.
-    const provider = { baseUrl: fake.baseUrl, api: "openai-completions", models: [{ id: FAKE_CHAT_MODEL }] };
+    const models = [{ id: FAKE_CHAT_MODEL, input: ["text", "image"] }];
+    const provider = { baseUrl: fake.baseUrl, api: "openai-completions", models };
     await writeFile(path.join(agent, "models.json"), JSON.stringify({ providers: { [FAKE_CHAT_PROVIDER]: provider } }));
     await writeFile(
       path.join(agent, "auth.json"),
@@ -156,6 +160,50 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
       return sent.includes("Say what you did.") && sent.includes("Run the probe once.");
     });
     assert.ok(resumed, "the resumed turn read the transcript the first one kept");
+  });
+
+  it("a chat keeps its history through Plan and back: Pi forks the session into each turn's folder", {
+    timeout: 4 * TURN_TIMEOUT_MS,
+  }, async () => {
+    const dir = await game("plan");
+    const turn = async (prompt: string, resume: string | undefined, readOnly: boolean) => {
+      const sentBefore = fake.requests.length;
+      const result = await engine().delegate({ cwd: dir, prompt, model, readOnly, ...(resume ? { resume } : {}) });
+      assert.equal(result.ok, true, result.errorText);
+      fake.next(null);
+      return { result, sent: fake.requests.slice(sentBefore).map((body) => JSON.stringify(body)) };
+    };
+    const told = (sent: string[], ...prompts: string[]) =>
+      sent.some((body) => prompts.every((prompt) => body.includes(prompt)));
+    const built = await turn("Run the probe once.", undefined, false);
+    // Pi looks for a session only in the folder it runs from, and a Plan turn runs from its own.
+    const planned = await turn("Plan the next step.", built.result.sessionId, true);
+    assert.ok(
+      told(planned.sent, "Plan the next step.", "Run the probe once."),
+      "the Plan turn read the build's history",
+    );
+    assert.notEqual(planned.result.sessionId, built.result.sessionId, "as a fork, under an id of its own");
+    const again = await turn("And after that?", planned.result.sessionId, true);
+    assert.ok(told(again.sent, "And after that?", "Plan the next step.", "Run the probe once."));
+    assert.equal(again.result.sessionId, planned.result.sessionId, "the next Plan turn continues that fork in place");
+    const done = await turn("Do it.", again.result.sessionId, false);
+    assert.ok(
+      told(done.sent, "Do it.", "And after that?", "Run the probe once."),
+      "the approved plan reaches the build",
+    );
+  });
+
+  it("a picture attached to a turn reaches the model as a picture", { timeout: TURN_TIMEOUT_MS }, async () => {
+    const dir = await game("picture", null);
+    const sentBefore = fake.requests.length;
+    const images = [{ label: "the bug", mimeType: "image/png", data: PIXEL }];
+    const result = await engine().delegate({ cwd: dir, prompt: "What is in this picture?", model, images });
+    assert.equal(result.ok, true, result.errorText);
+    const sent = fake.requests.slice(sentBefore).map((body) => JSON.stringify(body));
+    assert.ok(
+      sent.some((body) => body.includes("image_url") && body.includes("data:image/")),
+      "Pi takes a picture as an @file argument, read from a folder the sandboxed session reaches",
+    );
   });
 
   it("a one-shot answer comes back with no tools and no session", { timeout: TURN_TIMEOUT_MS }, async () => {

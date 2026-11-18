@@ -88,8 +88,17 @@ export const PI_DISCOVERY_ARGS = ["--no-extensions", "--offline"] as const;
 /** `pi --list-models` as the studio runs it. */
 export const PI_LIST_MODELS_ARGS = ["--list-models", ...PI_DISCOVERY_ARGS] as const;
 
+/**
+ * Where a built-in provider's model answers, by its `provider/model` id alone: for a model the list
+ * has not named yet (the app has just started, or `pi --list-models` failed). Any other id opens none.
+ */
+export function builtInPiHosts(model: string): string[] {
+  const provider = model.slice(0, Math.max(model.indexOf("/"), 0));
+  return Object.hasOwn(PROVIDER_HOSTS, provider) ? [...PROVIDER_HOSTS[provider]] : [];
+}
+
 function hostsFor(provider: string, extra: readonly string[] | undefined): string[] {
-  const known = PROVIDER_HOSTS[provider];
+  const known = Object.hasOwn(PROVIDER_HOSTS, provider) ? PROVIDER_HOSTS[provider] : undefined;
   const listed = extra ?? [];
   if (known) return [...new Set([...known, ...listed])];
   if (listed.length) return [...listed];

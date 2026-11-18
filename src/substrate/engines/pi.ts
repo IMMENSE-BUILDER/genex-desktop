@@ -8,6 +8,7 @@
  * Studio tools arrive through the same bridge Codex and OpenCode use.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +20,8 @@ import { StudioBridge, answerBridgeCall, bridgeTools } from "./studio-bridge.ts"
 import { writeDelegateStills } from "./codex.ts";
 import { JUDGE_RULES, offLimitsNote, planModeNote, readOnlyNote } from "./codex-prompts.ts";
 import { gitMetadataDirs } from "./session-commands.ts";
-import { parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
+import { builtInPiHosts, parsePiModels, PI_LIST_MODELS_ARGS, readPiProviderHosts } from "./pi-cli.ts";
+import { findPiSession, piSessionArgs, samePiFolder, type PiSessionFile } from "./pi-sessions.ts";
 import { parsePiLine, translatePiEvent, type Translated } from "./pi-events.ts";
 import {
   type CompleteRequest,
@@ -62,15 +64,37 @@ const MODELS_TIMEOUT_MS = 30 * SECOND_MS;
 const KILL_GRACE_MS = 3 * SECOND_MS;
 const STDERR_TAIL_CHARS = 4_000;
 /**
- * Pi's credential store refusing a refresh: the errno code and the file it names, never a
- * sentence — a sandboxed session can fail on any other file too.
+ * Pi's credential store refusing to save a renewed sign-in (a file the person keeps read-only, a
+ * folder the sandbox could not grant): the errno code and the file it names, never a sentence — a
+ * sandboxed session can fail on any other file too.
  */
-const CREDENTIAL_STORE_DENIED = /\bEPERM\b[^\n]*[/\\]auth\.json/;
+const CREDENTIAL_STORE_DENIED = /\b(?:EPERM|EACCES|EROFS|EBUSY)\b[^\n]*[/\\]auth\.json/;
+/**
+ * What a session never writes in Pi's folder: the settings and model files that say what Pi loads
+ * and which servers it calls, and the code Pi later runs outside the sandbox. `auth.json` is not
+ * here: Pi saves a renewed sign-in into it during a session, and a refresh it cannot save is spent.
+ */
+const AGENT_DENIED = [
+  "settings.json",
+  "trust.json",
+  "models.json",
+  "models-store.json",
+  "mcp.json",
+  "extensions",
+  "skills",
+  "npm",
+  "agents",
+  "bin",
+  "tools",
+  "prompts",
+] as const;
 /**
  * OAuth's own error code for a refresh token that expired or was revoked (RFC 6749 §5.2): the
  * provider's code, never a sentence, and only as a whole word.
  */
 const OAUTH_GRANT_REFUSED = /\binvalid_grant\b/;
+/** How a read-only turn's own folder is named under the engine's scratch. */
+const RUN_PREFIX = "run-";
 /** Plan/read-only: look, and keep `bash` so the studio tools bridge can run. */
 const PLAN_TOOLS = "read,grep,find,ls,bash";
 /** The provider statuses that refuse the request itself: pick another model. */
@@ -135,17 +159,31 @@ interface PiRun {
 }
 
 /**
- * What a session writes in Pi's folder: its transcripts, and the lock folder Pi makes beside
- * `auth.json` even to read it. Windows grants whole folders that exist and lets a command create
- * nothing in one it was not granted, so there the session is granted Pi's folder itself, as
- * OpenCode's and Cursor's are.
+ * What a session never writes: Pi's settings and model files, the code Pi later runs outside the
+ * sandbox, and the game's own Pi folder. On Linux a deny on a path that is not there puts a
+ * stand-in file in its place while the session runs: Pi would read an empty `settings.json`, and
+ * the build's `git add -A` refuses a `.pi` that is no regular file. So there only what exists is
+ * denied, and a session can make an entry Pi's folder does not have yet. Windows keeps no deny
+ * inside a CLI's own folder (`keepWindowsDenies`).
  */
-function piWrites(agent: string, platform: NodeJS.Platform): string[] {
-  if (platform === StudioPlatform.Windows) return [agent];
-  return [path.join(agent, "sessions"), path.join(agent, "auth.json.lock")];
+function piDenies(input: {
+  agent: string;
+  piHome: string;
+  gameDir: string;
+  platform: NodeJS.Platform;
+  exists: (file: string) => boolean;
+}): string[] {
+  const { agent, piHome } = input;
+  const denied = [
+    ...AGENT_DENIED.map((leaf) => path.join(agent, leaf)),
+    path.join(piHome, "AGENTS.md"),
+    path.join(piHome, "context-mode"),
+    path.join(input.gameDir, ".pi"),
+  ];
+  return input.platform === StudioPlatform.Linux ? denied.filter(input.exists) : denied;
 }
 
-/** The sandbox a session runs in: the folder it works in, and Pi's home read-only but for its own records. */
+/** The sandbox a session runs in: the folder it works in and Pi's own folder, but for what Pi loads and runs from it. */
 export function piSandbox(input: {
   runDir: string;
   gameDir: string;
@@ -156,35 +194,22 @@ export function piSandbox(input: {
   env?: Record<string, string | undefined>;
   home?: string;
   platform?: NodeJS.Platform;
+  /** Whether a path is there now; the disk's answer when not given. */
+  exists?: (file: string) => boolean;
 }): SandboxOptions {
   const env = input.env ?? process.env;
   const home = input.home ?? os.homedir();
   const piHome = piAgentHome(home);
   const agent = piAgentDir(env, home);
+  const platform = input.platform ?? process.platform;
   return {
-    writableRoots: [input.runDir, ...input.gitDirs, ...piWrites(agent, input.platform ?? process.platform)],
+    // Pi's folder whole: its transcripts, its sign-in, and the lock folders it makes beside its files
+    // even to read them (Linux and Windows grant no path that is not there yet).
+    writableRoots: [input.runDir, ...input.gitDirs, agent],
     scratchDir: input.scratchDir,
     secretPaths: input.secretPaths,
     readableHome: piHomes(env, home),
-    // Name what later runs unsandboxed anyway: a second lock on the files above, should this
-    // sandbox ever grant `~/.pi` again.
-    denyWrite: [
-      path.join(agent, "auth.json"),
-      path.join(agent, "settings.json"),
-      path.join(agent, "models.json"),
-      path.join(agent, "models-store.json"),
-      path.join(agent, "mcp.json"),
-      path.join(agent, "extensions"),
-      path.join(agent, "skills"),
-      path.join(agent, "npm"),
-      path.join(agent, "agents"),
-      path.join(agent, "bin"),
-      path.join(agent, "tools"),
-      path.join(agent, "prompts"),
-      path.join(piHome, "AGENTS.md"),
-      path.join(piHome, "context-mode"),
-      path.join(input.gameDir, ".pi"),
-    ],
+    denyWrite: piDenies({ agent, piHome, gameDir: input.gameDir, platform, exists: input.exists ?? existsSync }),
     ...(input.toolPath ? { toolPath: input.toolPath } : {}),
   };
 }
@@ -280,13 +305,14 @@ export class PiEngine implements Engine {
       return metered(partialDelegateResult(this.id, interruption(true), partialState(run, startedAt, request.model)));
     await releaseStaleLocks(cwd, this.#lockRecovery).catch(() => {});
     const readOnly = isReadOnly(request);
-    const scratch = readOnly ? await this.#scratch("run-") : null;
+    const kept = request.resume ? await findPiSession(this.#sessionsRoot(), request.resume) : null;
+    const scratch = readOnly ? await this.#runScratch(kept) : null;
     const runDir = scratch ?? cwd;
     const bridge = await this.#openBridge(request, runDir).catch(async (err) => {
       await this.#cleanUp(cwd, scratch, null);
       throw err;
     });
-    const stills = await writeDelegateStills(request.images ?? []);
+    const stills = await writeDelegateStills(request.images ?? [], this.#stillsRoot());
     const deadline = request.timeoutMs
       ? setTimeout(() => {
           run.deadlineHit = true;
@@ -298,9 +324,10 @@ export class PiEngine implements Engine {
       const invocation = await this.#invocation(request, {
         cwd,
         runDir,
-        sessionId,
+        session: piSessionArgs(sessionId, kept, runDir),
         readOnly,
         prompt: this.#brief(request, { cwd, scratch, bridge }),
+        files: stills.paths,
         signal: controller.signal,
       });
       await this.#readEvents(request, run, invocation);
@@ -361,7 +388,10 @@ export class PiEngine implements Engine {
   async #answer(request: CompleteRequest, signal: AbortSignal): Promise<PiRun> {
     const scratch = await this.#scratch("answer-");
     const images = request.messages.flatMap((message) => message.images ?? []);
-    const stills = await writeDelegateStills(images.map((image) => ({ ...image, label: image.label ?? "" })));
+    const stills = await writeDelegateStills(
+      images.map((image) => ({ ...image, label: image.label ?? "" })),
+      this.#stillsRoot(),
+    );
     const run = newRun(this.id, undefined);
     try {
       const invocation = await this.#invocation(
@@ -369,10 +399,11 @@ export class PiEngine implements Engine {
         {
           cwd: scratch,
           runDir: scratch,
-          sessionId: undefined,
+          session: [],
           readOnly: true,
           oneshot: true,
-          prompt: answerPrompt(request, stills.paths),
+          prompt: answerPrompt(request),
+          files: stills.paths,
           signal,
         },
       );
@@ -393,6 +424,30 @@ export class PiEngine implements Engine {
     this.#hosts = new Map(listed.map((model) => [model.row.id, model.hosts]));
     this.#signedIn = listed.length > 0;
     return { models: listed.map((model) => model.row), source: ModelCatalogSource.Provider };
+  }
+
+  /** Where a turn's pictures are written: the sandbox's own scratch, which every session reads. */
+  #stillsRoot(): string {
+    return path.join(this.#scratchRoot, "tmp");
+  }
+
+  /** Where Pi files its sessions, one folder for each folder a session was started in. */
+  #sessionsRoot(): string {
+    return path.join(piAgentDir(this.#env, this.#home), "sessions");
+  }
+
+  /**
+   * A read-only turn's folder. The one its session was made in, when that is a run folder of this
+   * engine's own: Pi then continues the session where it is, with no fork. Otherwise a new one.
+   */
+  async #runScratch(kept: PiSessionFile | null): Promise<string> {
+    await mkdir(this.#scratchRoot, { recursive: true });
+    const root = await realpath(this.#scratchRoot);
+    const ownRun =
+      kept !== null && samePiFolder(path.dirname(kept.cwd), root) && path.basename(kept.cwd).startsWith(RUN_PREFIX);
+    if (!ownRun) return mkdtemp(path.join(this.#scratchRoot, RUN_PREFIX));
+    await mkdir(kept.cwd, { recursive: true });
+    return kept.cwd;
   }
 
   async #scratch(prefix: string): Promise<string> {
@@ -438,10 +493,13 @@ export class PiEngine implements Engine {
     ctx: {
       cwd: string;
       runDir: string;
-      sessionId: string | undefined;
+      /** The options that start or continue the session (`piSessionArgs`); none for a one-shot answer. */
+      session: string[];
       readOnly: boolean;
       oneshot?: boolean;
       prompt: string;
+      /** Pictures of this turn: Pi takes a file only as an `@file` argument, never from the prompt's text. */
+      files: string[];
       signal: AbortSignal;
     },
   ): Promise<PiInvocation> {
@@ -451,12 +509,13 @@ export class PiEngine implements Engine {
       "json",
       "--no-extensions",
       // A game folder's own Pi files (`.pi/settings.json`, `.agents/skills`) are never trusted: Pi
-      // then neither loads them nor locks `~/.pi/agent/trust.json`, which the sandbox keeps read-only.
+      // then neither loads them nor asks to trust the folder, an answer it would keep in `trust.json`.
       "--no-approve",
-      ...(ctx.oneshot ? ["--no-tools", "--no-session"] : ["--session-id", ctx.sessionId ?? ""]),
+      ...(ctx.oneshot ? ["--no-tools", "--no-session"] : ctx.session),
       ...(model ? ["--model", model] : []),
       ...(request.effort ? ["--thinking", request.effort] : []),
       ...(!ctx.oneshot && ctx.readOnly ? ["--tools", PLAN_TOOLS] : []),
+      ...ctx.files.map((file) => `@${file}`),
     ];
     return {
       argv,
@@ -484,7 +543,7 @@ export class PiEngine implements Engine {
   }
 
   #domains(model: string | undefined): string[] {
-    const hosts = model ? (this.#hosts.get(model) ?? []) : [...this.#hosts.values()].flat();
+    const hosts = model ? (this.#hosts.get(model) ?? builtInPiHosts(model)) : [...this.#hosts.values()].flat();
     return [...new Set(hosts)];
   }
 
@@ -544,12 +603,9 @@ function newRun(engine: string, sessionId: string | undefined): PiRun {
 }
 
 /** A judge's question as one prompt: the system words, the conversation, and the critic's two rules. */
-function answerPrompt(request: CompleteRequest, files: string[]): string {
+function answerPrompt(request: CompleteRequest): string {
   const conversation = request.messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`);
-  const attached = files.map((file) => `@${file}`).join("\n");
-  return [request.systemPrompt ?? "", ...conversation, attached, ...JUDGE_RULES]
-    .filter((part) => part.trim())
-    .join("\n\n");
+  return [request.systemPrompt ?? "", ...conversation, ...JUDGE_RULES].filter((part) => part.trim()).join("\n\n");
 }
 
 function refusedModelText(

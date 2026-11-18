@@ -79,11 +79,6 @@ interface CliRowWords {
   freeOnly?: { status: string; line: string };
   /** Why an installed CLI too old to run needs its update; a row without one says it could not check. */
   outdatedLine?: string;
-  /**
-   * The CLI has no vendor HTTPS installer (Pi): its install action opens the guide and it is never
-   * installed from here, so its Installing state is unreachable.
-   */
-  guideOnly?: boolean;
   /** The Account menu's item that signs the CLI out (Cursor). */
   signOut?: { title: string; line: string };
 }
@@ -129,12 +124,11 @@ const CURSOR_WORDS = {
   unreachable: t("Cursor didn't answer. Check the installation, then try again."),
 } as const;
 
-/** Pi's row: it has no in-app installer, so Install guide opens the page and Sign in is Pi's `/login`. */
+/** Pi's row: it has no in-app installer (`installsInApp`), so the row offers its guide, and Sign in is Pi's `/login`. */
 const PI_ROW: CliRowWords = {
   card: { name: WORDS.pi.name, plans: "", guide: WORDS.pi.guide },
   install: WORDS.pi.install,
   installLine: WORDS.pi.installLine,
-  guideOnly: true,
   signIn: WORDS.pi.signIn,
   signInLine: WORDS.pi.signInLine,
   signingIn: WORDS.pi.signingIn,
@@ -420,8 +414,7 @@ export default function CliSignInRow({
     {
       install: () => {
         press(cliInstallAction(state));
-        if (words.guideOnly) void window.studio.openUrl(words.card.guide);
-        else void install.install();
+        void install.install();
       },
       openGuide: install.inApp
         ? null

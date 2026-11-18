@@ -233,24 +233,41 @@ signed in the picker starts OpenCode's GPT models with the ones Codex lists (`ru
 `renderer/model-lineup.ts`). Recorded streams and listings: `tests/fixtures/transcripts/opencode-*`
 (OpenCode 1.18 and 2.0.20).
 
-**Pi** ([pi.ts](../src/substrate/engines/pi.ts)) is the Pi coding agent (`pi --mode json`, resume
-`--session-id`), not the `pi-ai` HTTP client. Sign in and `--list-models` run with
-`--no-extensions --offline`; studio never reads `~/.pi`. Ready once `--list-models` lists a model.
-Sessions run in `ProcessSandbox` (`readableHome`: `~/.pi`) with `--no-extensions --no-approve`: a game
-folder's own `.pi` settings and `.agents/skills` stay untrusted, so Pi never locks `agent/trust.json`. Every
-session is told where Pi's folder is (`PI_CODING_AGENT_DIR`, `piAgentDir`): by default `~/.pi/agent`, or
-the folder the person moved it to with that variable, which is then fenced like `~/.pi` (`piHomes`). On
-macOS and Linux Pi's home is a read exemption, not a write grant: `~/.pi` stays read-only except
-`agent/sessions` and `agent/auth.json.lock`, so `agent/bin`, `agent/tools`, `agent/prompts` and
-`AGENTS.md` — which a sign-in runs outside the sandbox — are never a session's to write. On Windows a
-session runs as the sandbox's own user, whose home is not the person's, and may create nothing in a
-folder it was not granted, so Pi's agent folder is granted for writing at the sandbox's start, as
-OpenCode's and Cursor's are ([windows-sandbox.md](windows-sandbox.md)); a deny inside a sandboxed
-CLI's home is never stamped there, so on Windows a session can write Pi's own settings. A provider status is read at the
-head of Pi's error (`401: {...}`), never a number inside the body it quotes, and an expired sign-in,
-a refresh the provider refuses (OAuth's `invalid_grant`) or one the credential store cannot write (a
-401, or `EPERM` naming `auth.json`) says to sign in again. An unknown provider reaches only its `models.json` host. No in-app installer; Account can
-run `pi update`. Streams: `tests/fixtures/transcripts/pi-*`.
+**Pi** ([pi.ts](../src/substrate/engines/pi.ts)) is the Pi coding agent (`pi --mode json`), not the
+`pi-ai` HTTP client. Sign in and `--list-models` run with `--no-extensions --offline`; studio never
+reads Pi's sign-in. Ready once `--list-models` lists a model; a Pi whose help lacks an option a session
+passes is asked to update. Sessions run in `ProcessSandbox` (`readableHome`: `~/.pi`) with
+`--no-extensions --no-approve`: a game folder's own `.pi` settings and `.agents/skills` stay untrusted.
+Every session is told where Pi's folder is (`PI_CODING_AGENT_DIR`, `piAgentDir`): by default
+`~/.pi/agent`, or the folder the person moved it to with that variable, which is then fenced like
+`~/.pi` (`piHomes`).
+
+A session is granted Pi's agent folder for writing, on every system: Pi keeps its transcripts there,
+makes a lock folder beside each file it reads (`auth.json.lock`), and saves a renewed subscription
+sign-in into `auth.json` during a session (a refresh it cannot save is spent, and the person must
+sign in again). `~/.pi` above it stays read-only. Inside the folder a session never writes what says
+which code Pi loads and which servers it calls (`settings.json`, `trust.json`, `models.json`,
+`models-store.json`, `mcp.json`, `extensions`, `skills`, `npm`, `agents`, `bin`, `tools`, `prompts`),
+nor a game's own `.pi`. macOS denies each of those whether it exists or not. Linux denies only the
+ones that exist: a deny on a missing path would put a stand-in file there while the session runs, which
+Pi would read as empty settings and the build's `git add -A` would refuse in the game folder. Windows
+runs a session as the sandbox's own user and stamps no deny inside a sandboxed CLI's home, so there a
+session can write Pi's own settings ([windows-sandbox.md](windows-sandbox.md)).
+
+Pi files a session under the folder it was started in, and its `--session-id` looks only there. A
+build runs in the game and a Plan or read-only turn in a folder of its own, so the turn that follows
+one from another folder continues the chat with `--fork <the session's file>`
+([pi-sessions.ts](../src/substrate/engines/pi-sessions.ts)): Pi copies the history into the turn's
+folder under a new id, which the turn reports as the session to continue. A Plan turn that follows a
+Plan turn runs from the same folder again and resumes in place. A turn's pictures are written under
+the engine's scratch and passed as `@file` arguments: Pi takes no file from the prompt's text.
+
+A provider status is read at the head of Pi's error (`401: {...}`), never a number inside the body
+it quotes, and an expired sign-in, a refresh the provider refuses (OAuth's `invalid_grant`) or one
+the credential store cannot write (a 401, or an errno naming `auth.json`) says to sign in again. A
+model the list has not named yet reaches its built-in provider's hosts; an unknown provider reaches
+only the `https` host in its `models.json`. No in-app installer (`installsInApp`): the row opens
+Pi's guide. Account can run `pi update`. Streams: `tests/fixtures/transcripts/pi-*`.
 
 ## Grok Build
 

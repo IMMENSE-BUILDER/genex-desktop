@@ -247,7 +247,7 @@ function piSignIn({
         cwd: os.tmpdir(),
         // Interactive TUI so the person can `/login`; the studio rereads Pi's models once it closes.
         env: childEnv(cli.env, { base: "contractor", vendor: "pi" }),
-        title: "Pi sign-in",
+        title: t("Pi sign-in"),
         kind: TerminalKind.PiLogin,
         onExit: () => {
           void onPiSignedIn?.()?.catch(() => {});

@@ -100,7 +100,21 @@ const REQUIRED_FLAGS: Record<Exclude<CodingProvider, typeof EngineId.OpenCode>, 
     "--allowedTools",
     "--disallowedTools",
   ],
-  [EngineId.Pi]: ["--mode", "--session-id", "--model", "--list-models", "--thinking"],
+  [EngineId.Pi]: [
+    "--mode",
+    "--session-id",
+    "--fork",
+    "--model",
+    "--list-models",
+    "--thinking",
+    "--tools",
+    "--no-tools",
+    "--no-session",
+    // These two keep a game's own Pi files and extensions out of a session.
+    "--no-extensions",
+    "--no-approve",
+    "--offline",
+  ],
   // Its help lists these; `grok.ts` also passes `--no-wait-for-background`, which only its manual names.
   [EngineId.Grok]: [
     "--prompt-file",

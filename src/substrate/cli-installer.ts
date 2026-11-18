@@ -129,8 +129,8 @@ export function installerSource(
   provider: CodingProvider,
   platform: NodeJS.Platform,
 ): { url: string; extension: ".sh" | ".ps1" } | null {
-  const installer = installerOf(provider);
   if (!installsInApp(provider, platform)) return null;
+  const installer = installerOf(provider);
   if (!isWindows(platform)) return { url: installer.unix, extension: ".sh" };
   return installer.windows ? { url: installer.windows, extension: ".ps1" } : null;
 }

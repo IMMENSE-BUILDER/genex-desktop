@@ -54,7 +54,7 @@ test("each CLI's installer is its vendor's own script: shell on macOS and Linux,
   }
   assert.throws(() => installerSource("gemini" as CodingProvider, "darwin"), /unknown coding CLI/);
   assert.throws(() => installerSource("__proto__" as CodingProvider, "darwin"), /unknown coding CLI/);
-  assert.throws(() => installerSource("pi", "darwin"), /unknown coding CLI/, "Pi has no vendor HTTPS installer");
+  assert.equal(installerSource("pi", "darwin"), null, "Pi has no vendor HTTPS installer: its guide installs it");
 });
 
 test("a CLI with no installer for this system fails before anything is fetched or run", async () => {
@@ -70,7 +70,7 @@ test("a CLI with no installer for this system fails before anything is fetched o
 });
 
 test("the app offers an in-app install exactly where the main process has an installer to run", () => {
-  const providers: CodingProvider[] = ["claude-code", "codex", "opencode", "grok", "cursor"];
+  const providers: CodingProvider[] = ["claude-code", "codex", "opencode", "grok", "cursor", "pi"];
   for (const provider of providers)
     for (const platform of ["darwin", "linux", "win32"] as const)
       assert.equal(
@@ -79,6 +79,8 @@ test("the app offers an in-app install exactly where the main process has an ins
         `${provider} on ${platform}`,
       );
   assert.equal(installsInApp("opencode", "win32"), false, "OpenCode installs on Windows only by package manager");
+  for (const platform of ["darwin", "linux", "win32"])
+    assert.equal(installsInApp("pi", platform), false, `Pi installs only through npm (${platform})`);
   for (const hostile of ["__proto__", "constructor", "toString", "", "gemini"])
     assert.equal(installsInApp(hostile, "win32"), true, `${hostile} names no rule, so nothing is held back`);
 });
