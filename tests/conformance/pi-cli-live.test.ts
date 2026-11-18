@@ -200,6 +200,7 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     skip: process.platform !== "darwin" && "macOS only: Linux runs every case this way, Windows has no such folder",
   }, async () => {
     const dir = await game("linux-way");
+    const before = await readdir(agent);
     const built = await engine("linux").delegate({ cwd: dir, prompt: "Run the probe once.", model });
     assert.equal(built.ok, true, built.errorText);
     assert.equal(await readFile(path.join(dir, PROOF.file), "utf8"), PROOF.text);
@@ -225,8 +226,8 @@ describe("Pi with the real CLI", { skip: !LIVE && "set STUDIO_PI_CLI_TESTS=1" },
     );
     assert.deepEqual(
       (await readdir(agent)).sort(),
-      ["auth.json", "genex", "models.json", "sessions"],
-      "the person's folder holds nothing a session made but its transcripts and the folder that stands for it",
+      [...new Set([...before, "genex", "sessions"])].sort(),
+      "the person's folder gains nothing from a session but its transcripts and the folder that stands for it",
     );
   });
 

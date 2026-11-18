@@ -413,7 +413,7 @@ describe("Pi's sandbox", () => {
       platform: "darwin",
     });
     const writes = (file: string) => reaches(sandbox.writableRoots, file);
-    assert.ok(writes("/game/main.js"));
+    assert.ok(writes(path.join("/game", "main.js")));
     assert.ok(writes(path.join(agent, "sessions", "--game--", "1.jsonl")), "a session keeps its transcripts");
     assert.ok(writes(path.join(agent, "auth.json.lock")), "Pi makes a lock folder even to read auth.json");
     assert.ok(writes(path.join(agent, "auth.json")), "and saves a renewed sign-in: a refresh it cannot save is spent");
