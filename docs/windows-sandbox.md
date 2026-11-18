@@ -88,6 +88,24 @@ the setup screen opens on `git-missing`. What differs from macOS:
   with nothing changed: the session waits and tries again (`sandboxUserRefused`, `LOGON_RETRY_MS`),
   and a refusal that outlasts both pauses fails with plain words
   (`SandboxLaunchCode.SandboxUserRefused`: restart the PC) while the log keeps srt-win's.
+- That start is an interactive logon, which needs the account's "Allow log on locally" right. The
+  account has it as a member of Users; where a policy or a security program took it from Users, or
+  put the account under "Deny log on locally", the egress check fails with
+  ERROR_LOGON_TYPE_NOT_GRANTED (0x80070569), and srt-win's words blame the Secondary Logon service,
+  which runs. Reading account rights needs an administrator, so nothing says so before a start is
+  refused: the session then raises a setup problem (`sandboxLogonTypeRefused`,
+  `WindowsSetupNeed.LogonRight`) in plain words, and the log keeps srt-win's. The start runs behind
+  the open studio, so main shows the setup screen over it (`showAgentsSetup`), for this need only,
+  and the screen waits for its Set up button instead of raising the prompt by itself. A prompt that
+  is dismissed, or a Set up that fails, brings the studio back with the sidebar's line saying why
+  (the hold's `leave`), and its Try again shows the setup screen again. Set up gives the account `SeInteractiveLogonRight` and takes its
+  own entry off `SeDenyInteractiveLogonRight` through the LSA calls, which touch that account's
+  entry only ([`windows-logon-right.ts`](../src/substrate/windows-logon-right.ts)), in an elevated
+  Windows PowerShell behind a prompt of its own ([`windows-elevated.ts`](../src/substrate/windows-elevated.ts)),
+  then starts the agents. A deny that reaches the account through a group, or a domain policy that
+  writes the rights again, is not Genex's to lift: a refusal after this run's Set up fails with
+  `SandboxLaunchCode.LogonRightRefused`, which names the account and the two rights for the PC's
+  administrator.
 - srt-win records the setup version of its install. A PC an earlier Genex set up for an older
   srt-win (setup version 2) makes `initialize()` reject with `reinstall_required`, and the setup
   check (`windowsSetupGaps`, from `user status`' `markerVersion` and `setupVersion`) finds it
@@ -114,7 +132,8 @@ the setup screen opens on `git-missing`. What differs from macOS:
   `AppData`. The entry is set on that folder alone
   ([`windows-folder-ace.ts`](../src/substrate/windows-folder-ace.ts): `SetFileSecurityW` from one
   Windows PowerShell run per batch); `icacls`, the fallback where PowerShell is locked down,
-  rewrites everything under the folder as well. Each Genex records its folders in
+  rewrites everything under the folder as well, and its failure says when its 15 s deadline stopped
+  it. Each Genex records its folders in
   `%LOCALAPPDATA%\genex-sandbox-grants\<pid>.json` and revokes only those no other running Genex
   records. The SID is asked of srt-win up to three times; without it the apply fails. The harness gets the entries set again just before it starts, and one that exits during
   boot logs `icacls` for each folder from the profile down to its files.
@@ -355,7 +374,8 @@ runner only, it exports `GENEX_WINDOWS_SANDBOX=ready`) and `npm run test:windows
 session, env file and launch through fakes; runs everywhere) and `sandbox-windows.test.ts` (the
 real srt-win's hostile-input tables; skipped unless `GENEX_WINDOWS_SANDBOX=ready`).
 `windows-logon-service.test.ts` reads the runner's real Secondary Logon service and runs Set up's
-elevated step there (Actions only: it changes a service). A dispatch
+elevated step there (Actions only: it changes a service), and `windows-logon-right.test.ts` runs the
+elevated grant of the sandbox user's sign-in right there. A dispatch
 with `backlog` also runs the rest of the fast group as an informational pass that never fails;
 the job summary and `windows-tests` artifact list failing files and tests and clean files not yet
 in the suite. Test files run side by side, so one file's sandbox re-propagates srt-win's entries

@@ -4421,6 +4421,8 @@ export default {
   "Windows app": "Windows 앱",
   "Windows didn't get permission to install. Press Do it for me again and choose Yes when Windows asks.":
     "Windows가 설치 권한을 받지 못했어요. '대신 해 주기'를 다시 누르고 Windows가 물어보면 '예'를 고르세요.",
+  "Windows doesn’t let Genex’s agents sign in on this PC. Set up allows it.":
+    "Windows가 이 PC에서 Genex 에이전트의 로그인을 막고 있어요. ‘설정하기’를 누르면 허용돼요.",
   "Windows needs a one-time setup of the protected workspace, approved by an administrator.":
     "Windows에서는 관리자 승인을 받아 보호된 작업 공간을 한 번 설정해야 해요.",
   "Windows will ask you to allow it once.": "Windows가 한 번 허용을 요청해요.",

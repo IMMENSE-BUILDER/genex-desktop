@@ -4234,6 +4234,7 @@ export const MESSAGES = [
   "Window",
   "Windows app",
   "Windows didn't get permission to install. Press Do it for me again and choose Yes when Windows asks.",
+  "Windows doesn’t let Genex’s agents sign in on this PC. Set up allows it.",
   "Windows needs a one-time setup of the protected workspace, approved by an administrator.",
   "Windows will ask you to allow it once.",
   "Windows will ask you to allow this once. If it asks for a password, an administrator of this PC can enter theirs. Agents work in their own protected space, away from your files.",

@@ -37,6 +37,8 @@ const REPLY_RESERVE_TOKENS = 4096;
 const IMAGE_TOKENS = 2048;
 /** The context lengths a person is told to set when the model's is too small, smallest first. */
 const ADVISED_CONTEXTS = [16_384, 32_768, 65_536, 131_072] as const;
+/** The tool that makes a game: its result names the folder the rest of the turn works in. */
+const NEW_GAME_TOOL = "new_game";
 
 /** Whose compaction threshold a context policy carries (`mode`): the studio's default, or the user's. */
 const ContextPolicyMode = {
@@ -370,7 +372,7 @@ async function actOn(
     ctx.notify("chat.message", { role: "assistant", content: response.message.content });
     return { stopped: TurnStop.Done, round, engine: state.engine };
   }
-  return runToolCalls(ctx, options.turnId, tools, calls, state, round);
+  return runToolCalls(ctx, options, tools, calls, state, round);
 }
 
 /**
@@ -442,12 +444,13 @@ async function recordContextUsage(
 /** Run this round's tool calls in order; a tool may end the turn. Null when the turn goes on. */
 async function runToolCalls(
   ctx: HarnessCtx,
-  turnId: string,
+  options: TurnOptions,
   tools: ToolRegistry,
   calls: readonly ToolCall[],
   state: LoopState,
   round: number,
 ): Promise<TurnOutcome | null> {
+  const { turnId } = options;
   for (const call of calls) {
     if (ctx.cancelled) return null;
     await ctx.call(HostMethod.TurnAppend, {
@@ -460,6 +463,10 @@ async function runToolCalls(
 
     const result = await tools.execute(call, ctx);
     collectImages(result, state.images);
+    if (call.name === NEW_GAME_TOOL && result.ok && result.details?.project) {
+      options.project = String(result.details.project);
+      state.standing = undefined;
+    }
     await ctx.call(HostMethod.TurnAppend, {
       turnId,
       batch: [

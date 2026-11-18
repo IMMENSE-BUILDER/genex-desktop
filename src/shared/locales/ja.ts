@@ -4536,6 +4536,8 @@ export default {
   "Windows app": "Windowsアプリ",
   "Windows didn't get permission to install. Press Do it for me again and choose Yes when Windows asks.":
     "Windowsでインストールが許可されませんでした。もう一度「おまかせ」を押して、Windowsに聞かれたら「はい」を選んでください。",
+  "Windows doesn’t let Genex’s agents sign in on this PC. Set up allows it.":
+    "このPCでは、WindowsがGenexのエージェントのサインインを許可していません。「セットアップ」で許可します。",
   "Windows needs a one-time setup of the protected workspace, approved by an administrator.":
     "Windowsでは、保護されたワークスペースの初回セットアップに管理者の承認が必要です。",
   "Windows will ask you to allow it once.": "Windowsから一度だけ許可を求められます。",
